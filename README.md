@@ -118,6 +118,28 @@ These are not bugs, and pretending otherwise would waste your afternoon.
   `stop` are enforced by the server itself. Set sampling in Settings.
 - **Token counts are estimates.** `usage` is derived from a 4-characters-per-token
   approximation, not the model's tokenizer. Do not bill anyone against it.
+- **Oversized prompts are refused, not truncated.** llama.cpp does not fail
+  gracefully on a prompt past its batch — it raises an assertion and the process
+  dies. So the server refuses with a 413 before the engine sees it, using a
+  deliberately pessimistic estimate. A prompt near the limit may be refused
+  even though it would have fit.
+- **One generation at a time.** A phone has one GPU. A second concurrent request
+  gets a 503 with `Retry-After` rather than being queued behind the first.
+
+## Verified
+
+Run end to end on an iPhone 17 simulator (iOS 26.5) with real SmolLM2 360M
+weights and real llama.cpp:
+
+- 386 MB downloaded in under 20 seconds, loaded, served
+- reachable from the host Mac at the phone's LAN address
+- `scripts/smoke.sh`: 38/38, including a 600-token buffered completion, a
+  concurrent request correctly refused, an abandoned stream releasing its slot,
+  and a 20,000-word prompt refused with a 413 instead of killing the process
+- request log reporting live throughput per client
+
+Three of those checks exist because the feature was broken and shipping when it
+was written. The package suite is 70 tests and needs no simulator.
 
 ## Repository layout
 
@@ -126,7 +148,8 @@ Sources/PocketdKit/      the server, the wire formats, the model store
   Inference/             InferenceEngine protocol — the seam
   Models/                catalogue, downloads, device memory budget
   Server/                lifecycle, routes, SSE and NDJSON streaming
-Tests/PocketdKitTests/   44 tests, no simulator, no GPU, ~1 second
+Tests/PocketdKitTests/   70 tests, no simulator, no GPU
+scripts/smoke.sh         probes a RUNNING server the way a client would
 App/Sources/             the SwiftUI app
   Inference/             llama.cpp adapter (LocalLLMClient)
 project.yml              XcodeGen spec; the .xcodeproj is generated
