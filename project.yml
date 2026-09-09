@@ -66,6 +66,12 @@ targets:
         DEVELOPMENT_TEAM: ""
         CODE_SIGN_STYLE: Automatic
         SWIFT_STRICT_CONCURRENCY: complete
+        # LocalLLMClientLlama is built with .interoperabilityMode(.Cxx), and a
+        # target that links it has to agree. Without this the llama.cpp headers
+        # are compiled as C and fail on `#include <memory>`, which reads as a
+        # missing-file error rather than a settings mismatch. Found in
+        # LocalLLMClient's own Example project, not in its README.
+        SWIFT_OBJC_INTEROP_MODE: objcxx
     dependencies:
       - package: PocketdKit
         product: PocketdKit

@@ -5,6 +5,12 @@ public struct DownloadProgress: Sendable, Equatable {
     public var receivedBytes: Int64
     public var totalBytes: Int64
 
+    public init(modelID: String, receivedBytes: Int64, totalBytes: Int64) {
+        self.modelID = modelID
+        self.receivedBytes = receivedBytes
+        self.totalBytes = totalBytes
+    }
+
     public var fraction: Double {
         totalBytes > 0 ? min(1, Double(receivedBytes) / Double(totalBytes)) : 0
     }
