@@ -1,4 +1,4 @@
-.PHONY: test app lint clean
+.PHONY: test app build-sim smoke clean
 
 # The package is the part that CI can check in seconds without a simulator.
 test:
@@ -23,6 +23,15 @@ build-sim: app
 		-derivedDataPath .build/xcode \
 		-skipMacroValidation \
 		CODE_SIGNING_ALLOWED=NO build
+
+# Exercises a RUNNING pocketd the way a client would — a real model on a real
+# device over a real network hop, which is exactly what the package tests
+# cannot cover. Read the base URL and key off the app's Server tab.
+#   make smoke BASE=http://192.168.1.42:11434 KEY=pk-...
+BASE ?= http://127.0.0.1:11434
+KEY  ?=
+smoke:
+	./scripts/smoke.sh $(BASE) $(KEY)
 
 clean:
 	rm -rf .build Pocketd.xcodeproj

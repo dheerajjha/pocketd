@@ -144,7 +144,12 @@ Foundation Models means writing one conformance, not touching the routes.
 make test        # the package: fast, no simulator
 make app         # regenerate the Xcode project
 make build-sim   # compile the app target (slow: builds llama.cpp)
+make smoke BASE=http://192.168.1.42:11434 KEY=pk-...   # probe a running server
 ```
+
+`make test` covers the routes against a mock engine. `make smoke` covers what it
+cannot: a real model, a real device, and a real network hop. Read the base URL
+and key off the app's Server tab.
 
 The simulator runs llama.cpp on the CPU. It is the right place to check that
 things compile and the UI behaves, and useless for measuring tokens per second.
