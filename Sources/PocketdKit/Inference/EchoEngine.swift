@@ -12,11 +12,23 @@ public actor EchoEngine: InferenceEngine {
     private var model: ModelRecord?
     private let chunkSize: Int
     private let delay: Duration
+    private let announcesToolCall: String?
 
-    public init(model: ModelRecord? = .echo, chunkSize: Int = 4, delay: Duration = .zero) {
+    /// - Parameter announcesToolCall: When set, the stream opens with a
+    ///   `.toolCallStarted` event naming this tool. Nothing here executes a
+    ///   tool; the point is that every consumer of a `GenerationEvent` stream —
+    ///   the two wire protocols especially — can be tested against an engine
+    ///   that emits one, without a real model that decides to call one.
+    public init(
+        model: ModelRecord? = .echo,
+        chunkSize: Int = 4,
+        delay: Duration = .zero,
+        announcesToolCall: String? = nil
+    ) {
         self.model = model
         self.chunkSize = chunkSize
         self.delay = delay
+        self.announcesToolCall = announcesToolCall
     }
 
     public func loadedModel() async -> ModelRecord? { model }
@@ -38,9 +50,13 @@ public actor EchoEngine: InferenceEngine {
         let limited = request.options.maxTokens.map { String(reply.prefix($0)) } ?? reply
         let chunks = limited.chunked(into: chunkSize)
         let delay = self.delay
+        let announcesToolCall = self.announcesToolCall
 
         return AsyncThrowingStream { continuation in
             let task = Task {
+                if let announcesToolCall {
+                    continuation.yield(.toolCallStarted(name: announcesToolCall))
+                }
                 for chunk in chunks {
                     if Task.isCancelled {
                         continuation.finish(throwing: InferenceError.cancelled)

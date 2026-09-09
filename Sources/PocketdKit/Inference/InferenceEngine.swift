@@ -47,6 +47,20 @@ public enum GenerationEvent: Sendable, Equatable {
     /// whatever granularity is natural for them; nothing downstream assumes a
     /// chunk is exactly one token.
     case token(String)
+    /// A tool is about to run, and after it the model will be re-prompted from
+    /// the beginning.
+    ///
+    /// This exists because a tool turn is slow in a way the user cannot see.
+    /// The backend surfaces tool calls only once its token loop has fully
+    /// drained, and resuming then re-renders and re-prefills the entire
+    /// conversation — two complete prefills per tool turn. At the ~29 tok/s a
+    /// phone manages that is seconds of nothing, which reads as a hang. A UI
+    /// can show this as "checking…" and clear it on the next `.token`.
+    ///
+    /// Deliberately not on the wire: neither the OpenAI nor the Ollama
+    /// streaming schema has a field for "the server is running a tool on your
+    /// behalf", and inventing one breaks clients that parse strictly.
+    case toolCallStarted(name: String)
     case finished(reason: FinishReason, usage: TokenUsage)
 }
 
@@ -101,6 +115,11 @@ public extension InferenceEngine {
             switch event {
             case .token(let chunk):
                 text += chunk
+            case .toolCallStarted:
+                // A buffered caller sees only the answer. The announcement
+                // exists to fill the silence of a stream, and there is no
+                // silence to fill here.
+                break
             case .finished(let r, let u):
                 reason = r
                 usage = u

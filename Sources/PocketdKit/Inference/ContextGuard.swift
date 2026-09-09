@@ -54,15 +54,31 @@ public struct ContextGuard: Sendable, Equatable {
     }
 
     /// The fixed preamble the library prepends when any tool is registered.
-    /// Asserted in the tests so a dependency bump that changes it fails loudly
-    /// rather than silently eating budget.
-    public static let toolPreambleCharacters = 264
+    ///
+    /// Measured from the literal in LocalLLMClient's
+    /// `StandardToolInstructionProcessor.generateToolInstructions`, with an
+    /// empty tools array. The test spells that literal out again so a careless
+    /// edit to this number fails — though only re-reading the dependency can
+    /// catch the dependency itself changing, which no test can do for us.
+    public static let toolPreambleCharacters = 265
 
     /// What registering `toolsJSON` will cost, in guard tokens.
     ///
     /// Doubled for a tool-native chat template: the schema is rendered once by
     /// the template itself and appended again by the library's instruction
     /// processor, so a Qwen3-style model pays for it twice.
+    /// Whether a chat template renders tool schemas itself.
+    ///
+    /// This is the library's own test, character for character:
+    /// `StandardToolInstructionProcessor.hasNativeToolSupport(in:)` is
+    /// `template.contains("tools")` and nothing more. It is a crude test — a
+    /// template that merely says the word would pass — but a *different* crude
+    /// test would be worse, because the number it feeds has to predict what
+    /// that code actually does, not what it should do.
+    public static func templateIsToolNative(_ template: String) -> Bool {
+        template.contains("tools")
+    }
+
     public static func toolOverhead(toolsJSON: String, templateIsToolNative: Bool) -> Int {
         guard !toolsJSON.isEmpty else { return 0 }
         let schema = estimateTokens(toolsJSON) * (templateIsToolNative ? 2 : 1)

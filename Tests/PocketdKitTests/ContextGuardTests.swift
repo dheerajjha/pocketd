@@ -152,11 +152,22 @@ struct PromptOverheadTests {
         #expect(ContextGuard.toolOverhead(toolsJSON: "", templateIsToolNative: true) == 0)
     }
 
-    /// If a dependency bump changes the preamble, this fails loudly instead of
-    /// the budget silently drifting.
-    @Test("the library preamble is the length the arithmetic assumes")
+    /// The first version of this asserted the constant against itself, which
+    /// cannot fail and was also wrong by a character. This reconstructs the
+    /// literal LocalLLMClient actually emits, so an edit to the constant is
+    /// caught. It cannot detect the dependency changing — a test has no way to
+    /// read that — so the comment on the constant says where to look.
+    @Test("the preamble constant matches the string the library emits")
     func preambleLength() {
-        #expect(ContextGuard.toolPreambleCharacters == 264)
+        let preamble = """
+        If you decide to invoke any of the function(s), you MUST put it in the format of
+        <tool_call>
+        {"name": function name, "arguments": dictionary of argument name and its value}
+        </tool_call>\n
+        You SHOULD NOT include any other text in the response if you call a function
+        \n
+        """
+        #expect(preamble.count == ContextGuard.toolPreambleCharacters)
     }
 }
 

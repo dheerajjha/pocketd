@@ -76,7 +76,14 @@ final class AppModel {
 
         let engine = LlamaEngine(
             fileURL: { store.fileURL(for: $0) },
-            projectorURL: { store.projectorURL(for: $0) }
+            projectorURL: { store.projectorURL(for: $0) },
+            // Empty by default, and that is the shipping configuration:
+            // registering any tool injects a schema preamble into every prompt,
+            // whether or not the user ever asks for one. Launch with
+            // `-pocketd-selftest-tool` to exercise the tool-calling loop on a
+            // device without needing EventKit, a permission prompt or a
+            // calendar with anything in it.
+            tools: ProcessInfo.processInfo.arguments.contains("-pocketd-selftest-tool") ? [EchoTool()] : []
         )
         self.engine = engine
 
@@ -374,10 +381,15 @@ final class AppModel {
         if !systemPrompt.isEmpty { messages.append(.system(systemPrompt)) }
         messages.append(contentsOf: conversation.dropLast())
 
+        // The Chat tab is a human holding the phone, which is the one origin
+        // allowed to reach personal data. Every other path — including the
+        // /chat page this app serves, which is indistinguishable from curl at
+        // the route layer — stays on the network default.
         let request = GenerationRequest(
             modelID: loadedModelID ?? "",
             messages: messages,
-            options: GenerationOptions(maxTokens: configuration.maxContextTokens)
+            options: GenerationOptions(maxTokens: configuration.maxContextTokens),
+            origin: .onDeviceChat
         )
 
         generationTask = Task { [engine] in

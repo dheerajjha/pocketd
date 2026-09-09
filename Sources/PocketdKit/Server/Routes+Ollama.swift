@@ -227,6 +227,11 @@ extension InferenceServer {
                         case .token(let text):
                             emit(ollamaBody(shape: shape, model: model.id, text: text, done: false,
                                             reason: nil, usage: nil, elapsed: nil))
+                        case .toolCallStarted:
+                            // Not on the wire, for the same reason as the
+                            // OpenAI route: the tool ran here, and Ollama's
+                            // `tool_calls` field means "client, run this".
+                            break
                         case .finished(let reason, let tokenUsage):
                             usage = tokenUsage
                             emit(ollamaBody(shape: shape, model: model.id, text: "", done: true,

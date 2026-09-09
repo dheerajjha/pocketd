@@ -29,3 +29,6 @@ Package.resolved
 reference/*
 !reference/sync.sh
 !reference/README.md
+
+# Agent worktrees
+.claude/

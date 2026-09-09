@@ -43,6 +43,23 @@ targets:
         # not in the simulator.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+        # Full access, not write-only: these tools read and never write. On
+        # iOS 17+ a calendar read with only NSCalendarsWriteOnlyAccessUsage-
+        # Description present returns an empty list rather than an error, which
+        # looks exactly like a free day.
+        # The wording says where the data goes because that is the honest and
+        # unusual part of this app: the model doing the reading is a file on
+        # this phone, and no request leaves the device to answer.
+        NSCalendarsFullAccessUsageDescription: >-
+          Pocketd lets the AI assistant running on this iPhone answer questions
+          about your schedule, such as what is on today. Your events are read on
+          this device only, are never uploaded, and are never sent to the other
+          devices this app serves.
+        NSRemindersFullAccessUsageDescription: >-
+          Pocketd lets the AI assistant running on this iPhone answer questions
+          about your reminders, such as what is overdue. Your reminders are read
+          on this device only, are never uploaded, and are never sent to the
+          other devices this app serves.
         # Required to advertise over Bonjour. Without these exact service types
         # publish fails silently and the phone is discoverable by nothing.
         NSBonjourServices:
