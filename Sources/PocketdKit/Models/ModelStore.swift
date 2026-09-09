@@ -149,6 +149,34 @@ public actor ModelStore {
             ))
         }
 
+        do {
+            try await run(downloader, for: model, resumeData: resumeData)
+        } catch {
+            // A resume that fails is usually stale validators — the file moved
+            // or the CDN rotated. Retrying clean turns "tap Download, watch it
+            // fail, tap again" into one working tap.
+            guard resumeData != nil, !(error is CancellationError) else { throw error }
+            try? FileManager.default.removeItem(at: resumeURL)
+            let retry = FileDownloader(destination: destination, resumeDataURL: resumeURL) { received, expected in
+                onProgress(DownloadProgress(
+                    modelID: id,
+                    receivedBytes: received,
+                    totalBytes: expected > 0 ? expected : declaredSize
+                ))
+            }
+            try await run(retry, for: model, resumeData: nil)
+        }
+
+        manifest[model.id] = model
+        persist()
+        onProgress(DownloadProgress(modelID: id, receivedBytes: declaredSize, totalBytes: declaredSize))
+    }
+
+    private func run(
+        _ downloader: FileDownloader,
+        for model: ModelRecord,
+        resumeData: Data?
+    ) async throws {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
                 downloader.start(request: URLRequest(url: model.downloadURL), resumeData: resumeData) { result in
@@ -163,16 +191,16 @@ public actor ModelStore {
         } onCancel: {
             downloader.cancelSavingResumeData()
         }
-
-        manifest[model.id] = model
-        persist()
-        onProgress(DownloadProgress(modelID: id, receivedBytes: declaredSize, totalBytes: declaredSize))
     }
 
     private func checkDiskSpace(for model: ModelRecord) throws {
+        // A nil capacity is a failed query, not a full disk; a zero capacity is
+        // a full disk. Conflating them lets a download start on a full device
+        // and die mid-transfer with an opaque CFNetwork error.
         let values = try? directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-        let free = Int64(values?.volumeAvailableCapacityForImportantUsage ?? 0)
-        guard free == 0 || free > model.sizeBytes else {
+        guard let capacity = values?.volumeAvailableCapacityForImportantUsage else { return }
+        let free = Int64(capacity)
+        guard free > model.sizeBytes else {
             throw ModelStoreError.insufficientDisk(needed: model.sizeBytes, free: free)
         }
     }

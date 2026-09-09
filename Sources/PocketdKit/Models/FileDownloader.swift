@@ -123,15 +123,28 @@ extension FileDownloader: URLSessionDownloadDelegate {
             try? FileManager.default.removeItem(at: resumeDataURL)
             finish(.success(destination))
         } catch {
+            // A resume blob that produced a failed transfer is poison: it is
+            // replayed on every subsequent attempt, so the model would be
+            // permanently unreachable with no way for the user to clear it.
+            try? FileManager.default.removeItem(at: resumeDataURL)
             finish(.failure(error))
         }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
         guard let error else { return }  // success already reported by didFinishDownloadingTo
-        // A cancellation carries resume data; keep it so the retry continues.
-        if let data = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
+        let nsError = error as NSError
+        if let data = nsError.userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
+            // A cancellation carries resume data; keep it so the retry continues.
             try? data.write(to: resumeDataURL, options: .atomic)
+        } else if nsError.code != NSURLErrorCancelled {
+            // No resume data and not a cancellation: whatever is on disk is
+            // stale, and replaying it would fail the same way forever. Deleting
+            // unconditionally would be wrong — cancelSavingResumeData writes
+            // from task.cancel(byProducingResumeData:)'s own callback, which is
+            // unordered with respect to this one, so an unconditional delete can
+            // land after a good blob and turn every user Cancel into a restart.
+            try? FileManager.default.removeItem(at: resumeDataURL)
         }
         finish(.failure(error))
     }

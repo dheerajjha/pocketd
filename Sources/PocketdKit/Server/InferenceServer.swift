@@ -72,14 +72,29 @@ public actor InferenceServer {
     public func apply(_ new: ServerConfiguration) async throws {
         let needsRestart = new.port != configuration.port || new.binding != configuration.binding
         configuration = new
-        if needsRestart, state.isRunning {
+        if needsRestart, await liveState().isRunning {
             await stop()
             try await start()
         }
     }
 
     public func start() async throws {
-        guard !state.isRunning else { return }
+        // Reject only the states where starting again is wrong. `.failed` must
+        // stay retryable: the commonest failure is a port already in use, and a
+        // guard that excluded `.failed` would leave the Start button dead for
+        // the life of the process — worse than the bug it prevents.
+        switch state {
+        case .running:
+            // A cached `.running` can be a lie. iOS closes the listening socket
+            // when the app suspends without telling anyone, so trust the socket
+            // rather than the memo we wrote about it.
+            if await isSocketListening() { return }
+            await stop()
+        case .starting:
+            return
+        case .stopped, .failed:
+            break
+        }
         state = .starting
 
         let server: HTTPServer
@@ -90,19 +105,32 @@ public actor InferenceServer {
             server = HTTPServer(address: sockaddr_in.inet(port: configuration.port))
         }
         await installRoutes(on: server)
-        self.server = server
 
-        runTask = Task { try? await server.run() }
+        // The task notices the listener ending for any reason — a bind failure,
+        // a cancellation, or iOS reclaiming the socket — which is the only
+        // signal that `state` has gone stale.
+        let task = Task { [weak self] in
+            try? await server.run()
+            await self?.listenerEnded(server)
+        }
+        self.server = server
+        self.runTask = task
+
         do {
             try await server.waitUntilListening(timeout: 5)
         } catch {
-            // Almost always EADDRINUSE from a previous run whose socket has not
-            // been reclaimed yet. Surfacing the raw error here is what lets the
-            // UI say "port 11434 is busy" instead of "something went wrong".
-            state = .failed(String(describing: error))
-            runTask?.cancel()
-            runTask = nil
-            self.server = nil
+            // Cancel THIS attempt's task, not whatever `runTask` happens to hold:
+            // another start may have overtaken us at one of the awaits above, and
+            // tearing down its listener would leave a socket bound with no
+            // reference to it.
+            task.cancel()
+            if self.server === server {
+                self.server = nil
+                self.runTask = nil
+            }
+            if case .starting = state {
+                state = .failed(String(describing: error))
+            }
             throw error
         }
 
@@ -115,11 +143,43 @@ public actor InferenceServer {
         state = .running(host: host, port: await server.resolvedPort() ?? configuration.port)
     }
 
+    /// Called when a listener's run loop exits, however it exited.
+    private func listenerEnded(_ ended: HTTPServer) {
+        // A newer start() may already have taken over; without this check the
+        // old listener's exit clobbers the new one's `.running` state.
+        guard self.server === ended else { return }
+        self.server = nil
+        self.runTask = nil
+        // A dead listener leaves in-flight requests counted forever, which would
+        // permanently eat into the admission limit after a restart.
+        activeRequests = 0
+        state = .stopped
+    }
+
+    private func isSocketListening() async -> Bool {
+        guard let server else { return false }
+        return await server.isListening
+    }
+
+    /// `state`, reconciled against the socket. Prefer this to `currentState()`
+    /// anywhere a stale `.running` would cause the caller to skip a repair.
+    public func liveState() async -> State {
+        if state.isRunning, await isSocketListening() == false {
+            state = .stopped
+        }
+        return state
+    }
+
     public func stop() async {
-        await server?.stop(timeout: 1)
-        runTask?.cancel()
-        runTask = nil
+        let stopping = server
+        // Clear first, so the run task's listenerEnded sees a different (nil)
+        // server and declines to touch state we are about to set ourselves.
         server = nil
+        let task = runTask
+        runTask = nil
+
+        await stopping?.stop(timeout: 1)
+        task?.cancel()
         activeRequests = 0
         state = .stopped
     }

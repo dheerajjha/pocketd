@@ -70,9 +70,9 @@ final class AppModel {
         // load() persists a freshly generated configuration on the spot. Relying
         // on the didSet below would not: property observers do not run during
         // initialisation, so the API key would be new on every launch.
-        let store = ServerConfigurationStore()
-        self.configurationStore = store
-        let configuration = store.load()
+        let configurationStore = ServerConfigurationStore()
+        self.configurationStore = configurationStore
+        let configuration = configurationStore.load()
         self.configuration = configuration
 
         self.server = InferenceServer(
@@ -89,14 +89,27 @@ final class AppModel {
         await store.load()
         installed = await store.installed()
 
+        // Driving the idle timer from the observer is what also catches the
+        // transitions the app did not initiate — a failed bind, or iOS
+        // reclaiming the socket.
         observers.append(Task { [server] in
             for await state in await server.stateStream() {
-                await MainActor.run { self.serverState = state }
+                await MainActor.run {
+                    self.serverState = state
+                    self.applyIdleTimer(running: state.isRunning)
+                }
             }
         })
-        observers.append(Task { [server] in
+        observers.append(Task { [server, engine] in
             for await entries in await server.log.stream() {
-                await MainActor.run { self.log = entries }
+                // The server loads models behind the app's back when a request
+                // names one that is not resident, so the badge and the Chat tab
+                // would otherwise keep pointing at a model that is gone.
+                let resident = await engine.loadedModel()?.id
+                await MainActor.run {
+                    self.log = entries
+                    self.syncLoadedModel(resident)
+                }
             }
         })
 
@@ -119,7 +132,6 @@ final class AppModel {
         do {
             try await server.apply(configuration)
             try await server.start()
-            applyIdleTimer()
         } catch {
             lastServerError = friendlyMessage(for: error)
         }
@@ -129,7 +141,6 @@ final class AppModel {
         serverShouldRun = false
         UserDefaults.standard.set(false, forKey: Keys.serverShouldRun)
         await server.stop()
-        applyIdleTimer()
     }
 
     /// Called on every return to the foreground. iOS closes the listening socket
@@ -137,11 +148,15 @@ final class AppModel {
     /// do is re-establish it and let the user see the address again.
     func reconcileAfterForeground() async {
         guard serverShouldRun else { return }
-        let state = await server.currentState()
-        guard !state.isRunning else {
-            applyIdleTimer()
+        // liveState() reconciles against the socket. currentState() would report
+        // the `.running` we last wrote, which is exactly the stale value this
+        // method exists to repair — it would early-return in the only case that
+        // matters.
+        if await server.liveState().isRunning {
+            applyIdleTimer(running: true)
             return
         }
+        await server.stop()   // release any half-dead socket and reset admission counters
         await startServer()
     }
 
@@ -153,7 +168,10 @@ final class AppModel {
         } catch {
             lastServerError = friendlyMessage(for: error)
         }
-        applyIdleTimer()
+        // Not covered by the observer: toggling keep-awake in Settings produces
+        // no server transition, so the new setting would not take hold until the
+        // next start or stop.
+        applyIdleTimer(running: await server.liveState().isRunning)
     }
 
     func clearLog() async {
@@ -165,10 +183,12 @@ final class AppModel {
         return URL(string: "http://\(host):\(port)")
     }
 
-    private func applyIdleTimer() {
+    /// `serverState` is a mirror updated asynchronously by the observer, so every
+    /// caller that reads it here would set the flag from the pre-transition
+    /// value — backwards, every time. Callers pass the truth instead.
+    private func applyIdleTimer(running: Bool) {
         #if canImport(UIKit)
-        UIApplication.shared.isIdleTimerDisabled =
-            configuration.keepAwakeWhileServing && serverState.isRunning
+        UIApplication.shared.isIdleTimerDisabled = configuration.keepAwakeWhileServing && running
         #endif
     }
 
@@ -232,7 +252,7 @@ final class AppModel {
     func delete(_ model: ModelRecord) async {
         if loadedModelID == model.id {
             await engine.unload()
-            loadedModelID = nil
+            syncLoadedModel(nil)
         }
         try? await store.delete(model)
         installed = await store.installed()
@@ -243,12 +263,19 @@ final class AppModel {
         defer { isLoadingModel = false }
         do {
             try await engine.load(model: model)
-            loadedModelID = model.id
-            conversation.removeAll()
+            syncLoadedModel(model.id)
         } catch {
-            loadedModelID = nil
+            syncLoadedModel(nil)
             downloadErrors[model.id] = String(describing: error)
         }
+    }
+
+    /// The single place the resident-model mirror changes. A transcript belongs
+    /// to the model that produced it, so a swap — whoever caused it — clears it.
+    private func syncLoadedModel(_ id: String?) {
+        guard id != loadedModelID else { return }
+        loadedModelID = id
+        conversation.removeAll()
     }
 
     // MARK: - Chat
