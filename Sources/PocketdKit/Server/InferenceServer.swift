@@ -43,6 +43,7 @@ public actor InferenceServer {
     }
     private var stateObservers: [UUID: AsyncStream<State>.Continuation] = [:]
     private var activeRequests = 0
+    private var condition: ServeCondition = .ok
 
     public init(
         configuration: ServerConfiguration = ServerConfiguration(),
@@ -252,6 +253,17 @@ public actor InferenceServer {
     }
 
     func activeRequestCount() -> Int { activeRequests }
+
+    public func currentCondition() -> ServeCondition { condition }
+
+    /// Set by the app from thermal and battery notifications. The server keeps
+    /// listening while throttled — a refused request with a reason is far more
+    /// useful to a client than a refused connection.
+    public func setCondition(_ new: ServeCondition) {
+        condition = new
+    }
+
+    func serveCondition() -> ServeCondition { condition }
 
     func endRequest() {
         activeRequests = max(0, activeRequests - 1)

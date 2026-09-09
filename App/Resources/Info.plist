@@ -25,6 +25,11 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_pocketd._tcp</string>
+		<string>_ollama._tcp</string>
+	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Pocketd serves the language model running on this device to other devices on your network. Everything stays on your local network.</string>
 	<key>UILaunchScreen</key>

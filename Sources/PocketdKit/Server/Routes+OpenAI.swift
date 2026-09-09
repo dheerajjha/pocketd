@@ -62,6 +62,22 @@ extension InferenceServer {
         let wantsStream = payload.stream ?? false
         let logID = await beginLog(request, streamed: wantsStream)
 
+        // Checked before admission, so a hot phone answers immediately rather
+        // than queueing work it is about to refuse anyway.
+        let condition = serveCondition()
+        if !condition.isServing {
+            await finishLog(logID, status: 503)
+            var headers = cors
+            headers[HTTPHeader("Retry-After")] = String(condition.retryAfter)
+            return errorResponse(
+                status: .serviceUnavailable,
+                message: condition.message,
+                type: "device_" + condition.rawValue,
+                style: .openAI,
+                headers: headers
+            )
+        }
+
         guard beginRequest() else {
             await finishLog(logID, status: 503)
             var headers = cors

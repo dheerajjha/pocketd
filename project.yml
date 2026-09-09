@@ -43,6 +43,11 @@ targets:
         # not in the simulator.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+        # Required to advertise over Bonjour. Without these exact service types
+        # publish fails silently and the phone is discoverable by nothing.
+        NSBonjourServices:
+          - _pocketd._tcp
+          - _ollama._tcp
         NSLocalNetworkUsageDescription: >-
           Pocketd serves the language model running on this device to other
           devices on your network. Everything stays on your local network.

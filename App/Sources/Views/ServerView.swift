@@ -85,6 +85,16 @@ struct ServerView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Spacer()
+                if model.serverState.isRunning {
+                    Button {
+                        model.deskMode = true
+                    } label: {
+                        Label("Desk", systemImage: "moon.stars")
+                            .labelStyle(.iconOnly)
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Desk mode — dim the screen while serving")
+                }
                 Button(model.serverState.isRunning ? "Stop" : "Start") {
                     Task {
                         if model.serverState.isRunning {
@@ -102,6 +112,12 @@ struct ServerView: View {
                 Label("Load a model before starting.", systemImage: "info.circle")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+
+            if !model.condition.isServing {
+                Label(model.condition.message, systemImage: model.condition == .thermal ? "thermometer.high" : "battery.25")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
             }
         } footer: {
             Text("iOS closes the connection when this app is in the background. Keep Pocketd on screen while other devices are using it.")

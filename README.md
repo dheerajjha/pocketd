@@ -109,6 +109,16 @@ or Ollama's flat `{"error":"…"}`, because a client fed the wrong one reports
 
 ![The Models tab, with each model badged against a real device memory budget](docs/screenshot-models.png)
 
+## Desk mode
+
+The honest instruction is to keep the app on screen, which otherwise means an
+iPhone at full brightness for hours. Desk mode dims to what is worth reading
+across a desk and drifts it slowly so no pixel holds a colour — and because the
+display draws from the same thermal budget as the GPU, a dark screen is worth
+real tokens per second on a device already close to throttling.
+
+![Desk mode: a dim screen showing the address, port, model and request count](docs/screenshot-desk.png)
+
 ## Which models actually fit
 
 An iPhone 14 has 6 GB of RAM and iOS lets one app touch roughly 45% of it —
@@ -138,12 +148,29 @@ These are not bugs, and pretending otherwise would waste your afternoon.
 - **A backgrounded app is an offline server.** iOS closes the listening socket
   when the app suspends. `pocketd` re-establishes it on every foreground and
   keeps the screen awake while serving, but the phone has to stay on Pocketd.
-- **Thermals.** Sustained generation on a phone throttles within minutes. Fine
-  for bursts, poor as an always-on endpoint.
+- **Thermals and battery.** Sustained generation throttles a phone within
+  minutes. Rather than pretending otherwise, the server watches
+  `thermalState` and the battery and answers `503` with a reason and a
+  `Retry-After` — `device_thermal` recovers in about a minute, `device_battery`
+  in about five. It keeps listening while throttled, because a refused
+  connection looks like the phone has gone away and a refused request does not.
+  Recovery needs more than crossing back over the line, or a device sitting at
+  the boundary flaps every few seconds.
 - **Local Network permission** is requested on first start. Deny it and the
   socket accepts nothing from other devices, silently.
-- **DHCP moves the address.** Use a router reservation, or read the URL off the
-  Server tab each time.
+- **DHCP moves the address** — so the phone publishes itself over Bonjour as
+  `_pocketd._tcp` and `_ollama._tcp`, and the TXT record carries the version,
+  the loaded model, whether a key is required, and which APIs it speaks. A
+  client that browses never needs an address at all:
+
+  ```
+  $ dns-sd -B _pocketd._tcp local.
+  Add  ...  _pocketd._tcp.  iPhone 17
+
+  $ dns-sd -L "iPhone 17" _pocketd._tcp local.
+  ... can be reached at Ranjus-MacBook-Pro.local.:11434
+  version=0.1.0 api=openai,ollama auth=required model=smollm2-360m
+  ```
 - **Sampling is bound at load time.** llama.cpp fixes temperature, top-k and
   top-p to the context, so per-request overrides are ignored; `max_tokens` and
   `stop` are enforced by the server itself. Set sampling in Settings.

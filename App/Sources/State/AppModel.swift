@@ -11,6 +11,13 @@ final class AppModel {
     private(set) var serverState: InferenceServer.State = .stopped
     private(set) var log: [RequestLogEntry] = []
     private(set) var pairing = PairingSession.Snapshot()
+    private(set) var condition: ServeCondition = .ok
+    /// A dimmed, burn-in-safe screen for a phone left serving on a desk. The
+    /// display draws from the same thermal and power budget as the GPU, so a
+    /// bright screen literally costs tokens per second.
+    var deskMode = false {
+        didSet { UserDefaults.standard.set(deskMode, forKey: Keys.deskMode) }
+    }
     var configuration: ServerConfiguration {
         didSet { persistConfiguration() }
     }
@@ -50,8 +57,11 @@ final class AppModel {
     private var downloadTasks: [String: Task<Void, Never>] = [:]
     private var generationTask: Task<Void, Never>?
     private var observers: [Task<Void, Never>] = []
+    private let bonjour = BonjourAdvertiser()
+    private var governor: DeviceGovernor?
 
     private enum Keys {
+        static let deskMode = "pocketd.deskMode"
         static let systemPrompt = "pocketd.systemPrompt"
         static let serverShouldRun = "pocketd.serverShouldRun"
     }
@@ -100,10 +110,19 @@ final class AppModel {
         )
 
         systemPrompt = UserDefaults.standard.string(forKey: Keys.systemPrompt) ?? systemPrompt
+        deskMode = UserDefaults.standard.bool(forKey: Keys.deskMode)
         serverShouldRun = UserDefaults.standard.bool(forKey: Keys.serverShouldRun)
     }
 
     func bootstrap() async {
+        let governor = DeviceGovernor(batteryFloor: configuration.pauseBelowBatteryLevel) { [weak self] condition in
+            guard let self else { return }
+            self.condition = condition
+            Task { await self.server.setCondition(condition) }
+        }
+        self.governor = governor
+        governor.start()
+
         await store.load()
         installed = await store.installed()
 
@@ -161,6 +180,7 @@ final class AppModel {
             if await server.pairing.snapshot().hasPaired == false {
                 await server.openPairing()
             }
+            await advertise()
         } catch {
             lastServerError = friendlyMessage(for: error)
         }
@@ -171,6 +191,7 @@ final class AppModel {
         UserDefaults.standard.set(false, forKey: Keys.serverShouldRun)
         await server.stop()
         await server.closePairing()
+        bonjour.stop()
     }
 
     /// Called on every return to the foreground. iOS closes the listening socket
@@ -198,14 +219,33 @@ final class AppModel {
         } catch {
             lastServerError = friendlyMessage(for: error)
         }
+        governor?.updateBatteryFloor(new.pauseBelowBatteryLevel)
         // Not covered by the observer: toggling keep-awake in Settings produces
         // no server transition, so the new setting would not take hold until the
         // next start or stop.
         applyIdleTimer(running: await server.liveState().isRunning)
+        await advertise()
     }
 
     func clearLog() async {
         await server.log.clear()
+    }
+
+    /// Publishes the service once the listener is actually up, so browsers are
+    /// never pointed at a port nothing is bound to.
+    private func advertise() async {
+        guard case let .running(_, port) = await server.liveState() else { return }
+        #if canImport(UIKit)
+        let name = UIDevice.current.name
+        #else
+        let name = "Pocketd"
+        #endif
+        bonjour.start(
+            port: port,
+            name: name,
+            model: loadedModelID,
+            requiresAuth: configuration.requiresAuth
+        )
     }
 
     func newPairingCode() async {

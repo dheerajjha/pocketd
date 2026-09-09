@@ -163,6 +163,9 @@ extension InferenceServer {
             /// The live axis: whether the model resident right now was built
             /// with a projector, so images will be understood without a reload.
             var visionActive: Bool
+            /// "ok", "thermal" or "battery". A client that polls this can back
+            /// off before it starts getting 503s.
+            var condition: String
         }
         let engine = currentEngine()
         return jsonResponse(
@@ -174,7 +177,8 @@ extension InferenceServer {
                 maxContextTokens: contextCap(),
                 activeRequests: activeRequestCount(),
                 maxConcurrentRequests: configuration.maxConcurrentRequests,
-                visionActive: await engine.loadedModel()?.declaredCapabilities.vision.isYes ?? false
+                visionActive: await engine.loadedModel()?.declaredCapabilities.vision.isYes ?? false,
+                condition: serveCondition().rawValue
             ),
             headers: corsHeaders()
         )
