@@ -118,6 +118,9 @@ extension InferenceServer {
         await server.appendRoute("GET /setup") { [self] _ in
             await handleSetupPage()
         }
+        await server.appendRoute("GET /chat") { [self] _ in
+            await handleChatPage()
+        }
         await server.appendRoute("POST /pair") { [self] request in
             await handlePair(request)
         }

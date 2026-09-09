@@ -16,7 +16,19 @@ extension InferenceServer {
                 body: Data("Ollama is running".utf8)
             )
         }
-        return await handleSetupPage()
+        // The chat page handles its own pairing, so it is the right landing
+        // place whether or not this browser has connected before.
+        return await handleChatPage()
+    }
+
+    /// The chat client. Served at /chat and, once a browser has paired, the
+    /// thing the bare address should land on — someone opening their phone's
+    /// address wants to talk to the model, not read setup instructions again.
+    func handleChatPage() async -> HTTPResponse {
+        var headers = corsHeaders()
+        headers[.contentType] = "text/html; charset=utf-8"
+        headers[.cacheControl] = "no-store"
+        return HTTPResponse(statusCode: .ok, headers: headers, body: Data(ChatPage.html.utf8))
     }
 
     func handleSetupPage() async -> HTTPResponse {

@@ -27,8 +27,6 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Pocketd serves the language model running on this device to other devices on your network. Everything stays on your local network.</string>
-	<key>PocketdHasIncreasedMemoryLimit</key>
-	<true/>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

@@ -57,8 +57,7 @@ final class AppModel {
     }
 
     init() {
-        let hasEntitlement = Bundle.main.object(forInfoDictionaryKey: "PocketdHasIncreasedMemoryLimit") as? Bool ?? false
-        budget = .current(hasIncreasedMemoryLimit: hasEntitlement)
+        budget = .current(hasIncreasedMemoryLimit: Entitlements.hasIncreasedMemoryLimit)
 
         let directory = (try? ModelStore.defaultDirectory())
             ?? FileManager.default.temporaryDirectory.appendingPathComponent("Models")

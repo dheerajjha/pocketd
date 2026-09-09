@@ -1,4 +1,4 @@
-.PHONY: test app build-sim smoke clean
+.PHONY: test app build-sim smoke device-install clean
 
 # The package is the part that CI can check in seconds without a simulator.
 test:
@@ -32,6 +32,27 @@ BASE ?= http://127.0.0.1:11434
 KEY  ?=
 smoke:
 	./scripts/smoke.sh $(BASE) $(KEY)
+
+# Installs on a physical device. Two overrides are usually needed on a machine
+# whose developer account has not enabled the Increased Memory Limit capability
+# for this App ID: a bundle identifier that already has a provisioning profile,
+# and an empty entitlements file. The app reads the entitlement at runtime, so
+# a build without it reports the smaller memory budget honestly rather than
+# recommending models the device cannot hold.
+#
+#   make device-install DEVICE=<udid> BUNDLE_ID=<id from an existing profile>
+DEVICE ?=
+BUNDLE_ID ?=
+device-install: app
+	xcodebuild -project Pocketd.xcodeproj -scheme Pocketd \
+		-destination 'platform=iOS,id=$(DEVICE)' \
+		-derivedDataPath .build/device -skipMacroValidation \
+		-allowProvisioningUpdates \
+		$(if $(BUNDLE_ID),PRODUCT_BUNDLE_IDENTIFIER=$(BUNDLE_ID),) \
+		POCKETD_ENTITLEMENTS='$(PWD)/App/Resources/Pocketd-NoMemoryLimit.entitlements' \
+		build
+	xcrun devicectl device install app --device $(DEVICE) \
+		.build/device/Build/Products/Debug-iphoneos/Pocketd.app
 
 clean:
 	rm -rf .build Pocketd.xcodeproj

@@ -46,16 +46,6 @@ targets:
         NSLocalNetworkUsageDescription: >-
           Pocketd serves the language model running on this device to other
           devices on your network. Everything stays on your local network.
-        # Read by AppModel to size the memory budget honestly. Keep it in step
-        # with the entitlements file.
-        PocketdHasIncreasedMemoryLimit: true
-    entitlements:
-      path: App/Resources/Pocketd.entitlements
-      properties:
-        # Raises the jetsam ceiling from roughly 45% to roughly 58% of physical
-        # RAM, which is the difference between a 4B model loading and being
-        # killed on a 6 GB device.
-        com.apple.developer.kernel.increased-memory-limit: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.pocketd.app
@@ -63,8 +53,19 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "6.0"
         TARGETED_DEVICE_FAMILY: "1,2"
-        DEVELOPMENT_TEAM: ""
+        DEVELOPMENT_TEAM: 83C822A4J3
         CODE_SIGN_STYLE: Automatic
+        # Indirection so a device build can drop the entitlement without
+        # editing this file. Overriding CODE_SIGN_ENTITLEMENTS directly on the
+        # xcodebuild command line applies it to every target in the graph,
+        # including LocalLLMClient's, which then fail on a path relative to the
+        # wrong project. A custom variable is ignored by targets that do not
+        # reference it. See `make device-install`.
+        # The file is committed rather than generated: XcodeGen's entitlements:
+        # block writes CODE_SIGN_ENTITLEMENTS onto the target, which then wins
+        # over this indirection and makes the override below a no-op.
+        POCKETD_ENTITLEMENTS: $(SRCROOT)/App/Resources/Pocketd.entitlements
+        CODE_SIGN_ENTITLEMENTS: $(POCKETD_ENTITLEMENTS)
         SWIFT_STRICT_CONCURRENCY: complete
         # LocalLLMClientLlama is built with .interoperabilityMode(.Cxx), and a
         # target that links it has to agree. Without this the llama.cpp headers

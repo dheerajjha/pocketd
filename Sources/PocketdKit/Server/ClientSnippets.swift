@@ -132,6 +132,31 @@ public enum ClientSnippets {
                 note: "Open WebUI in Docker cannot reach your phone on the host network. Run it with --network host, or add --add-host and use your phone's address."
             ),
             ClientSnippet(
+                id: "opencode",
+                title: "opencode",
+                language: "json",
+                body: """
+                {
+                  "$schema": "https://opencode.ai/config.json",
+                  "provider": {
+                    "pocketd": {
+                      "npm": "@ai-sdk/openai-compatible",
+                      "name": "Pocketd",
+                      "options": {
+                        "baseURL": "\(v1)",
+                        "apiKey": "\(sdkKey)"
+                      },
+                      "models": {
+                        "\(model)": { "name": "\(model)" }
+                      }
+                    }
+                  }
+                }
+                """,
+                filename: "opencode.json",
+                note: "Paste into ~/.config/opencode/opencode.json, or opencode.json in your project. Restart opencode — it does not pick up provider changes while running."
+            ),
+            ClientSnippet(
                 id: "aider",
                 title: "Aider",
                 language: "bash",

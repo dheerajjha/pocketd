@@ -90,6 +90,7 @@ enum SetupPage {
             <div class="row">
               <button id="copy">Copy</button>
               <button class="ghost" id="test" disabled>Checking model…</button>
+              <a href="/chat"><button class="ghost">Open chat</button></a>
             </div>
             <pre id="out" class="hidden"></pre>
           </section>

@@ -174,3 +174,42 @@ struct ClientSnippetTests {
         #expect(python.body.contains("not-needed"))
     }
 }
+
+@Suite("Chat page")
+struct ChatPageTests {
+
+    @Test("/chat serves a chat client")
+    func servesChat() async throws {
+        let harness = try await TestServer.start()
+        defer { Task { await harness.stop() } }
+
+        let (status, body) = try await harness.send(harness.request("GET", "/chat", key: .some(nil)))
+        #expect(status == 200)
+        let html = String(decoding: body, as: UTF8.self)
+        #expect(html.contains("<!doctype html>"))
+        #expect(html.contains("/v1/chat/completions"), "the page must talk to the real endpoint")
+    }
+
+    @Test("a browser at the root lands on the chat, not the probe string")
+    func rootIsChatForBrowsers() async throws {
+        let harness = try await TestServer.start()
+        defer { Task { await harness.stop() } }
+
+        var request = try harness.request("GET", "/", key: .some(nil))
+        request.setValue("text/html", forHTTPHeaderField: "Accept")
+        let (status, body) = try await harness.send(request)
+        #expect(status == 200)
+        #expect(String(decoding: body, as: UTF8.self).contains("Pocketd"))
+    }
+
+    @Test("the chat page never hard-codes a key")
+    func noEmbeddedSecret() async throws {
+        let harness = try await TestServer.start()
+        defer { Task { await harness.stop() } }
+
+        let (_, body) = try await harness.send(harness.request("GET", "/chat", key: .some(nil)))
+        // The page is served before any pairing, so a key in it would be a
+        // straight leak to anyone who can reach the port.
+        #expect(String(decoding: body, as: UTF8.self).contains(harness.apiKey) == false)
+    }
+}
