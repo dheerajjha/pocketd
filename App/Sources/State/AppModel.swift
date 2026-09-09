@@ -43,6 +43,7 @@ final class AppModel {
     // MARK: Internals
 
     private let store: ModelStore
+    private let configurationStore: ServerConfigurationStore
     private let engine: LlamaEngine
     private let server: InferenceServer
     private var downloadTasks: [String: Task<Void, Never>] = [:]
@@ -50,7 +51,6 @@ final class AppModel {
     private var observers: [Task<Void, Never>] = []
 
     private enum Keys {
-        static let configuration = "pocketd.configuration"
         static let systemPrompt = "pocketd.systemPrompt"
         static let serverShouldRun = "pocketd.serverShouldRun"
     }
@@ -67,9 +67,12 @@ final class AppModel {
         let engine = LlamaEngine(fileURL: { store.fileURL(for: $0) })
         self.engine = engine
 
-        let stored = UserDefaults.standard.data(forKey: Keys.configuration)
-            .flatMap { try? JSONDecoder().decode(ServerConfiguration.self, from: $0) }
-        let configuration = stored ?? ServerConfiguration()
+        // load() persists a freshly generated configuration on the spot. Relying
+        // on the didSet below would not: property observers do not run during
+        // initialisation, so the API key would be new on every launch.
+        let store = ServerConfigurationStore()
+        self.configurationStore = store
+        let configuration = store.load()
         self.configuration = configuration
 
         self.server = InferenceServer(
@@ -170,8 +173,7 @@ final class AppModel {
     }
 
     private func persistConfiguration() {
-        guard let data = try? JSONEncoder().encode(configuration) else { return }
-        UserDefaults.standard.set(data, forKey: Keys.configuration)
+        configurationStore.save(configuration)
     }
 
     private func friendlyMessage(for error: any Error) -> String {
