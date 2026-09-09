@@ -139,6 +139,14 @@ extension InferenceServer {
             return response(for: error, style: .ollama, headers: cors)
         }
 
+        do {
+            try ContextGuard(contextTokens: contextCap()).check(messages)
+        } catch {
+            endRequest()
+            await finishLog(logID, status: 413, model: model.id)
+            return response(for: error, style: .ollama, headers: cors)
+        }
+
         var capped = options
         capped.maxTokens = min(capped.maxTokens ?? contextCap(), contextCap())
         let generation = GenerationRequest(modelID: model.id, messages: messages, options: capped)

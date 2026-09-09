@@ -104,13 +104,17 @@ struct OpenAIRouteTests {
     @Test("caps max_tokens at the configured context limit")
     func capsMaxTokens() async throws {
         let harness = try await TestServer.start(
-            configuration: ServerConfiguration(port: 0, binding: .loopback, maxContextTokens: 5)
+            configuration: ServerConfiguration(port: 0, binding: .loopback, maxContextTokens: 64)
         )
         defer { Task { await harness.stop() } }
 
+        // The prompt has to be comfortably inside the window — a context so
+        // small that the prompt itself does not fit is a different test, and the
+        // oversized-prompt guard rightly answers it with a 413.
+        let prompt = String(repeating: "z", count: 100)
         let request = try harness.request("POST", "/v1/chat/completions", json: OpenAI.ChatCompletionRequest(
             model: "echo",
-            messages: [OpenAI.Message(role: "user", content: "abcdefghijklmnop")],
+            messages: [OpenAI.Message(role: "user", content: prompt)],
             stream: false,
             max_tokens: 10_000
         ))
@@ -118,7 +122,7 @@ struct OpenAIRouteTests {
         #expect(status == 200)
 
         let body = try JSONDecoder().decode(OpenAI.ChatCompletionResponse.self, from: data)
-        #expect(body.choices.first?.message.content == "abcde")
+        #expect(body.choices.first?.message.content == String(prompt.prefix(64)))
         #expect(body.choices.first?.finish_reason == "length")
     }
 

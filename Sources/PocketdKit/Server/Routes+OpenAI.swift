@@ -69,9 +69,21 @@ extension InferenceServer {
             return response(for: error, style: .openAI, headers: cors)
         }
 
+        let messages = payload.chatMessages()
+        // Checked here, before the engine, because an oversized prompt makes
+        // llama.cpp trap and take the process down — every other client's
+        // connection with it.
+        do {
+            try ContextGuard(contextTokens: contextCap()).check(messages)
+        } catch {
+            endRequest()
+            await finishLog(logID, status: 413, model: model.id)
+            return response(for: error, style: .openAI, headers: cors)
+        }
+
         var options = payload.generationOptions()
         options.maxTokens = min(options.maxTokens ?? contextCap(), contextCap())
-        let generation = GenerationRequest(modelID: model.id, messages: payload.chatMessages(), options: options)
+        let generation = GenerationRequest(modelID: model.id, messages: messages, options: options)
 
         return wantsStream
             ? await streamChatCompletion(

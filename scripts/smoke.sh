@@ -129,6 +129,68 @@ contains "/api/generate answers buffered" '"response"' "$GEN"
 echo "  said: $(echo "$GEN" | sed -n 's/.*"response":"\([^"]*\)".*/\1/p' | head -c 120)"
 
 echo
+echo "== behaviour under load"
+
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+
+# Waits until the server will accept work again, so a slow generation started by
+# one check cannot make the next one fail with a 503 it did not cause.
+wait_idle() {
+  for _ in $(seq 1 200); do
+    code=$(curl -s -o /dev/null -m 60 -w '%{http_code}' "${AUTH[@]}" -H 'Content-Type: application/json' \
+      -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4}" \
+      "$BASE/v1/chat/completions")
+    [ "$code" = "503" ] || return 0
+    sleep 2
+  done
+  return 1
+}
+
+# The server admits one generation at a time; a second must be refused fast
+# rather than queued until the client gives up.
+curl -s -o /dev/null -m 300 "${AUTH[@]}" -H 'Content-Type: application/json' \
+  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Write a long essay about rivers\"}],\"max_tokens\":400,\"stream\":false}" \
+  "$BASE/v1/chat/completions" >/dev/null 2>&1 &
+LOADPID=$!
+sleep 4
+BUSY=$(curl -s -o /dev/null -m 30 -w '%{http_code}' "${AUTH[@]}" -H 'Content-Type: application/json' \
+  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":8}" \
+  "$BASE/v1/chat/completions")
+check "a second concurrent request is refused fast" 503 "$BUSY"
+wait "$LOADPID" 2>/dev/null || true
+wait_idle || echo "  (warning: server did not go idle)"
+
+# A stream the client abandons must not wedge the single generation slot.
+curl -s -N -m 2 "${AUTH[@]}" -H 'Content-Type: application/json' \
+  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Write a long essay about mountains\"}],\"max_tokens\":400,\"stream\":true}" \
+  "$BASE/v1/chat/completions" >/dev/null 2>&1 || true
+if wait_idle; then
+  printf '  \033[32mok\033[0m   %-46s\n' "an abandoned stream frees the slot"; pass=$((pass+1))
+else
+  printf '  \033[31mFAIL\033[0m %-46s slot never freed\n' "an abandoned stream frees the slot"; fail=$((fail+1))
+fi
+
+# A prompt far past the context cap must fail cleanly rather than hang or crash.
+python3 - "$MODEL" > "$TMP/big.json" <<'PYJSON'
+import json, sys
+print(json.dumps({
+    "model": sys.argv[1],
+    "messages": [{"role": "user", "content": "word " * 20000}],
+    "max_tokens": 16,
+}))
+PYJSON
+OVER=$(curl -s -o /dev/null -m 300 -w '%{http_code}' "${AUTH[@]}" -H 'Content-Type: application/json' \
+  --data-binary @"$TMP/big.json" "$BASE/v1/chat/completions")
+case "$OVER" in
+  200|413|500)
+    printf '  \033[32mok\033[0m   %-46s %s\n' "an oversized prompt answers, not hangs" "$OVER"; pass=$((pass+1));;
+  *)
+    printf '  \033[31mFAIL\033[0m %-46s %s\n' "an oversized prompt answers, not hangs" "$OVER"; fail=$((fail+1));;
+esac
+wait_idle || true
+
+echo
 echo "== errors"
 check "unknown model is 404" 404 "$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" -H 'Content-Type: application/json' -d '{"model":"nope","messages":[{"role":"user","content":"x"}]}' "$BASE/v1/chat/completions")"
 check "malformed body is 400" 400 "$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" -H 'Content-Type: application/json' -d '{ not json' "$BASE/v1/chat/completions")"

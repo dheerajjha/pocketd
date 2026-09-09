@@ -184,6 +184,17 @@ actor LlamaEngine: InferenceEngine {
             return
         }
 
+        // Defence in depth: the Chat tab calls the engine directly, so the
+        // route-layer guard does not cover it, and an oversized prompt here is a
+        // process-killing trap inside llama.cpp rather than a thrown error.
+        do {
+            try ContextGuard(contextTokens: min(model.contextLength, sampling.contextTokens))
+                .check(request.messages)
+        } catch {
+            continuation.finish(throwing: InferenceError.contextExhausted)
+            return
+        }
+
         let input = LLMInput.chat(request.messages.map { message in
             switch message.role {
             case .system: .system(message.content)
