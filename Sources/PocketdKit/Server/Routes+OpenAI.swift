@@ -105,7 +105,10 @@ extension InferenceServer {
         // llama.cpp trap and take the process down — every other client's
         // connection with it.
         do {
-            try ContextGuard(contextTokens: contextCap()).check(messages)
+            try await ContextGuard(
+                contextTokens: contextCap(),
+                fixedOverheadTokens: currentEngine().promptOverheadTokens
+            ).check(messages)
         } catch {
             endRequest()
             await finishLog(logID, status: 413, model: model.id)
@@ -114,7 +117,12 @@ extension InferenceServer {
 
         var options = payload.generationOptions()
         options.maxTokens = min(options.maxTokens ?? contextCap(), contextCap())
-        let generation = GenerationRequest(modelID: model.id, messages: messages, options: options)
+        let generation = GenerationRequest(
+            modelID: model.id,
+            messages: messages,
+            options: options,
+            origin: request.requestOrigin
+        )
 
         return wantsStream
             ? await streamChatCompletion(

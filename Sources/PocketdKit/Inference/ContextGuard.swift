@@ -22,12 +22,21 @@ public struct ContextGuard: Sendable, Equatable {
     /// Tokens held back for the answer, so a prompt cannot fill the window and
     /// leave no room to reply.
     public var reservedForCompletion: Int
+    /// Tokens this prompt will grow by AFTER the guard has seen it.
+    ///
+    /// Tool schemas are injected downstream, inside the inference library's own
+    /// message processing, so the guard never sees them. Registering three
+    /// tools adds roughly 860 tokens invisibly — which would quietly reopen the
+    /// exact crash this type exists to prevent, since llama.cpp does not error
+    /// on an oversized prompt, it asserts and takes the process down.
+    public var fixedOverheadTokens: Int
 
-    public init(contextTokens: Int, reservedForCompletion: Int? = nil) {
+    public init(contextTokens: Int, reservedForCompletion: Int? = nil, fixedOverheadTokens: Int = 0) {
         self.contextTokens = contextTokens
         // Proportional, not flat: a fixed 64-token reserve swallows a small
         // context whole and refuses prompts that would fit comfortably.
         self.reservedForCompletion = reservedForCompletion ?? min(64, max(1, contextTokens / 4))
+        self.fixedOverheadTokens = fixedOverheadTokens
     }
 
     public static func estimateTokens(_ text: String) -> Int {
@@ -41,7 +50,23 @@ public struct ContextGuard: Sendable, Equatable {
     }
 
     public var promptBudget: Int {
-        max(1, contextTokens - reservedForCompletion)
+        max(1, contextTokens - reservedForCompletion - fixedOverheadTokens)
+    }
+
+    /// The fixed preamble the library prepends when any tool is registered.
+    /// Asserted in the tests so a dependency bump that changes it fails loudly
+    /// rather than silently eating budget.
+    public static let toolPreambleCharacters = 264
+
+    /// What registering `toolsJSON` will cost, in guard tokens.
+    ///
+    /// Doubled for a tool-native chat template: the schema is rendered once by
+    /// the template itself and appended again by the library's instruction
+    /// processor, so a Qwen3-style model pays for it twice.
+    public static func toolOverhead(toolsJSON: String, templateIsToolNative: Bool) -> Int {
+        guard !toolsJSON.isEmpty else { return 0 }
+        let schema = estimateTokens(toolsJSON) * (templateIsToolNative ? 2 : 1)
+        return schema + (toolPreambleCharacters + charactersPerToken - 1) / charactersPerToken
     }
 
     public func fits(_ messages: [ChatMessage]) -> Bool {

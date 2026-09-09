@@ -23,6 +23,12 @@ public struct ModelCapabilities: Sendable, Equatable, Codable {
 
     /// Declared: this model can accept images, given a projector.
     public var vision: Support
+    /// Declared: the model's chat template was trained to emit tool calls.
+    ///
+    /// Attaching tools to a model whose template knows nothing about them
+    /// produces a model that never calls one and a user who concludes the
+    /// feature is broken — so this gates the feature rather than decorating it.
+    public var tools: Support
     /// Live: the resident session was actually built with a projector, so
     /// images sent right now will be understood.
     public var visionActive: Bool
@@ -34,11 +40,13 @@ public struct ModelCapabilities: Sendable, Equatable, Codable {
 
     public init(
         vision: Support = .unknown,
+        tools: Support = .unknown,
         visionActive: Bool = false,
         contextLength: Int? = nil,
         effectiveContextLength: Int? = nil
     ) {
         self.vision = vision
+        self.tools = tools
         self.visionActive = visionActive
         self.contextLength = contextLength
         self.effectiveContextLength = effectiveContextLength
@@ -59,6 +67,7 @@ public struct ModelCapabilities: Sendable, Equatable, Codable {
     public var ollamaCapabilities: [String] {
         var list = ["completion"]
         if vision.isYes { list.append("vision") }
+        if tools.isYes { list.append("tools") }
         return list
     }
 }
@@ -77,6 +86,7 @@ public extension ModelRecord {
     var declaredCapabilities: ModelCapabilities {
         ModelCapabilities(
             vision: projectorFilename == nil ? .no : .yes,
+            tools: toolSupport,
             visionActive: false,
             contextLength: contextLength
         )

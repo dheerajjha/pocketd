@@ -29,7 +29,8 @@ public enum ModelCatalog {
             quantization: "Q4_K_M",
             sizeBytes: 1_100_000_000,
             contextLength: 32_768,
-            license: "Apache-2.0"
+            license: "Apache-2.0",
+            toolSupport: .yes
         ),
         ModelRecord(
             id: "llama-3.2-1b",
@@ -62,7 +63,8 @@ public enum ModelCatalog {
             quantization: "Q4_K_M",
             sizeBytes: 2_500_000_000,
             contextLength: 32_768,
-            license: "Apache-2.0"
+            license: "Apache-2.0",
+            toolSupport: .yes
         ),
         // Vision. Sizes are the real Content-Length of both files; the
         // projector is resident alongside the weights, so it counts toward the
@@ -78,7 +80,8 @@ public enum ModelCatalog {
             contextLength: 8_192,
             license: "Apache-2.0",
             projectorFilename: "mmproj-SmolVLM-500M-Instruct-Q8_0.gguf",
-            projectorSizeBytes: 108_783_360
+            projectorSizeBytes: 108_783_360,
+            toolSupport: .no
         ),
         ModelRecord(
             id: "gemma-3-4b-vision",
@@ -102,7 +105,9 @@ public enum ModelCatalog {
             quantization: "Q8_0",
             sizeBytes: 386_000_000,
             contextLength: 8_192,
-            license: "Apache-2.0"
+            license: "Apache-2.0",
+            // Plain ChatML, 368 characters, no mention of tools anywhere.
+            toolSupport: .no
         )
     ]
 

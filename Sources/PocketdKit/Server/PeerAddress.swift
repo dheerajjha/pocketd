@@ -39,3 +39,15 @@ extension HTTPRequest {
         }
     }
 }
+
+extension HTTPRequest {
+    /// The origin, from the accepted connection only.
+    var requestOrigin: RequestOrigin {
+        switch remoteAddress {
+        case let .ip4(ip, port: port), let .ip6(ip, port: port):
+            return .network(host: ip, port: port)
+        case .unix, .none:
+            return .network(host: "unknown", port: 0)
+        }
+    }
+}

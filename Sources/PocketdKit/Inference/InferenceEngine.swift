@@ -7,11 +7,21 @@ public struct GenerationRequest: Sendable, Equatable {
     public var modelID: String
     public var messages: [ChatMessage]
     public var options: GenerationOptions
+    /// Defaults to the restricted case on purpose: a call site that forgets to
+    /// set this gets the path with no access to personal data, not the
+    /// privileged one. Fail closed.
+    public var origin: RequestOrigin
 
-    public init(modelID: String, messages: [ChatMessage], options: GenerationOptions = .default) {
+    public init(
+        modelID: String,
+        messages: [ChatMessage],
+        options: GenerationOptions = .default,
+        origin: RequestOrigin = .network(host: "unknown", port: 0)
+    ) {
         self.modelID = modelID
         self.messages = messages
         self.options = options
+        self.origin = origin
     }
 }
 
@@ -63,6 +73,10 @@ public protocol InferenceEngine: Sendable {
     /// The model currently resident in memory, if any.
     func loadedModel() async -> ModelRecord?
 
+    /// Tokens the loaded client will add to every prompt after the guard has
+    /// checked it — tool schemas, mostly. Zero when nothing is registered.
+    var promptOverheadTokens: Int { get async }
+
     /// Bring a model into memory, evicting whatever was there. On a phone there
     /// is only ever room for one.
     func load(model: ModelRecord) async throws
@@ -75,6 +89,9 @@ public protocol InferenceEngine: Sendable {
 }
 
 public extension InferenceEngine {
+    /// Most engines add nothing.
+    var promptOverheadTokens: Int { get async { 0 } }
+
     /// Convenience for non-streaming callers: drain the stream into one string.
     func complete(_ request: GenerationRequest) async throws -> (text: String, reason: FinishReason, usage: TokenUsage) {
         var text = ""

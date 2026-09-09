@@ -163,7 +163,10 @@ extension InferenceServer {
         }
 
         do {
-            try ContextGuard(contextTokens: contextCap()).check(messages)
+            try await ContextGuard(
+                contextTokens: contextCap(),
+                fixedOverheadTokens: currentEngine().promptOverheadTokens
+            ).check(messages)
         } catch {
             endRequest()
             await finishLog(logID, status: 413, model: model.id)
@@ -172,7 +175,12 @@ extension InferenceServer {
 
         var capped = options
         capped.maxTokens = min(capped.maxTokens ?? contextCap(), contextCap())
-        let generation = GenerationRequest(modelID: model.id, messages: messages, options: capped)
+        let generation = GenerationRequest(
+            modelID: model.id,
+            messages: messages,
+            options: capped,
+            origin: request.requestOrigin
+        )
 
         guard stream else {
             let started = ContinuousClock.now

@@ -28,6 +28,13 @@ public struct ModelRecord: Sendable, Codable, Equatable, Identifiable, Hashable 
     /// Size of the projector, counted into the memory budget because it is
     /// resident for as long as the model is.
     public var projectorSizeBytes: Int64
+    /// Whether this model's chat template was trained to emit tool calls.
+    ///
+    /// Tri-state, and `.unknown` is the honest default: a model nobody has
+    /// checked is not the same as one known not to work, and treating it as
+    /// capable is how someone ends up with a feature that silently never fires.
+    /// Unknown is treated as unusable at the gate, but says so differently.
+    public var toolSupport: ModelCapabilities.Support
 
     public init(
         id: String,
@@ -41,7 +48,8 @@ public struct ModelRecord: Sendable, Codable, Equatable, Identifiable, Hashable 
         license: String,
         sourceURL: URL? = nil,
         projectorFilename: String? = nil,
-        projectorSizeBytes: Int64 = 0
+        projectorSizeBytes: Int64 = 0,
+        toolSupport: ModelCapabilities.Support = .unknown
     ) {
         self.id = id
         self.displayName = displayName
@@ -55,6 +63,7 @@ public struct ModelRecord: Sendable, Codable, Equatable, Identifiable, Hashable 
         self.sourceURL = sourceURL
         self.projectorFilename = projectorFilename
         self.projectorSizeBytes = projectorSizeBytes
+        self.toolSupport = toolSupport
     }
 
     /// Decoded leniently so a manifest written by an older build still loads.
@@ -75,6 +84,7 @@ public struct ModelRecord: Sendable, Codable, Equatable, Identifiable, Hashable 
         sourceURL = try c.decodeIfPresent(URL.self, forKey: .sourceURL)
         projectorFilename = try c.decodeIfPresent(String.self, forKey: .projectorFilename)
         projectorSizeBytes = try c.decodeIfPresent(Int64.self, forKey: .projectorSizeBytes) ?? 0
+        toolSupport = try c.decodeIfPresent(ModelCapabilities.Support.self, forKey: .toolSupport) ?? .unknown
     }
 
     public var downloadURL: URL {

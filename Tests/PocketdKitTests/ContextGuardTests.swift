@@ -111,3 +111,95 @@ struct ContextGuardTests {
         #expect(guardian.fits(filling) == false)
     }
 }
+
+@Suite("Prompt overhead the guard cannot see")
+struct PromptOverheadTests {
+
+    /// Tool schemas are injected downstream, inside the inference library, after
+    /// the guard has approved the prompt. Since llama.cpp asserts rather than
+    /// erroring on an oversized prompt — the crash this guard exists to stop —
+    /// an overhead it cannot see is an invitation to the same SIGTRAP.
+    @Test("declared overhead comes out of the prompt budget")
+    func overheadReducesBudget() {
+        let plain = ContextGuard(contextTokens: 4096)
+        let withTools = ContextGuard(contextTokens: 4096, fixedOverheadTokens: 860)
+        #expect(withTools.promptBudget == plain.promptBudget - 860)
+
+        let message = [ChatMessage.user(String(repeating: "x", count: 3 * 3900))]
+        #expect(plain.fits(message))
+        #expect(withTools.fits(message) == false, "the same prompt must be refused once tools are registered")
+    }
+
+    @Test("overhead can never drive the budget below one token")
+    func budgetFloor() {
+        let absurd = ContextGuard(contextTokens: 512, fixedOverheadTokens: 100_000)
+        #expect(absurd.promptBudget == 1)
+    }
+
+    @Test("a tool-native template pays for the schema twice")
+    func nativeTemplateDoubles() {
+        let schema = String(repeating: "{\"name\":\"x\"}", count: 20)
+        let plain = ContextGuard.toolOverhead(toolsJSON: schema, templateIsToolNative: false)
+        let native = ContextGuard.toolOverhead(toolsJSON: schema, templateIsToolNative: true)
+        // The template renders the tool block itself AND the library appends it
+        // again, so a Qwen3-style model is charged for both.
+        #expect(native > plain)
+        #expect(native - ContextGuard.toolOverhead(toolsJSON: "", templateIsToolNative: true) > plain / 2)
+    }
+
+    @Test("no tools means no overhead at all")
+    func freeWhenUnused() {
+        #expect(ContextGuard.toolOverhead(toolsJSON: "", templateIsToolNative: true) == 0)
+    }
+
+    /// If a dependency bump changes the preamble, this fails loudly instead of
+    /// the budget silently drifting.
+    @Test("the library preamble is the length the arithmetic assumes")
+    func preambleLength() {
+        #expect(ContextGuard.toolPreambleCharacters == 264)
+    }
+}
+
+@Suite("Date context")
+struct DateContextTests {
+    private let noon = Date(timeIntervalSince1970: 1_788_955_200)
+
+    @Test("names yesterday and tomorrow explicitly")
+    func spellsOutRelativeDays() {
+        let line = DateContext.sentence(
+            now: noon,
+            calendar: Calendar(identifier: .gregorian),
+            locale: Locale(identifier: "en_GB"),
+            timeZone: TimeZone(identifier: "UTC")!
+        )
+        // Small models are unreliable at date arithmetic, and every relative
+        // question depends on it, so the neighbours are precomputed.
+        #expect(line.contains("Yesterday was"))
+        #expect(line.contains("Tomorrow is"))
+        #expect(line.contains("UTC+00:00"))
+    }
+
+    @Test("is cheaper than the tool it replaces")
+    func cheaperThanATool() {
+        let line = DateContext.sentence(now: noon)
+        // A get_current_datetime tool costs its schema plus forces the 264-char
+        // preamble into existence: about 160 guard tokens before anything runs.
+        #expect(ContextGuard.estimateTokens(line) < 120)
+    }
+
+    @Test("creates a system turn when the client sent none")
+    func createsSystemTurn() {
+        let injected = DateContext.inject(into: [.user("what's on tomorrow?")], now: noon)
+        #expect(injected.count == 2)
+        #expect(injected[0].role == .system)
+        #expect(injected[1].role == .user)
+    }
+
+    @Test("prepends to an existing system turn without losing it")
+    func preservesExistingSystemPrompt() {
+        let injected = DateContext.inject(into: [.system("You are terse."), .user("hi")], now: noon)
+        #expect(injected.count == 2)
+        #expect(injected[0].content.contains("You are terse."))
+        #expect(injected[0].content.contains("Current date and time"))
+    }
+}
