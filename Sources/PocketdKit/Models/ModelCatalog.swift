@@ -64,6 +64,35 @@ public enum ModelCatalog {
             contextLength: 32_768,
             license: "Apache-2.0"
         ),
+        // Vision. Sizes are the real Content-Length of both files; the
+        // projector is resident alongside the weights, so it counts toward the
+        // memory budget and the fit badge.
+        ModelRecord(
+            id: "smolvlm-500m",
+            displayName: "SmolVLM 500M",
+            repoID: "ggml-org/SmolVLM-500M-Instruct-GGUF",
+            filename: "SmolVLM-500M-Instruct-Q8_0.gguf",
+            parameters: "500M",
+            quantization: "Q8_0",
+            sizeBytes: 436_806_912,
+            contextLength: 8_192,
+            license: "Apache-2.0",
+            projectorFilename: "mmproj-SmolVLM-500M-Instruct-Q8_0.gguf",
+            projectorSizeBytes: 108_783_360
+        ),
+        ModelRecord(
+            id: "gemma-3-4b-vision",
+            displayName: "Gemma 3 4B (vision)",
+            repoID: "ggml-org/gemma-3-4b-it-GGUF",
+            filename: "gemma-3-4b-it-Q4_K_M.gguf",
+            parameters: "4B",
+            quantization: "Q4_K_M",
+            sizeBytes: 2_489_757_856,
+            contextLength: 131_072,
+            license: "Gemma Terms of Use",
+            projectorFilename: "mmproj-model-f16.gguf",
+            projectorSizeBytes: 851_251_104
+        ),
         ModelRecord(
             id: "smollm2-360m",
             displayName: "SmolLM2 360M",

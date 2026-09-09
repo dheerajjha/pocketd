@@ -50,8 +50,21 @@ struct ModelsView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(record.displayName).font(.headline)
-                    Text("\(record.parameters) · \(record.quantization) · \(format(record.sizeBytes))")
+                    HStack(spacing: 6) {
+                        Text(record.displayName).font(.headline)
+                        if record.declaredCapabilities.vision.isYes {
+                            Label("Vision", systemImage: "eye")
+                                .labelStyle(.titleAndIcon)
+                                .font(.caption2)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(.blue.opacity(0.15), in: Capsule())
+                        }
+                    }
+                    // The total, not the weights alone: a vision model's
+                    // projector is another download and another few hundred
+                    // megabytes resident.
+                    Text("\(record.parameters) · \(record.quantization) · \(format(record.totalDownloadBytes))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

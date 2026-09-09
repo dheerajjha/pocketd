@@ -184,7 +184,7 @@ struct LongGenerationTests {
         #expect(data.isEmpty == false, "an empty body is what the 15s timeout produced")
 
         let body = try JSONDecoder().decode(OpenAI.ChatCompletionResponse.self, from: data)
-        #expect(body.choices.first?.message.content == String(repeating: "x", count: 40))
+        #expect(body.choices.first?.message.content?.text == String(repeating: "x", count: 40))
     }
 
     @Test("the default configuration allows a full context at a slow phone's pace")

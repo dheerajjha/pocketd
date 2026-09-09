@@ -23,12 +23,86 @@ struct StringOrArray: Codable, Sendable, Equatable {
 }
 
 enum OpenAI {
+    /// `content` is a plain string in most requests and an array of typed
+    /// parts whenever an image is attached. Both are valid OpenAI, and a client
+    /// that sends the array shape to a server expecting a string gets a decode
+    /// failure for the whole request rather than a message about the image.
+    struct MessageContent: Codable, Sendable {
+        var text: String
+        /// Raw bytes of every `image_url` part that carried a data: URI.
+        var images: [Data]
+
+        init(text: String, images: [Data] = []) {
+            self.text = text
+            self.images = images
+        }
+
+        private struct Part: Codable {
+            struct ImageURL: Codable { var url: String }
+            var type: String
+            var text: String?
+            var image_url: ImageURL?
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let plain = try? container.decode(String.self) {
+                self.init(text: plain)
+                return
+            }
+            let parts = (try? container.decode([Part].self)) ?? []
+            var text = ""
+            var images: [Data] = []
+            for part in parts {
+                switch part.type {
+                case "text":
+                    if let value = part.text {
+                        text += text.isEmpty ? value : "\n" + value
+                    }
+                case "image_url":
+                    if let url = part.image_url?.url, let data = MessageContent.decodeDataURI(url) {
+                        images.append(data)
+                    }
+                default:
+                    break
+                }
+            }
+            self.init(text: text, images: images)
+        }
+
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(text)
+        }
+
+        /// Only data: URIs are accepted. Fetching an http: image would make the
+        /// phone issue outbound requests on a caller's behalf, which is a
+        /// request-forgery surface a local inference server has no business
+        /// opening.
+        static func decodeDataURI(_ url: String) -> Data? {
+            guard url.hasPrefix("data:"), let comma = url.firstIndex(of: ",") else { return nil }
+            let meta = url[url.startIndex..<comma]
+            guard meta.contains(";base64") else { return nil }
+            return Data(base64Encoded: String(url[url.index(after: comma)...]))
+        }
+    }
+
     struct Message: Codable, Sendable {
         var role: String
         /// Optional because a tool-call message may carry no text, and a
         /// decode failure on the whole request is a worse answer than an
         /// empty turn.
-        var content: String?
+        var content: MessageContent?
+
+        init(role: String, content: MessageContent?) {
+            self.role = role
+            self.content = content
+        }
+
+        init(role: String, content: String?) {
+            self.role = role
+            self.content = content.map { MessageContent(text: $0) }
+        }
     }
 
     /// `{"stream_options": {"include_usage": true}}` asks for token counts in a
@@ -66,7 +140,8 @@ enum OpenAI {
             messages.map { message in
                 ChatMessage(
                     role: ChatMessage.Role(rawValue: message.role) ?? .user,
-                    content: message.content ?? ""
+                    content: message.content?.text ?? "",
+                    images: message.content?.images ?? []
                 )
             }
         }
@@ -139,6 +214,11 @@ enum OpenAI {
         var object: String = "model"
         var created: Int
         var owned_by: String
+        /// Not in OpenAI's schema, which has no field for this. Clients that
+        /// do not know it ignore it; clients that want to know whether they
+        /// can send an image have nowhere else to look.
+        var capabilities: [String]?
+        var context_length: Int?
     }
 
     struct ModelList: Codable, Sendable {

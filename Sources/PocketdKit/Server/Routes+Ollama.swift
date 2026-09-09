@@ -5,8 +5,11 @@ extension InferenceServer {
     func handleOllamaTags(_ request: HTTPRequest) async -> HTTPResponse {
         let cors = corsHeaders()
         if let rejection = authorize(request) { return rejection }
+        let resident = await currentEngine().loadedModel()
         return jsonResponse(
-            Ollama.TagsResponse(models: await models().map(Ollama.tagEntry(for:))),
+            Ollama.TagsResponse(models: await models().map { model in
+                Ollama.tagEntry(for: model, capabilities: capabilities(for: model, resident: resident))
+            }),
             headers: cors
         )
     }
@@ -67,7 +70,11 @@ extension InferenceServer {
         }
 
         let messages = payload.messages.map {
-            ChatMessage(role: ChatMessage.Role(rawValue: $0.role) ?? .user, content: $0.content)
+            ChatMessage(
+                role: ChatMessage.Role(rawValue: $0.role) ?? .user,
+                content: $0.content,
+                images: $0.imageData
+            )
         }
         // Ollama streams unless told otherwise — the opposite of OpenAI's default.
         return await runOllama(

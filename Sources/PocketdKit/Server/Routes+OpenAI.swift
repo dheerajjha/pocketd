@@ -6,9 +6,17 @@ extension InferenceServer {
         let cors = corsHeaders()
         if let rejection = authorize(request) { return rejection }
         let created = Int(Date().timeIntervalSince1970)
+        let resident = await currentEngine().loadedModel()
         let list = OpenAI.ModelList(
-            data: await models().map {
-                OpenAI.Model(id: $0.id, created: created, owned_by: "pocketd")
+            data: await models().map { model in
+                let caps = capabilities(for: model, resident: resident)
+                return OpenAI.Model(
+                    id: model.id,
+                    created: created,
+                    owned_by: "pocketd",
+                    capabilities: caps.ollamaCapabilities,
+                    context_length: caps.effectiveContextLength ?? caps.contextLength
+                )
             }
         )
         return jsonResponse(list, headers: cors)
@@ -27,8 +35,15 @@ extension InferenceServer {
                 headers: cors
             )
         }
+        let caps = capabilities(for: model, resident: await currentEngine().loadedModel())
         return jsonResponse(
-            OpenAI.Model(id: model.id, created: Int(Date().timeIntervalSince1970), owned_by: "pocketd"),
+            OpenAI.Model(
+                id: model.id,
+                created: Int(Date().timeIntervalSince1970),
+                owned_by: "pocketd",
+                capabilities: caps.ollamaCapabilities,
+                context_length: caps.effectiveContextLength ?? caps.contextLength
+            ),
             headers: cors
         )
     }

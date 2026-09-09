@@ -9,6 +9,19 @@ enum Ollama {
     struct Message: Codable, Sendable {
         var role: String
         var content: String
+        /// Base64 images, no data: prefix — Ollama's shape, verified against
+        /// its api/types.go, and different from OpenAI's typed content parts.
+        var images: [String]?
+
+        init(role: String, content: String, images: [String]? = nil) {
+            self.role = role
+            self.content = content
+            self.images = images
+        }
+
+        var imageData: [Data] {
+            (images ?? []).compactMap { Data(base64Encoded: $0) }
+        }
     }
 
     struct Options: Codable, Sendable {
@@ -152,7 +165,7 @@ enum Ollama {
         return formatter.string(from: date)
     }
 
-    static func tagEntry(for model: ModelRecord) -> TagEntry {
+    static func tagEntry(for model: ModelRecord, capabilities: ModelCapabilities? = nil) -> TagEntry {
         TagEntry(
             name: model.id,
             model: model.id,
@@ -162,7 +175,11 @@ enum Ollama {
             // the identity we serve is both sufficient and honest.
             digest: String(format: "%016x", UInt64(bitPattern: Int64(model.id.hashValue))),
             details: details(for: model),
-            capabilities: ["completion"]
+            // Reports the live session's abilities, not the model's ambitions:
+            // a client that switches on an image picker because the listing
+            // claimed vision, against a session with no projector loaded, gets
+            // a confusing failure instead of a hidden button.
+            capabilities: (capabilities ?? model.declaredCapabilities).ollamaCapabilities
         )
     }
 

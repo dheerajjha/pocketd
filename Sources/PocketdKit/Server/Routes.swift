@@ -74,6 +74,12 @@ extension InferenceServer {
         await server.appendRoute("GET /api/ps") { [self] request in
             await handleOllamaPs(request)
         }
+        await server.appendRoute("POST /api/pull") { [self] request in
+            await handlePull(request)
+        }
+        await server.appendRoute("GET /api/catalogue") { [self] request in
+            await handleCatalogue(request)
+        }
         await server.appendRoute("GET /api/version") { [self] _ in
             jsonResponse(Ollama.VersionResponse(version: PocketdKit.version), headers: await corsHeaders())
         }
@@ -154,6 +160,9 @@ extension InferenceServer {
             /// fault, and can wait instead of failing over.
             var activeRequests: Int
             var maxConcurrentRequests: Int
+            /// The live axis: whether the model resident right now was built
+            /// with a projector, so images will be understood without a reload.
+            var visionActive: Bool
         }
         let engine = currentEngine()
         return jsonResponse(
@@ -164,7 +173,8 @@ extension InferenceServer {
                 model: await engine.loadedModel()?.id,
                 maxContextTokens: contextCap(),
                 activeRequests: activeRequestCount(),
-                maxConcurrentRequests: configuration.maxConcurrentRequests
+                maxConcurrentRequests: configuration.maxConcurrentRequests,
+                visionActive: await engine.loadedModel()?.declaredCapabilities.vision.isYes ?? false
             ),
             headers: corsHeaders()
         )
@@ -190,6 +200,19 @@ extension InferenceServer {
         }
         try await engine.load(model: match)
         return match
+    }
+
+    /// Declared capabilities, upgraded with live-session facts when the model
+    /// in question is the resident one. The single place these two axes are
+    /// combined, so a listing and a status endpoint cannot contradict.
+    func capabilities(for model: ModelRecord, resident: ModelRecord?) -> ModelCapabilities {
+        var caps = model.declaredCapabilities
+        guard resident?.id == model.id else { return caps }
+        caps.effectiveContextLength = min(model.contextLength, contextCap())
+        // A projector is loaded with the weights or not at all, so residency
+        // plus a declared projector is exactly the condition for vision now.
+        caps.visionActive = caps.vision.isYes
+        return caps
     }
 
     func beginLog(_ request: HTTPRequest, streamed: Bool) async -> UUID {
@@ -231,6 +254,10 @@ extension InferenceServer {
             return errorResponse(status: .payloadTooLarge, message: "Prompt exceeds the configured context window.", type: "context_length_exceeded", style: style, headers: headers)
         case InferenceError.cancelled:
             return errorResponse(status: .serviceUnavailable, message: "Generation was cancelled.", type: "cancelled", style: style, headers: headers)
+        case InferenceError.backend(let detail):
+            // The detail is already a sentence written for a human; describing
+            // the enum around it just adds noise the client has to read past.
+            return errorResponse(status: .internalServerError, message: detail, type: "server_error", style: style, headers: headers)
         default:
             return errorResponse(status: .internalServerError, message: String(describing: error), type: "server_error", style: style, headers: headers)
         }

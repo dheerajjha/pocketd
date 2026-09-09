@@ -83,6 +83,12 @@ public actor ModelStore {
         directory.appendingPathComponent("\(model.id).gguf")
     }
 
+    /// Where the multimodal projector lives, when the model has one.
+    public nonisolated func projectorURL(for model: ModelRecord) -> URL? {
+        guard model.projectorFilename != nil else { return nil }
+        return directory.appendingPathComponent("\(model.id).mmproj.gguf")
+    }
+
     public func localURL(forID id: String) -> URL? {
         manifest[id].map { fileURL(for: $0) }
     }
@@ -90,6 +96,10 @@ public actor ModelStore {
     public func delete(_ model: ModelRecord) throws {
         try? FileManager.default.removeItem(at: fileURL(for: model))
         try? FileManager.default.removeItem(at: resumeDataURL(for: model))
+        if let projector = projectorURL(for: model) {
+            try? FileManager.default.removeItem(at: projector)
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent("\(model.id).mmproj.resume"))
+        }
         manifest[model.id] = nil
         persist()
     }
@@ -145,7 +155,7 @@ public actor ModelStore {
                 // URLSession reports -1 when the server sends no length, which
                 // renders as a progress bar stuck at zero. The catalogue size is
                 // the better estimate in that case.
-                totalBytes: expected > 0 ? expected : declaredSize
+                totalBytes: expected > 0 ? expected + model.projectorSizeBytes : declaredSize + model.projectorSizeBytes
             ))
         }
 
@@ -161,15 +171,43 @@ public actor ModelStore {
                 onProgress(DownloadProgress(
                     modelID: id,
                     receivedBytes: received,
-                    totalBytes: expected > 0 ? expected : declaredSize
+                    totalBytes: expected > 0 ? expected + model.projectorSizeBytes : declaredSize + model.projectorSizeBytes
                 ))
             }
             try await run(retry, for: model, resumeData: nil)
         }
 
+        // The projector is useless on its own and the weights are useless
+        // without it for a vision model, so the model is not marked installed
+        // until both are on disk.
+        if let remote = model.projectorURL, let local = projectorURL(for: model) {
+            let projectorResume = directory.appendingPathComponent("\(model.id).mmproj.resume")
+            let total = declaredSize + model.projectorSizeBytes
+            let downloader = FileDownloader(destination: local, resumeDataURL: projectorResume) { received, _ in
+                onProgress(DownloadProgress(
+                    modelID: id,
+                    receivedBytes: declaredSize + received,
+                    totalBytes: total
+                ))
+            }
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                    downloader.start(request: URLRequest(url: remote), resumeData: nil) { result in
+                        switch result {
+                        case .success: continuation.resume()
+                        case .failure(let error): continuation.resume(throwing: error)
+                        }
+                    }
+                }
+            } onCancel: {
+                downloader.cancelSavingResumeData()
+            }
+        }
+
         manifest[model.id] = model
         persist()
-        onProgress(DownloadProgress(modelID: id, receivedBytes: declaredSize, totalBytes: declaredSize))
+        let total = declaredSize + model.projectorSizeBytes
+        onProgress(DownloadProgress(modelID: id, receivedBytes: total, totalBytes: total))
     }
 
     private func run(

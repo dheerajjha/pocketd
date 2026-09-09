@@ -21,6 +21,13 @@ public struct ModelRecord: Sendable, Codable, Equatable, Identifiable, Hashable 
     /// Overrides the Hugging Face location. Set for weights served from a
     /// mirror or a machine on the same network, and by the test suite.
     public var sourceURL: URL?
+    /// The multimodal projector to pair with these weights, if the model can
+    /// see. Downloaded alongside the model and passed to llama.cpp as
+    /// mmprojURL; without it a vision model is a text model.
+    public var projectorFilename: String?
+    /// Size of the projector, counted into the memory budget because it is
+    /// resident for as long as the model is.
+    public var projectorSizeBytes: Int64
 
     public init(
         id: String,
@@ -32,7 +39,9 @@ public struct ModelRecord: Sendable, Codable, Equatable, Identifiable, Hashable 
         sizeBytes: Int64,
         contextLength: Int,
         license: String,
-        sourceURL: URL? = nil
+        sourceURL: URL? = nil,
+        projectorFilename: String? = nil,
+        projectorSizeBytes: Int64 = 0
     ) {
         self.id = id
         self.displayName = displayName
@@ -44,18 +53,51 @@ public struct ModelRecord: Sendable, Codable, Equatable, Identifiable, Hashable 
         self.contextLength = contextLength
         self.license = license
         self.sourceURL = sourceURL
+        self.projectorFilename = projectorFilename
+        self.projectorSizeBytes = projectorSizeBytes
+    }
+
+    /// Decoded leniently so a manifest written by an older build still loads.
+    /// The synthesised initialiser requires every non-optional key, so adding
+    /// one field silently emptied everyone's installed-model list — the files
+    /// were still on disk and the app reported nothing installed.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        displayName = try c.decode(String.self, forKey: .displayName)
+        repoID = try c.decode(String.self, forKey: .repoID)
+        filename = try c.decode(String.self, forKey: .filename)
+        parameters = try c.decode(String.self, forKey: .parameters)
+        quantization = try c.decode(String.self, forKey: .quantization)
+        sizeBytes = try c.decode(Int64.self, forKey: .sizeBytes)
+        contextLength = try c.decode(Int.self, forKey: .contextLength)
+        license = try c.decode(String.self, forKey: .license)
+        sourceURL = try c.decodeIfPresent(URL.self, forKey: .sourceURL)
+        projectorFilename = try c.decodeIfPresent(String.self, forKey: .projectorFilename)
+        projectorSizeBytes = try c.decodeIfPresent(Int64.self, forKey: .projectorSizeBytes) ?? 0
     }
 
     public var downloadURL: URL {
         sourceURL ?? URL(string: "https://huggingface.co/\(repoID)/resolve/main/\(filename)?download=true")!
     }
 
+    /// Where the projector lives. Same repository, by convention.
+    public var projectorURL: URL? {
+        guard let projectorFilename else { return nil }
+        return URL(string: "https://huggingface.co/\(repoID)/resolve/main/\(projectorFilename)?download=true")
+    }
+
+    /// Weights plus projector. The projector is a few hundred megabytes and is
+    /// resident whenever the model is, so a fit estimate that ignores it is
+    /// wrong by exactly the amount that gets someone jetsammed.
+    public var totalDownloadBytes: Int64 { sizeBytes + projectorSizeBytes }
+
     /// Weights plus a working allowance for the KV cache and the runtime. The
     /// 1.25 multiplier is empirical, not a promise — it is what keeps a 2B Q4
     /// model from being reported as "fits" on a device where it will be jetsammed
     /// two thousand tokens into the first conversation.
     public var estimatedResidentBytes: Int64 {
-        Int64(Double(sizeBytes) * 1.25) + 192 * 1024 * 1024
+        Int64(Double(sizeBytes + projectorSizeBytes) * 1.25) + 192 * 1024 * 1024
     }
 
     public static let echo = ModelRecord(

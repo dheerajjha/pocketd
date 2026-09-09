@@ -69,7 +69,7 @@ struct OpenAIRouteTests {
         let body = try JSONDecoder().decode(OpenAI.ChatCompletionResponse.self, from: data)
         #expect(body.object == "chat.completion")
         #expect(body.model == "echo")
-        #expect(body.choices.first?.message.content == "hello world")
+        #expect(body.choices.first?.message.content?.text == "hello world")
         #expect(body.choices.first?.finish_reason == "stop")
         #expect(body.usage.total_tokens == body.usage.prompt_tokens + body.usage.completion_tokens)
     }
@@ -122,7 +122,7 @@ struct OpenAIRouteTests {
         #expect(status == 200)
 
         let body = try JSONDecoder().decode(OpenAI.ChatCompletionResponse.self, from: data)
-        #expect(body.choices.first?.message.content == String(prompt.prefix(64)))
+        #expect(body.choices.first?.message.content?.text == String(prompt.prefix(64)))
         #expect(body.choices.first?.finish_reason == "length")
     }
 
@@ -157,7 +157,7 @@ struct OpenAIRouteTests {
         #expect(status == 200)
 
         let body = try JSONDecoder().decode(OpenAI.ChatCompletionResponse.self, from: data)
-        #expect(body.choices.first?.message.content == "legacy path")
+        #expect(body.choices.first?.message.content?.text == "legacy path")
     }
 
     @Test("rejects a malformed body without taking down the server")

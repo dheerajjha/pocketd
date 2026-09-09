@@ -33,6 +33,7 @@ actor LlamaEngine: InferenceEngine {
     /// rebuilt instead, lazily, on the next request that needs it.
     private var contextIsDirty = false
     private let fileURL: @Sendable (ModelRecord) -> URL
+    private let projectorURL: @Sendable (ModelRecord) -> URL?
     private var sampling: SamplingProfile
 
     /// Who holds the context right now, and who is queued for it.
@@ -47,8 +48,13 @@ actor LlamaEngine: InferenceEngine {
         var contextTokens: Int = 4096
     }
 
-    init(fileURL: @escaping @Sendable (ModelRecord) -> URL, sampling: SamplingProfile = SamplingProfile()) {
+    init(
+        fileURL: @escaping @Sendable (ModelRecord) -> URL,
+        projectorURL: @escaping @Sendable (ModelRecord) -> URL? = { _ in nil },
+        sampling: SamplingProfile = SamplingProfile()
+    ) {
         self.fileURL = fileURL
+        self.projectorURL = projectorURL
         self.sampling = sampling
     }
 
@@ -130,8 +136,33 @@ actor LlamaEngine: InferenceEngine {
         self.model = nil
 
         do {
+            // The simulator's Metal driver cannot allocate the buffers the
+            // vision tower needs: clip_model_loader::load_tensors ->
+            // ggml_metal_buffer_set_tensor -> MTLSimDevice
+            // newBufferWithLength: raises SIGTRAP and takes the process with
+            // it. Verified from a crash report. Nothing in Swift can catch a
+            // trap inside llama.cpp, so the only defence is not to try.
+            #if targetEnvironment(simulator)
+            if model.projectorFilename != nil {
+                throw InferenceError.backend(
+                    "\(model.id) needs a vision projector, and the iOS Simulator's Metal driver cannot load one — it crashes the process. Run on a device to use this model."
+                )
+            }
+            #endif
+
+            // A vision model without its projector loads fine and then cannot
+            // see, which is the confusing failure. Refuse instead.
+            var projector = projectorURL(model)
+            if model.projectorFilename != nil {
+                guard let path = projector, FileManager.default.fileExists(atPath: path.path) else {
+                    throw InferenceError.backend("\(model.id) needs its projector file, which is missing. Delete and re-download the model.")
+                }
+                projector = path
+            }
+
             let llama = try await LocalLLMClient.llama(
                 url: url,
+                mmprojURL: projector,
                 parameter: .init(
                     context: min(model.contextLength, sampling.contextTokens),
                     temperature: sampling.temperature,
@@ -219,6 +250,7 @@ actor LlamaEngine: InferenceEngine {
                 continuation.finish(throwing: error)
                 return
             }
+
         }
         guard request.modelID.isEmpty || request.modelID == model.id else {
             continuation.finish(throwing: InferenceError.modelMismatch(requested: request.modelID, loaded: model.id))
@@ -236,11 +268,24 @@ actor LlamaEngine: InferenceEngine {
             return
         }
 
+        // An image sent to a model with no projector would be silently
+        // dropped and answered as though it were never there.
+        let carriesImages = request.messages.contains { !$0.images.isEmpty }
+        if carriesImages, model.projectorFilename == nil {
+            continuation.finish(throwing: InferenceError.backend(
+                "\(model.id) cannot accept images. Load a model whose capabilities include vision."
+            ))
+            return
+        }
+
         let input = LLMInput.chat(request.messages.map { message in
+            let attachments = message.images
+                .compactMap { LLMInputImage(data: $0) }
+                .map { LLMAttachment.image($0) }
             switch message.role {
-            case .system: .system(message.content)
-            case .assistant: .assistant(message.content)
-            case .user, .tool: .user(message.content)
+            case .system: return .system(message.content)
+            case .assistant: return .assistant(message.content, attachments: attachments)
+            case .user, .tool: return .user(message.content, attachments: attachments)
             }
         })
         let promptTokens = estimateTokens(request.messages.map(\.content).joined(separator: "\n"))
@@ -315,7 +360,10 @@ actor LlamaEngine: InferenceEngine {
             continuation.finish()
         } catch {
             contextIsDirty = true
-            continuation.finish(throwing: InferenceError.backend(String(describing: error)))
+            // Do not re-wrap: an InferenceError arriving here is already
+            // described, and wrapping produced backend("backend(\"...\")") in
+            // the message the client actually reads.
+            continuation.finish(throwing: error as? InferenceError ?? .backend(String(describing: error)))
         }
     }
 }

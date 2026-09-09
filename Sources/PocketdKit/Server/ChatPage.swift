@@ -41,8 +41,12 @@ enum ChatPage {
       .wrap { max-width:760px; margin:0 auto; }
       .msg { margin-bottom:22px; display:flex; }
       .msg.u { justify-content:flex-end; }
-      .bubble { max-width:82%; padding:11px 15px; border-radius:16px; white-space:pre-wrap;
-                overflow-wrap:anywhere; }
+      /* The column has to be a flex item with a max, or the bubble shrink-wraps
+         to its longest unbreakable word and wraps at ~250px in a 760px page. */
+      .col { max-width:82%; min-width:0; }
+      .msg.u .col { display:flex; flex-direction:column; align-items:flex-end; }
+      .bubble { padding:11px 15px; border-radius:16px; white-space:pre-wrap;
+                overflow-wrap:anywhere; display:inline-block; text-align:left; }
       .u .bubble { background:var(--user); color:#fff; border-bottom-right-radius:5px; }
       .a .bubble { background:var(--panel); border-bottom-left-radius:5px; }
       .a .bubble code, .a .bubble pre { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; }
@@ -56,6 +60,15 @@ enum ChatPage {
                  max-height:180px; min-height:46px; }
       textarea:focus { outline:2px solid var(--accent); outline-offset:-1px; }
       .empty { text-align:center; color:var(--dim); margin-top:18vh; }
+      .thumbs { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+      .thumb { position:relative; width:60px; height:60px; border-radius:9px; overflow:hidden;
+               border:1px solid var(--line); }
+      .thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+      .thumb button { position:absolute; top:1px; right:1px; width:19px; height:19px; padding:0;
+                      border-radius:50%; background:rgba(0,0,0,.65); color:#fff; font-size:12px;
+                      line-height:19px; border:0; }
+      .bubble img { max-width:220px; border-radius:10px; display:block; margin-bottom:8px; }
+      #attach.on { background:var(--accent); color:#fff; border-color:var(--accent); }
       .empty h2 { color:var(--fg); font-weight:600; margin:0 0 6px; letter-spacing:-.02em; }
       dialog { border:1px solid var(--line); border-radius:14px; background:var(--bg); color:var(--fg);
                padding:26px; max-width:400px; }
@@ -65,6 +78,10 @@ enum ChatPage {
                      background:var(--panel); color:var(--fg); margin:14px 0; }
       .err { color:#c1121f; min-height:1.3em; font-size:14px; }
       .dot { width:8px; height:8px; border-radius:50%; background:#30d158; display:inline-block; }
+      .budget { font-size:12px; color:var(--dim); font-variant-numeric:tabular-nums; }
+      .budget.warn { color:#ff9f0a; }
+      .budget.over { color:#ff453a; font-weight:600; }
+      .err-frame { color:#ff453a; font-size:14px; }
     </style>
     </head>
     <body>
@@ -74,6 +91,7 @@ enum ChatPage {
       <b>Pocketd</b>
       <select id="models" title="Model"></select>
       <span class="sp"></span>
+      <span id="budget" class="budget" title="Estimated prompt size against the server's context limit"></span>
       <button id="sys" title="System prompt">System</button>
       <button id="clear">New chat</button>
     </header>
@@ -85,7 +103,11 @@ enum ChatPage {
       </div>
     </div></div>
 
-    <footer><div class="composer">
+    <footer>
+    <div class="composer" style="display:block"><div class="thumbs" id="thumbs"></div></div>
+    <div class="composer">
+      <input type="file" id="file" accept="image/*" multiple hidden>
+      <button id="attach" title="Attach an image">Image</button>
       <textarea id="input" rows="1" placeholder="Message…" autofocus></textarea>
       <button class="primary" id="send">Send</button>
       <button id="stop" style="display:none">Stop</button>
@@ -105,7 +127,14 @@ enum ChatPage {
     let apiKey = localStorage.getItem(KEY) || null;
     let messages = [];
     let system = localStorage.getItem("pocketd.system") || "";
+    let maxTokens = parseInt(localStorage.getItem("pocketd.maxTokens") || "512", 10);
+    let contextLimit = 4096;
     let controller = null;
+    let attachments = [];     // data: URIs staged for the next message
+    let visionModels = new Set();
+    let live = null;          // the assistant bubble currently streaming into
+    let pending = "";         // text not yet flushed to the DOM
+    let raf = 0;
 
     function headers() {
       const h = { "Content-Type": "application/json" };
@@ -115,7 +144,6 @@ enum ChatPage {
 
     // --- pairing -------------------------------------------------------------
     async function ensureKey() {
-      // A server with auth off needs no key at all; find out before asking.
       const probe = await fetch("/v1/models", { headers: headers() });
       if (probe.ok) { await loadModels(probe); return; }
       $("pair").showModal();
@@ -144,11 +172,16 @@ enum ChatPage {
         const r = pre || await fetch("/v1/models", { headers: headers() });
         const b = await r.json();
         $("models").innerHTML = "";
+        visionModels = new Set();
         (b.data || []).forEach((m) => {
           const o = document.createElement("option");
-          o.value = m.id; o.textContent = m.id;
+          const sees = (m.capabilities || []).indexOf("vision") >= 0;
+          if (sees) visionModels.add(m.id);
+          o.value = m.id;
+          o.textContent = sees ? m.id + " \u25c9" : m.id;
           $("models").appendChild(o);
         });
+        updateAttachButton();
         if (!b.data || !b.data.length) {
           $("models").innerHTML = "<option>no model loaded</option>";
         }
@@ -159,8 +192,8 @@ enum ChatPage {
     function escapeHTML(s) {
       return s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
     }
-    // Just enough markdown to make code readable; not a full parser, and it
-    // escapes first so model output can never inject markup.
+    // Just enough markdown to make code readable; escapes first, so model
+    // output can never inject markup.
     function render(text) {
       let h = escapeHTML(text);
       h = h.replace(/```([\s\S]*?)```/g, (_, c) => "<pre>" + c.replace(/^\w*\n/, "") + "</pre>");
@@ -169,19 +202,92 @@ enum ChatPage {
       return h;
     }
 
+    function bubbleFor(m) {
+      const wrap = document.createElement("div");
+      wrap.className = "msg " + (m.role === "user" ? "u" : "a");
+      const col = document.createElement("div");
+      col.className = "col";
+      const b = document.createElement("div");
+      b.className = "bubble";
+      for (const src of (m.images || [])) {
+        const img = document.createElement("img");
+        img.src = src;
+        b.appendChild(img);
+      }
+      if (m.role === "user") {
+        b.appendChild(document.createTextNode(m.content));
+      } else {
+        const span = document.createElement("span");
+        span.innerHTML = render(m.content);
+        b.appendChild(span);
+      }
+      col.appendChild(b);
+      if (m.meta) {
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.textContent = m.meta;
+        col.appendChild(meta);
+      }
+      wrap.appendChild(col);
+      return { wrap, bubble: b, col };
+    }
+
+    // Rebuilds everything. Used on load and on structural changes only — never
+    // per token, which would destroy the user's selection sixty times a second.
     function draw() {
-      $("empty").style.display = messages.length ? "none" : "";
-      const nodes = messages.map((m, i) => {
-        const meta = m.meta ? `<div class="meta">${m.meta}</div>` : "";
-        return `<div class="msg ${m.role === "user" ? "u" : "a"}">
-                  <div><div class="bubble">${m.role === "user" ? escapeHTML(m.content) : render(m.content)}</div>${meta}</div>
-                </div>`;
-      });
-      $("wrap").innerHTML = `<div class="empty" id="empty" style="display:${messages.length ? "none" : ""}">
-          <h2>Your phone is the server</h2>
-          <div>Everything you type here is answered on the device in your pocket.</div>
-        </div>` + nodes.join("");
-      $("log").scrollTop = $("log").scrollHeight;
+      $("wrap").innerHTML = "";
+      if (!messages.length) {
+        const e = document.createElement("div");
+        e.className = "empty";
+        e.innerHTML = "<h2>Your phone is the server</h2><div>Everything you type here is answered on the device in your pocket.</div>";
+        $("wrap").appendChild(e);
+      }
+      for (const m of messages) $("wrap").appendChild(bubbleFor(m).wrap);
+      scrollToBottom(true);
+      updateBudget();
+    }
+
+    // Only follow the stream if the reader is already at the bottom. Forcing it
+    // makes scrolling back through a long reply impossible while it generates.
+    function nearBottom() {
+      const el = $("log");
+      return el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    }
+    function scrollToBottom(force) {
+      if (force || nearBottom()) $("log").scrollTop = $("log").scrollHeight;
+    }
+
+    function flush() {
+      raf = 0;
+      if (!live || !pending) return;
+      const stick = nearBottom();
+      messages[messages.length - 1].content += pending;
+      pending = "";
+      live.innerHTML = render(messages[messages.length - 1].content);
+      if (stick) $("log").scrollTop = $("log").scrollHeight;
+    }
+    function schedule() { if (!raf) raf = requestAnimationFrame(flush); }
+
+    // --- context budget ------------------------------------------------------
+    // Mirrors ContextGuard on the server: 3 characters per token, 4 tokens per
+    // message, and a reserve for the answer. Better to show the wall coming
+    // than to hand someone a 413 they cannot explain.
+    function estimateTokens() {
+      let chars = system.length;
+      let count = system ? 1 : 0;
+      for (const m of messages) { chars += m.content.length; count++; }
+      return Math.ceil(chars / 3) + count * 4;
+    }
+    function updateBudget() {
+      const used = estimateTokens();
+      const budget = Math.max(1, contextLimit - Math.min(64, Math.max(1, Math.floor(contextLimit / 4))));
+      const pct = used / budget;
+      const el = $("budget");
+      el.textContent = `${used} / ${budget}`;
+      el.className = "budget" + (pct > 1 ? " over" : pct > 0.75 ? " warn" : "");
+      el.title = pct > 1
+        ? "This conversation is past the server's context window. Start a new chat, or raise the limit in Settings on the phone."
+        : "Estimated prompt size against the server's context limit";
     }
 
     // --- sending -------------------------------------------------------------
@@ -190,84 +296,164 @@ enum ChatPage {
       if (!text || controller) return;
       $("input").value = "";
       $("input").style.height = "auto";
-      messages.push({ role: "user", content: text });
+
+      const staged = attachments.slice();
+      attachments = [];
+      drawThumbs();
+      messages.push({ role: "user", content: text, images: staged });
       messages.push({ role: "assistant", content: "" });
       draw();
+      live = $("wrap").lastElementChild.querySelector(".bubble span");
+      pending = "";
 
       $("send").style.display = "none";
       $("stop").style.display = "";
       controller = new AbortController();
 
-      const body = { model: $("models").value, messages: [], stream: true };
+      const body = {
+        model: $("models").value,
+        messages: [],
+        stream: true,
+        max_tokens: maxTokens,
+      };
       if (system) body.messages.push({ role: "system", content: system });
-      for (const m of messages.slice(0, -1)) body.messages.push({ role: m.role, content: m.content });
+      for (const m of messages.slice(0, -1)) {
+        if (m.images && m.images.length) {
+          // OpenAI's typed content parts. Ollama's shape is a flat images[]
+          // array instead; the server accepts both, this page speaks OpenAI.
+          const parts = [{ type: "text", text: m.content }];
+          for (const src of m.images) parts.push({ type: "image_url", image_url: { url: src } });
+          body.messages.push({ role: m.role, content: parts });
+        } else {
+          body.messages.push({ role: m.role, content: m.content });
+        }
+      }
 
       const started = performance.now();
-      let tokens = 0;
+      let chunks = 0;
+      let failed = null;
+
       try {
         const r = await fetch("/v1/chat/completions", {
           method: "POST", headers: headers(), body: JSON.stringify(body),
           signal: controller.signal,
         });
         if (!r.ok) {
-          const e = await r.json().catch(() => ({}));
-          messages[messages.length - 1].content =
-            "⚠︎ " + (e.error ? e.error.message : "HTTP " + r.status);
-          draw(); return;
-        }
-        const reader = r.body.getReader();
-        const dec = new TextDecoder();
-        let buf = "";
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += dec.decode(value, { stream: true });
-          const lines = buf.split("\n");
-          buf = lines.pop();
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const p = line.slice(6);
-            if (p === "[DONE]") continue;
-            try {
-              const j = JSON.parse(p);
+          let detail = "HTTP " + r.status;
+          try { const e = await r.json(); if (e.error) detail = e.error.message; } catch (_) {}
+          failed = detail;
+        } else {
+          const reader = r.body.getReader();
+          const dec = new TextDecoder();
+          let buf = "";
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += dec.decode(value, { stream: true });
+            const lines = buf.split("\n");
+            buf = lines.pop();
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              const p = line.slice(6);
+              if (p === "[DONE]") continue;
+              let j;
+              try { j = JSON.parse(p); } catch (_) { continue; }
+              // The server yields an error frame into the stream when
+              // generation fails after the headers are gone. Ignoring it makes
+              // a server fault look like the model simply stopping.
+              if (j.error) { failed = j.error.message || "server error"; continue; }
               const d = j.choices && j.choices[0] && j.choices[0].delta;
-              if (d && d.content) {
-                messages[messages.length - 1].content += d.content;
-                tokens++;
-                draw();
-              }
-            } catch (e) { /* a partial frame; the next read completes it */ }
+              if (d && d.content) { pending += d.content; chunks++; schedule(); }
+            }
           }
         }
-        const secs = (performance.now() - started) / 1000;
-        if (tokens) {
-          messages[messages.length - 1].meta =
-            `${tokens} chunks · ${(tokens / secs).toFixed(1)}/s · ${secs.toFixed(1)}s`;
-        }
       } catch (e) {
-        if (e.name !== "AbortError") {
-          messages[messages.length - 1].content += "\n\n⚠︎ " + e;
+        if (e.name !== "AbortError") failed = String(e);
+      } finally {
+        // Everything below MUST run on every path. An early return here was
+        // leaving `controller` set, and `send()` guards on it — so one failed
+        // request bricked the composer until the page was reloaded.
+        if (raf) { cancelAnimationFrame(raf); raf = 0; }
+        flush();
+        controller = null;
+        live = null;
+        $("send").style.display = "";
+        $("stop").style.display = "none";
+
+        const last = messages[messages.length - 1];
+        const secs = (performance.now() - started) / 1000;
+        if (failed) {
+          last.content += (last.content ? "\n\n" : "") + "⚠︎ " + failed;
+        } else if (chunks) {
+          last.meta = `${chunks} chunks · ${(chunks / secs).toFixed(1)}/s · ${secs.toFixed(1)}s`;
         } else {
-          messages[messages.length - 1].meta = "stopped";
+          last.meta = "stopped";
         }
+        draw();
+        save();
       }
-      controller = null;
-      $("send").style.display = "";
-      $("stop").style.display = "none";
-      draw();
-      save();
     }
 
     function save() {
-      try { localStorage.setItem("pocketd.chat", JSON.stringify(messages.slice(-40))); } catch (e) {}
+      // Data URIs are large and localStorage is a few megabytes, so a chat
+      // with images overflows far sooner than one without. Drop the images
+      // from history rather than losing the conversation.
+      try {
+        localStorage.setItem("pocketd.chat", JSON.stringify(messages.slice(-40)));
+      } catch (e) {
+        try {
+          localStorage.setItem("pocketd.chat", JSON.stringify(
+            messages.slice(-40).map((m) => ({ role: m.role, content: m.content, meta: m.meta }))
+          ));
+        } catch (_) {}
+      }
     }
+
+    // The attach button is only offered for a model that can actually see.
+    // Letting someone pick an image for a text model produces a 500 from the
+    // engine, which is a worse way to learn the model has no eyes.
+    function updateAttachButton() {
+      const sees = visionModels.has($("models").value);
+      $("attach").disabled = !sees;
+      $("attach").title = sees
+        ? "Attach an image"
+        : "This model cannot see images. Pick one marked \u25c9.";
+      if (!sees && attachments.length) { attachments = []; drawThumbs(); }
+    }
+    $("models").addEventListener("change", updateAttachButton);
+
+    function drawThumbs() {
+      $("thumbs").innerHTML = "";
+      attachments.forEach((src, i) => {
+        const d = document.createElement("div");
+        d.className = "thumb";
+        const img = document.createElement("img");
+        img.src = src;
+        const x = document.createElement("button");
+        x.textContent = "\u00d7";
+        x.onclick = () => { attachments.splice(i, 1); drawThumbs(); };
+        d.appendChild(img); d.appendChild(x);
+        $("thumbs").appendChild(d);
+      });
+      $("attach").className = attachments.length ? "on" : "";
+    }
+
+    $("attach").onclick = () => $("file").click();
+    $("file").onchange = () => {
+      for (const f of $("file").files) {
+        const reader = new FileReader();
+        reader.onload = () => { attachments.push(reader.result); drawThumbs(); };
+        reader.readAsDataURL(f);
+      }
+      $("file").value = "";
+    };
 
     $("send").onclick = send;
     $("stop").onclick = () => controller && controller.abort();
     $("clear").onclick = () => { messages = []; save(); draw(); };
     $("sys").onclick = () => {
       const v = prompt("System prompt (blank for none):", system);
-      if (v !== null) { system = v; localStorage.setItem("pocketd.system", v); }
+      if (v !== null) { system = v; localStorage.setItem("pocketd.system", v); updateBudget(); }
     };
     $("input").addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
@@ -284,8 +470,10 @@ enum ChatPage {
       try {
         const h = await (await fetch("/health")).json();
         $("dot").style.background = h.status === "ok" ? "#30d158" : "#ff9f0a";
+        if (h.maxContextTokens) { contextLimit = h.maxContextTokens; updateBudget(); }
       } catch (e) { $("dot").style.background = "#ff453a"; }
     }, 5000);
+    </script>
     </script>
     </body></html>
     """#

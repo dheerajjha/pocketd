@@ -9,10 +9,15 @@ public struct ChatMessage: Sendable, Codable, Equatable {
 
     public var role: Role
     public var content: String
+    /// Decoded image bytes attached to this turn. Kept as raw data rather than
+    /// a platform image type so the wire layer, which has no UIKit, can carry
+    /// them to the engine, which does.
+    public var images: [Data]
 
-    public init(role: Role, content: String) {
+    public init(role: Role, content: String, images: [Data] = []) {
         self.role = role
         self.content = content
+        self.images = images
     }
 
     public static func system(_ content: String) -> ChatMessage { .init(role: .system, content: content) }

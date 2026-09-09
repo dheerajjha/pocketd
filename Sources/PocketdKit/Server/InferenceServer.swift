@@ -29,6 +29,9 @@ public actor InferenceServer {
 
     private let engine: any InferenceEngine
     private let modelsProvider: @Sendable () async -> [ModelRecord]
+    /// Supplied by the app so the server can fetch a model on request. Nil in
+    /// tests and in any build without downloading, where /api/pull answers 501.
+    let puller: (@Sendable (ModelRecord) -> AsyncThrowingStream<DownloadProgress, any Error>)?
 
     private var server: HTTPServer?
     private var runTask: Task<Void, Never>?
@@ -45,11 +48,13 @@ public actor InferenceServer {
         configuration: ServerConfiguration = ServerConfiguration(),
         engine: any InferenceEngine,
         models: @escaping @Sendable () async -> [ModelRecord],
+        puller: (@Sendable (ModelRecord) -> AsyncThrowingStream<DownloadProgress, any Error>)? = nil,
         log: RequestLog = RequestLog()
     ) {
         self.configuration = configuration
         self.engine = engine
         self.modelsProvider = models
+        self.puller = puller
         self.log = log
     }
 

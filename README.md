@@ -34,6 +34,18 @@ The page asks once for the six digits shown on the phone and remembers the key.
 `/setup` has the same handshake and hands back ready-to-paste configs for curl,
 Continue, opencode, the OpenAI SDKs, Open WebUI and Aider.
 
+## It can see
+
+Load a vision model and send it a picture — from the chat page, or as an OpenAI
+`image_url` content part, or in Ollama's `images` array. The attach button only
+appears for a model that can actually see; models that can are marked `◉`.
+
+![The chat client with a vision model selected and an image staged for sending](docs/screenshot-vision.png)
+
+Verified on a physical iPhone 14: a solid green image comes back "Green.", a
+solid yellow one "Yellow." — a control run, because a half-red-half-blue image
+answered "Blue." and one colour out of two proves nothing on its own.
+
 ## Why this exists
 
 Every local-LLM app for iOS is a chat window. The model is right there, running
@@ -86,6 +98,8 @@ you re-sign.
 | `POST /api/generate` | Ollama | |
 | `POST /api/show` | Ollama | |
 | `GET /api/version` | Ollama | Clients version-gate on this |
+| `GET /api/pull` | Ollama | Pull a catalogue model onto the phone, streaming progress |
+| `GET /api/catalogue` | — | What could be pulled, versus what is installed |
 | `GET /health` | — | Unauthenticated, so a client can probe reachability |
 
 Requests are authenticated with `Authorization: Bearer <key>` or `X-API-Key`.
@@ -142,6 +156,16 @@ These are not bugs, and pretending otherwise would waste your afternoon.
   even though it would have fit.
 - **One generation at a time.** A phone has one GPU. A second concurrent request
   gets a 503 with `Retry-After` rather than being queued behind the first.
+- **Vision does not run on the Simulator.** The projector's tensors go through
+  Metal, and `MTLSimDevice newBufferWithLength:` raises SIGTRAP loading them —
+  it takes the process down rather than failing. LocalLLMClient hardcodes
+  `use_gpu = true` for the projector at `package` scope, so it cannot be turned
+  off from here. The app refuses to load a vision model on a simulator instead
+  of crashing. Use a device.
+- **Client-supplied tools are not implemented.** `AnyLLMTool` in the pinned
+  dependency only accepts a compile-time schema, so an agent sending its own
+  tool definitions over HTTP cannot be served. Tools we define ourselves are a
+  different matter and are the next thing.
 
 ## Verified
 

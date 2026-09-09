@@ -64,7 +64,10 @@ final class AppModel {
         let store = ModelStore(directory: directory, budget: budget)
         self.store = store
 
-        let engine = LlamaEngine(fileURL: { store.fileURL(for: $0) })
+        let engine = LlamaEngine(
+            fileURL: { store.fileURL(for: $0) },
+            projectorURL: { store.projectorURL(for: $0) }
+        )
         self.engine = engine
 
         // load() persists a freshly generated configuration on the spot. Relying
@@ -78,7 +81,22 @@ final class AppModel {
         self.server = InferenceServer(
             configuration: configuration,
             engine: engine,
-            models: { await store.installed() }
+            models: { await store.installed() },
+            puller: { record in
+                AsyncThrowingStream { continuation in
+                    let task = Task {
+                        do {
+                            for try await progress in await store.download(record) {
+                                continuation.yield(progress)
+                            }
+                            continuation.finish()
+                        } catch {
+                            continuation.finish(throwing: error)
+                        }
+                    }
+                    continuation.onTermination = { _ in task.cancel() }
+                }
+            }
         )
 
         systemPrompt = UserDefaults.standard.string(forKey: Keys.systemPrompt) ?? systemPrompt
