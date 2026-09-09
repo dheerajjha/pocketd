@@ -151,3 +151,47 @@ struct ServerBehaviourTests {
         #expect(firstPort != nil)
     }
 }
+
+@Suite("Long generations")
+struct LongGenerationTests {
+
+    /// The regression this exists for: FlyingFox's default connection timeout is
+    /// 15 seconds, and a non-streamed completion writes nothing until the last
+    /// token. Every response longer than a few hundred tokens on a phone came
+    /// back as a 500 with an empty body. The old smoke test never caught it
+    /// because it only ever asked for 24 tokens.
+    @Test("a buffered completion slower than the default timeout still answers", .timeLimit(.minutes(1)))
+    func slowBufferedCompletion() async throws {
+        // 40 chunks at 500ms is 20 seconds — comfortably past FlyingFox's 15s
+        // default, and well inside the configured one.
+        let harness = try await TestServer.start(
+            configuration: ServerConfiguration(port: 0, binding: .loopback, connectionTimeout: 120),
+            engine: EchoEngine(chunkSize: 1, delay: .milliseconds(500))
+        )
+        defer { Task { await harness.stop() } }
+
+        let request = try harness.request("POST", "/v1/chat/completions", json: OpenAI.ChatCompletionRequest(
+            model: "echo",
+            messages: [OpenAI.Message(role: "user", content: String(repeating: "x", count: 40))],
+            stream: false
+        ))
+        let started = ContinuousClock.now
+        let (status, data) = try await harness.send(request)
+        let elapsed = started.duration(to: .now)
+
+        #expect(elapsed > .seconds(15), "the test is meaningless unless it outlives the old default")
+        #expect(status == 200)
+        #expect(data.isEmpty == false, "an empty body is what the 15s timeout produced")
+
+        let body = try JSONDecoder().decode(OpenAI.ChatCompletionResponse.self, from: data)
+        #expect(body.choices.first?.message.content == String(repeating: "x", count: 40))
+    }
+
+    @Test("the default configuration allows a full context at a slow phone's pace")
+    func defaultIsGenerous() {
+        let configuration = ServerConfiguration()
+        let worstCaseSeconds = Double(configuration.maxContextTokens) / 3.0
+        #expect(configuration.connectionTimeout >= worstCaseSeconds,
+                "a phone at 3 tok/s needs \(Int(worstCaseSeconds))s for a full context")
+    }
+}

@@ -87,6 +87,18 @@ USAGE=$(curl -s -N "${AUTH[@]}" -H 'Content-Type: application/json' \
 contains "stream_options yields a usage chunk" '"usage"' "$USAGE"
 contains "usage chunk has empty choices" '"choices":[]' "$USAGE"
 
+# The case the short requests above cannot catch: a non-streamed completion
+# writes nothing until the last token, so a server whose connection timeout is
+# tuned for web traffic kills every substantial response with an empty 500.
+echo "  (long generation, this takes a minute...)"
+LONG=$(curl -s -m 900 -w '\nHTTP_STATUS:%{http_code} SECONDS:%{time_total}' "${AUTH[@]}" -H 'Content-Type: application/json' \
+  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Write a long detailed essay about the ocean.\"}],\"max_tokens\":600,\"stream\":false}" \
+  "$BASE/v1/chat/completions")
+LONG_CODE=$(printf '%s' "$LONG" | sed -n 's/.*HTTP_STATUS:\([0-9]*\).*/\1/p')
+LONG_SECS=$(printf '%s' "$LONG" | sed -n 's/.*SECONDS:\([0-9.]*\).*/\1/p')
+check "long buffered completion survives (${LONG_SECS}s)" 200 "$LONG_CODE"
+contains "long completion has content" '"content"' "$LONG"
+
 check "POST /v1/embeddings is 501, not 404" 501 "$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" -H 'Content-Type: application/json' -d '{}' "$BASE/v1/embeddings")"
 
 echo

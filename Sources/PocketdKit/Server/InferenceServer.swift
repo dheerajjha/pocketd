@@ -100,9 +100,15 @@ public actor InferenceServer {
         let server: HTTPServer
         switch configuration.binding {
         case .loopback:
-            server = HTTPServer(address: try sockaddr_in.inet(ip4: "127.0.0.1", port: configuration.port))
+            server = HTTPServer(
+                address: try sockaddr_in.inet(ip4: "127.0.0.1", port: configuration.port),
+                timeout: configuration.connectionTimeout
+            )
         case .localNetwork:
-            server = HTTPServer(address: sockaddr_in.inet(port: configuration.port))
+            server = HTTPServer(
+                address: sockaddr_in.inet(port: configuration.port),
+                timeout: configuration.connectionTimeout
+            )
         }
         await installRoutes(on: server)
 
