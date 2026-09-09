@@ -15,9 +15,11 @@ final class AppModel {
     /// A dimmed, burn-in-safe screen for a phone left serving on a desk. The
     /// display draws from the same thermal and power budget as the GPU, so a
     /// bright screen literally costs tokens per second.
-    var deskMode = false {
-        didSet { UserDefaults.standard.set(deskMode, forKey: Keys.deskMode) }
-    }
+    /// Deliberately NOT persisted. Desk mode hides the tab bar, the status bar
+    /// and the home indicator, so restoring it on launch means the app opens on
+    /// a black screen with no visible way out — and force-quitting, the one
+    /// recovery every user knows, lands you straight back in it.
+    var deskMode = false
     var configuration: ServerConfiguration {
         didSet { persistConfiguration() }
     }
@@ -61,7 +63,7 @@ final class AppModel {
     private var governor: DeviceGovernor?
 
     private enum Keys {
-        static let deskMode = "pocketd.deskMode"
+        static let loadedModel = "pocketd.loadedModel"
         static let systemPrompt = "pocketd.systemPrompt"
         static let serverShouldRun = "pocketd.serverShouldRun"
     }
@@ -117,7 +119,6 @@ final class AppModel {
         )
 
         systemPrompt = UserDefaults.standard.string(forKey: Keys.systemPrompt) ?? systemPrompt
-        deskMode = UserDefaults.standard.bool(forKey: Keys.deskMode)
         serverShouldRun = UserDefaults.standard.bool(forKey: Keys.serverShouldRun)
     }
 
@@ -157,15 +158,30 @@ final class AppModel {
                 let resident = await engine.loadedModel()?.id
                 await MainActor.run {
                     self.log = entries
-                    self.syncLoadedModel(resident)
+                    // Not user-initiated: this fires because some client asked
+                    // for a different model.
+                    self.syncLoadedModel(resident, userInitiated: false)
                 }
             }
         })
 
-        // Restore the previously loaded model so a relaunch does not silently
-        // serve nothing to a client that was working a minute ago.
-        if let first = installed.first {
-            await loadModel(first)
+        // Genuinely the previously loaded model. This used to take
+        // `installed.first`, which is the alphabetically first — so downloading
+        // one model to try it meant every later launch quietly loaded that one
+        // instead, and wiped the chat on the way.
+        // Falls back rather than giving up. A remembered model can stop being
+        // loadable — a vision model on a simulator, a file that went missing —
+        // and sitting with nothing resident means every request 404s while the
+        // Models tab shows a perfectly healthy row. Found by accidentally
+        // leaving a vision model remembered and watching the app come up empty.
+        let remembered = UserDefaults.standard.string(forKey: Keys.loadedModel)
+        var candidates = installed
+        if let id = remembered, let index = candidates.firstIndex(where: { $0.id == id }) {
+            candidates.insert(candidates.remove(at: index), at: 0)
+        }
+        for candidate in candidates {
+            await loadModel(candidate, remember: false)
+            if loadedModelID != nil { break }
         }
         if serverShouldRun {
             await startServer()
@@ -285,12 +301,23 @@ final class AppModel {
         configurationStore.save(configuration)
     }
 
+    /// Errors reach the Server tab, so they are written for whoever is holding
+    /// the phone. The previous version matched on the substring "48" — which
+    /// never fired for the case it was written for, because a busy port
+    /// surfaces as a five-second timeout rather than EADDRINUSE, and would
+    /// false-positive on any error containing those digits.
     private func friendlyMessage(for error: any Error) -> String {
-        let text = String(describing: error)
-        if text.contains("48") || text.lowercased().contains("in use") {
-            return "Port \(configuration.port) is already in use. Pick another port."
+        let text = String(describing: error).lowercased()
+        if text.contains("timed out") || text.contains("timeout") {
+            return "Could not start on port \(configuration.port) — nothing answered within five seconds. Another app is probably using it. Try a different port in Settings."
         }
-        return text
+        if text.contains("in use") || text.contains("eaddrinuse") {
+            return "Port \(configuration.port) is already in use. Pick another port in Settings."
+        }
+        if text.contains("permission") || text.contains("denied") {
+            return "iOS refused the connection. Check that Local Network access is allowed for Pocketd in the Settings app."
+        }
+        return "Could not start the server: \(error)"
     }
 
     // MARK: - Models
@@ -347,25 +374,46 @@ final class AppModel {
         installed = await store.installed()
     }
 
-    func loadModel(_ model: ModelRecord) async {
+    /// `remember: false` for the restore at launch — reloading what was already
+    /// chosen should not overwrite the choice, and a fallback certainly should
+    /// not silently become the new preference.
+    func loadModel(_ model: ModelRecord, remember: Bool = true) async {
         isLoadingModel = true
         defer { isLoadingModel = false }
         do {
             try await engine.load(model: model)
             syncLoadedModel(model.id)
+            if remember { UserDefaults.standard.set(model.id, forKey: Keys.loadedModel) }
         } catch {
             syncLoadedModel(nil)
             downloadErrors[model.id] = String(describing: error)
         }
     }
 
-    /// The single place the resident-model mirror changes. A transcript belongs
-    /// to the model that produced it, so a swap — whoever caused it — clears it.
-    private func syncLoadedModel(_ id: String?) {
+    /// The single place the resident-model mirror changes.
+    ///
+    /// `userInitiated` matters: the server loads a model on demand whenever a
+    /// request names one, so a curl from anywhere on the network could swap the
+    /// resident model — and this method used to clear the transcript on any
+    /// change. A stranger could erase the phone user's conversation, silently,
+    /// with no undo. Now a swap the user did not ask for keeps the transcript
+    /// and says what happened.
+    private func syncLoadedModel(_ id: String?, userInitiated: Bool = true) {
         guard id != loadedModelID else { return }
+        let previous = loadedModelID
         loadedModelID = id
-        conversation.removeAll()
+        if userInitiated {
+            conversation.removeAll()
+            modelSwitchNotice = nil
+        } else if previous != nil, !conversation.isEmpty {
+            modelSwitchNotice = "A request from another device loaded \(id ?? "another model"). This conversation was started with \(previous ?? "a different model")."
+        }
     }
+
+    /// Shown in Chat when the resident model changed underneath the user.
+    private(set) var modelSwitchNotice: String?
+
+    func dismissModelSwitchNotice() { modelSwitchNotice = nil }
 
     // MARK: - Chat
 

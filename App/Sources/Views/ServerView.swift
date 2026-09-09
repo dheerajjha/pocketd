@@ -3,6 +3,7 @@ import PocketdKit
 
 struct ServerView: View {
     @Environment(AppModel.self) private var model
+    var goTo: (AppTab) -> Void = { _ in }
     @State private var copied: String?
     @State private var copyTick = 0
     @State private var snippetIndex = 0
@@ -81,7 +82,9 @@ struct ServerView: View {
             }
 
             HStack {
-                Text(model.serverState.isRunning ? "Anyone on this network can reach it." : statusText)
+                Text(model.serverState.isRunning
+                     ? "Anyone on this network can reach it."
+                     : "Start it to serve this model to other devices.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -109,9 +112,22 @@ struct ServerView: View {
             }
 
             if model.loadedModelID == nil {
-                Label("Load a model before starting.", systemImage: "info.circle")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                if model.serverState.isRunning {
+                    // Previously this read "SERVING" and "Load a model before
+                    // starting." at the same time, while every request 404'd.
+                    Label("Running, but no model is loaded — every request will fail.",
+                          systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                } else {
+                    // A disabled button beside grey text is not guidance.
+                    Button {
+                        goTo(.models)
+                    } label: {
+                        Label("Load a model to start", systemImage: "shippingbox")
+                            .font(.footnote)
+                    }
+                }
             }
 
             if !model.condition.isServing {
@@ -150,14 +166,25 @@ struct ServerView: View {
                         .kerning(6)
                         .accessibilityLabel("Pairing code \(code.map(String.init).joined(separator: " "))")
                     if let expires = model.pairing.expires {
-                        Text("Expires \(expires, style: .relative)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        // SwiftUI's .relative style renders a past date as a
+                        // bare magnitude with no "ago", so an expired code read
+                        // as "Expires 57 sec" — indistinguishable from time
+                        // remaining, while the server was already refusing it.
+                        if expires > .now {
+                            Text("Expires \(expires, style: .relative)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("Expired — tap New code")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
                     }
                 }
                 Button("New code") { Task { await model.newPairingCode() } }
             } else {
-                Button("Show a pairing code") { Task { await model.newPairingCode() } }
+                // Same label as the one the expiry warning tells you to tap.
+                Button("New code") { Task { await model.newPairingCode() } }
             }
 
             if model.pairing.failureCount >= PairingSession.maxAttempts,

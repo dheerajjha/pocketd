@@ -3,6 +3,7 @@ import PocketdKit
 
 struct ChatView: View {
     @Environment(AppModel.self) private var model
+    var goTo: (AppTab) -> Void = { _ in }
 
     var body: some View {
         @Bindable var model = model
@@ -10,14 +11,44 @@ struct ChatView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 if model.loadedModelID == nil {
-                    ContentUnavailableView(
-                        "No model loaded",
-                        systemImage: "shippingbox",
-                        description: Text("Download and load a model from the Models tab.")
-                    )
+                    ContentUnavailableView {
+                        Label("No model loaded", systemImage: "shippingbox")
+                    } description: {
+                        // The wording distinguishes the two cases: telling
+                        // someone to download a model they already have is
+                        // its own small dead end.
+                        Text(model.installed.isEmpty
+                             ? "Download a model to start a conversation."
+                             : "You have a model downloaded — load it to start a conversation.")
+                    } actions: {
+                        Button(model.installed.isEmpty ? "Browse models" : "Go to Models") {
+                            goTo(.models)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
                 } else {
                     ScrollViewReader { proxy in
                         ScrollView {
+                            if let notice = model.modelSwitchNotice {
+                                HStack(alignment: .top, spacing: 8) {
+                                    Image(systemName: "arrow.triangle.2.circlepath")
+                                    Text(notice).font(.footnote)
+                                    Spacer()
+                                    Button("OK") { model.dismissModelSwitchNotice() }
+                                        .font(.footnote)
+                                }
+                                .padding(10)
+                                .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                                .padding([.horizontal, .top])
+                            }
+                            if model.conversation.isEmpty {
+                                ContentUnavailableView(
+                                    "Ask it something",
+                                    systemImage: "bubble.left.and.bubble.right",
+                                    description: Text("This runs entirely on your phone. Nothing you type leaves the device.")
+                                )
+                                .padding(.top, 40)
+                            }
                             LazyVStack(alignment: .leading, spacing: 12) {
                                 ForEach(Array(model.conversation.enumerated()), id: \.offset) { index, message in
                                     bubble(for: message).id(index)
@@ -25,6 +56,7 @@ struct ChatView: View {
                             }
                             .padding()
                         }
+                        .scrollDismissesKeyboard(.interactively)
                         .onChange(of: model.conversation.last?.content) { _, _ in
                             withAnimation {
                                 proxy.scrollTo(model.conversation.count - 1, anchor: .bottom)

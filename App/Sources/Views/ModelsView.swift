@@ -4,6 +4,7 @@ import PocketdKit
 struct ModelsView: View {
     @Environment(AppModel.self) private var model
     @State private var oversizedCandidate: ModelRecord?
+    @State private var deleteCandidate: ModelRecord?
 
     var body: some View {
         NavigationStack {
@@ -37,6 +38,27 @@ struct ModelsView: View {
                 Button("Cancel", role: .cancel) { oversizedCandidate = nil }
             } message: { record in
                 Text("\(record.displayName) needs about \(format(record.estimatedResidentBytes)) resident and iOS allows this app roughly \(format(model.budget.usableBytes)). It will most likely be killed while loading.")
+            }
+            .confirmationDialog(
+                "Delete this model?",
+                isPresented: Binding(
+                    get: { deleteCandidate != nil },
+                    set: { if !$0 { deleteCandidate = nil } }
+                ),
+                titleVisibility: .visible,
+                presenting: deleteCandidate
+            ) { record in
+                Button("Delete", role: .destructive) {
+                    Task { await model.delete(record) }
+                    deleteCandidate = nil
+                }
+                Button("Cancel", role: .cancel) { deleteCandidate = nil }
+            } message: { record in
+                // Delete sits a few points from Load, and the download it
+                // discards took minutes.
+                Text(model.loadedModelID == record.id
+                     ? "\(record.displayName) is currently loaded. Deleting it unloads it and frees \(format(record.totalDownloadBytes)), which has to be downloaded again to use it."
+                     : "Frees \(format(record.totalDownloadBytes)). It has to be downloaded again to use it.")
             }
         }
     }
@@ -91,7 +113,7 @@ struct ModelsView: View {
                             .disabled(model.isLoadingModel)
                     }
                     Spacer()
-                    Button("Delete", role: .destructive) { Task { await model.delete(record) } }
+                    Button("Delete", role: .destructive) { deleteCandidate = record }
                         .buttonStyle(.borderless)
                         .font(.caption)
                 }

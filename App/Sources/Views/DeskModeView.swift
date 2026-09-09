@@ -13,8 +13,26 @@ import PocketdKit
 struct DeskModeView: View {
     @Environment(AppModel.self) private var model
     @State private var drift = CGSize.zero
+    @State private var showHint = true
 
     private let timer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
+
+    /// The dot must answer "is anyone being served", which is the listener
+    /// first and the device's physical limits second. Keying it on `condition`
+    /// alone showed a green SERVING while the socket was dead and every client
+    /// got connection refused.
+    private var statusColour: Color {
+        guard model.serverState.isRunning else { return .red }
+        return model.condition.isServing ? .green : .orange
+    }
+
+    private var statusWord: String {
+        guard model.serverState.isRunning else {
+            if case .failed = model.serverState { return "FAILED" }
+            return "STOPPED"
+        }
+        return model.condition.isServing ? "SERVING" : model.condition.rawValue.uppercased()
+    }
 
     var body: some View {
         ZStack {
@@ -23,9 +41,9 @@ struct DeskModeView: View {
             VStack(spacing: 14) {
                 HStack(spacing: 8) {
                     Circle()
-                        .fill(model.condition.isServing ? Color.green : Color.orange)
+                        .fill(statusColour)
                         .frame(width: 7, height: 7)
-                    Text(model.condition.isServing ? "SERVING" : model.condition.rawValue.uppercased())
+                    Text(statusWord)
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .kerning(1.5)
                 }
@@ -54,6 +72,26 @@ struct DeskModeView: View {
                 Text("\(model.log.count) requests")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
+
+                if let error = model.lastServerError {
+                    Text(error)
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 28)
+                }
+
+                // Without this the screen has no exit anyone can see: no tab
+                // bar, no status bar, and the home indicator fades too. It
+                // stays until first touched rather than timing out, because a
+                // hint nobody was looking at is the same as no hint.
+                if showHint {
+                    Text("Tap anywhere to exit")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 22)
+                        .transition(.opacity)
+                }
             }
             .foregroundStyle(.white.opacity(0.65))
             .offset(drift)

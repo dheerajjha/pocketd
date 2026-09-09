@@ -87,11 +87,13 @@ enum ChatPage {
     <body>
 
     <header>
-      <span class="dot" id="dot"></span>
+      <span class="dot" id="dot" role="img" aria-label="Connection status" title="Connection status"></span>
+      <span id="dotText" class="budget" style="min-width:0"></span>
       <b>Pocketd</b>
       <select id="models" title="Model"></select>
       <span class="sp"></span>
       <span id="budget" class="budget" title="Estimated prompt size against the server's context limit"></span>
+      <button id="connect" style="display:none" title="Pair with the phone again">Connect</button>
       <button id="sys" title="System prompt">System</button>
       <button id="clear">New chat</button>
     </header>
@@ -118,7 +120,14 @@ enum ChatPage {
       <div style="color:var(--dim);font-size:14px">Enter the six digits shown on the Pocketd Server tab.</div>
       <input id="code" inputmode="numeric" maxlength="6" placeholder="000000">
       <div class="err" id="perr"></div>
-      <button class="primary" id="pgo" style="width:100%">Connect</button>
+      <div class="row" style="margin-top:0">
+        <button class="primary" id="pgo" style="flex:1">Connect</button>
+        <button id="pcancel">Cancel</button>
+      </div>
+      <div style="color:var(--dim);font-size:13px;margin-top:14px">
+        No code on the phone? Open Pocketd, go to the Server tab, and tap
+        <b>New code</b>.
+      </div>
     </dialog>
 
     <script>
@@ -136,6 +145,12 @@ enum ChatPage {
     let pending = "";         // text not yet flushed to the DOM
     let raf = 0;
 
+    function setStatus(text) {
+      $("dotText").textContent = text;
+      $("dot").setAttribute("aria-label", "Connection status: " + (text || "connected"));
+      $("dot").title = text || "Connected";
+    }
+
     function headers() {
       const h = { "Content-Type": "application/json" };
       if (apiKey) h["Authorization"] = "Bearer " + apiKey;
@@ -146,6 +161,9 @@ enum ChatPage {
     async function ensureKey() {
       const probe = await fetch("/v1/models", { headers: headers() });
       if (probe.ok) { await loadModels(probe); return; }
+      // A stored key that no longer works — the phone's key was regenerated —
+      // is indistinguishable from having none, so drop it and re-pair.
+      if (probe.status === 401) { apiKey = null; localStorage.removeItem(KEY); }
       $("pair").showModal();
     }
 
@@ -162,8 +180,18 @@ enum ChatPage {
       apiKey = b.apiKey;
       if (apiKey) localStorage.setItem(KEY, apiKey);
       $("pair").close();
+      $("connect").style.display = "none";
       loadModels();
     };
+
+    // Escape closes a <dialog>, and without a way back the page became a dead
+    // end: no control anywhere reopened it, every message failed with an auth
+    // error, and only someone who thought to reload the page recovered.
+    $("pair").addEventListener("close", () => {
+      if (!apiKey) $("connect").style.display = "";
+    });
+    $("pcancel").onclick = () => $("pair").close();
+    $("connect").onclick = () => { $("perr").textContent = ""; $("pair").showModal(); };
     $("code").addEventListener("keydown", (e) => { if (e.key === "Enter") $("pgo").click(); });
 
     // --- models --------------------------------------------------------------
@@ -342,6 +370,14 @@ enum ChatPage {
           let detail = "HTTP " + r.status;
           try { const e = await r.json(); if (e.error) detail = e.error.message; } catch (_) {}
           failed = detail;
+          if (r.status === 401) {
+            // Almost always the phone's key was regenerated. Say so and put
+            // the way back on screen rather than leaving a bare error.
+            apiKey = null;
+            localStorage.removeItem(KEY);
+            failed = "This phone's API key changed. Tap Connect to pair again.";
+            $("connect").style.display = "";
+          }
         } else {
           const reader = r.body.getReader();
           const dec = new TextDecoder();
@@ -469,11 +505,17 @@ enum ChatPage {
     setInterval(async () => {
       try {
         const h = await (await fetch("/health")).json();
-        $("dot").style.background = h.status === "ok" ? "#30d158" : "#ff9f0a";
+        const up = h.status === "ok";
+        $("dot").style.background = up ? "#30d158" : "#ff9f0a";
+        setStatus(up ? "" : "degraded");
         if (h.maxContextTokens) { contextLimit = h.maxContextTokens; updateBudget(); }
-      } catch (e) { $("dot").style.background = "#ff453a"; }
+      } catch (e) {
+        $("dot").style.background = "#ff453a";
+        // Colour alone told a sighted user nothing specific and a screen
+        // reader nothing at all.
+        setStatus("phone unreachable");
+      }
     }, 5000);
-    </script>
     </script>
     </body></html>
     """#
