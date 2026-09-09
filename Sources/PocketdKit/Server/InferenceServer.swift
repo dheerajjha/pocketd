@@ -23,6 +23,9 @@ public actor InferenceServer {
 
     public private(set) var configuration: ServerConfiguration
     public let log: RequestLog
+    /// The six-digit handshake that trades itself for the API key, so nobody
+    /// retypes 35 random characters off a phone screen.
+    public let pairing = PairingSession()
 
     private let engine: any InferenceEngine
     private let modelsProvider: @Sendable () async -> [ModelRecord]
@@ -51,6 +54,18 @@ public actor InferenceServer {
     }
 
     public func currentState() -> State { state }
+
+    func currentStateValue() -> State { state }
+
+    func resolvedPort() async -> UInt16 {
+        if case let .running(_, port) = state { return port }
+        return configuration.port
+    }
+
+    @discardableResult
+    public func openPairing() async -> String { await pairing.open() }
+
+    public func closePairing() async { await pairing.close() }
 
     public func stateStream() -> AsyncStream<State> {
         let id = UUID()
@@ -230,6 +245,8 @@ public actor InferenceServer {
         activeRequests += 1
         return true
     }
+
+    func activeRequestCount() -> Int { activeRequests }
 
     func endRequest() {
         activeRequests = max(0, activeRequests - 1)

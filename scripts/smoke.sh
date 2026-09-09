@@ -12,6 +12,8 @@ KEY="${2:-}"
 MODEL="${3:-}"
 
 pass=0; fail=0
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
 AUTH=(); [ -n "$KEY" ] && AUTH=(-H "Authorization: Bearer $KEY")
 
 check() { # name, expected, actual
@@ -37,11 +39,32 @@ check "GET /health" 200 "$(status "$BASE/health")"
 check "GET / (Ollama probe)" 200 "$(status "$BASE/")"
 check "HEAD /" 200 "$(curl -s -o /dev/null -w '%{http_code}' -I "${AUTH[@]}" "$BASE/")"
 contains "root says Ollama is running" "Ollama is running" "$(curl -s "$BASE/")"
+# The root serves two audiences by Accept header; breaking either one is silent.
+contains "a browser gets the setup page" "<!doctype html>" "$(curl -s -H 'Accept: text/html' "$BASE/")"
+contains "an Ollama client does not" "Ollama is running" "$(curl -s -H 'Accept: */*' "$BASE/")"
+check "GET /setup" 200 "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/setup")"
+check "an unopened pairing code is refused" 403 "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{"code":"000000"}' "$BASE/pair")"
 
 HEALTH=$(curl -s "$BASE/health")
 echo "  backend: $(echo "$HEALTH" | sed -n 's/.*"backend":"\([^"]*\)".*/\1/p')"
 echo "  model:   $(echo "$HEALTH" | sed -n 's/.*"model":"\([^"]*\)".*/\1/p')"
 [ -z "$MODEL" ] && MODEL=$(echo "$HEALTH" | sed -n 's/.*"model":"\([^"]*\)".*/\1/p')
+
+# Waits until the server will accept work again, so a slow generation started by
+# one check — or by a previous invocation of this script — cannot make the next
+# one fail with a 503 it did not cause.
+wait_idle() {
+  for _ in $(seq 1 200); do
+    code=$(curl -s -o /dev/null -m 60 -w '%{http_code}' "${AUTH[@]}" -H 'Content-Type: application/json' \
+      -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4}" \
+      "$BASE/v1/chat/completions")
+    [ "$code" = "503" ] || return 0
+    sleep 2
+  done
+  return 1
+}
+
+wait_idle || echo "  (warning: server busy at start)"
 
 echo
 echo "== auth"
@@ -97,6 +120,7 @@ LONG=$(curl -s -m 900 -w '\nHTTP_STATUS:%{http_code} SECONDS:%{time_total}' "${A
 LONG_CODE=$(printf '%s' "$LONG" | sed -n 's/.*HTTP_STATUS:\([0-9]*\).*/\1/p')
 LONG_SECS=$(printf '%s' "$LONG" | sed -n 's/.*SECONDS:\([0-9.]*\).*/\1/p')
 check "long buffered completion survives (${LONG_SECS}s)" 200 "$LONG_CODE"
+[ "$LONG_CODE" = "200" ] || printf '       body: %.300s\n' "$LONG"
 contains "long completion has content" '"content"' "$LONG"
 
 check "POST /v1/embeddings is 501, not 404" 501 "$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" -H 'Content-Type: application/json' -d '{}' "$BASE/v1/embeddings")"
@@ -131,32 +155,30 @@ echo "  said: $(echo "$GEN" | sed -n 's/.*"response":"\([^"]*\)".*/\1/p' | head 
 echo
 echo "== behaviour under load"
 
-TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
-
-# Waits until the server will accept work again, so a slow generation started by
-# one check cannot make the next one fail with a 503 it did not cause.
-wait_idle() {
-  for _ in $(seq 1 200); do
-    code=$(curl -s -o /dev/null -m 60 -w '%{http_code}' "${AUTH[@]}" -H 'Content-Type: application/json' \
-      -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4}" \
-      "$BASE/v1/chat/completions")
-    [ "$code" = "503" ] || return 0
-    sleep 2
-  done
-  return 1
-}
-
 # The server admits one generation at a time; a second must be refused fast
 # rather than queued until the client gives up.
 curl -s -o /dev/null -m 300 "${AUTH[@]}" -H 'Content-Type: application/json' \
   -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Write a long essay about rivers\"}],\"max_tokens\":400,\"stream\":false}" \
   "$BASE/v1/chat/completions" >/dev/null 2>&1 &
 LOADPID=$!
-sleep 4
-BUSY=$(curl -s -o /dev/null -m 30 -w '%{http_code}' "${AUTH[@]}" -H 'Content-Type: application/json' \
-  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":8}" \
-  "$BASE/v1/chat/completions")
+# Poll rather than sleeping a fixed interval: how long the background
+# generation takes depends on the model and the device, and a fixed wait makes
+# this pass or fail by luck. A flaky check is worse than no check.
+# Wait until /health confirms a generation is actually in flight. Probing on a
+# timer raced the background request, which sometimes lost and took the 503
+# itself — a flaky check is worse than no check.
+BUSY=000
+for _ in $(seq 1 30); do
+  ACTIVE=$(curl -s -m 10 "$BASE/health" | sed -n 's/.*"activeRequests":\([0-9]*\).*/\1/p')
+  if [ "${ACTIVE:-0}" -ge 1 ]; then
+    BUSY=$(curl -s -o /dev/null -m 30 -w '%{http_code}' "${AUTH[@]}" -H 'Content-Type: application/json' \
+      -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":8}" \
+      "$BASE/v1/chat/completions")
+    break
+  fi
+  kill -0 "$LOADPID" 2>/dev/null || break
+  sleep 1
+done
 check "a second concurrent request is refused fast" 503 "$BUSY"
 wait "$LOADPID" 2>/dev/null || true
 wait_idle || echo "  (warning: server did not go idle)"
@@ -170,6 +192,40 @@ if wait_idle; then
 else
   printf '  \033[31mFAIL\033[0m %-46s slot never freed\n' "an abandoned stream frees the slot"; fail=$((fail+1))
 fi
+
+# Freeing the slot is not enough. A generation stopped mid-decode leaves the KV
+# and prompt caches describing tokens that were never finished, and the next
+# request reuses that prefix: the server keeps answering 200 while the model
+# emits an empty string or a run of punctuation. Status codes cannot see this,
+# so the check reads the words.
+# Rebuilding the context after a cancellation adds latency to the first request
+# that follows, so settle before sampling or this races its own warm-up.
+wait_idle || true
+AFTER=$(curl -s -m 300 "${AUTH[@]}" -H 'Content-Type: application/json' \
+  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Say hello in one short sentence.\"}],\"max_tokens\":24}" \
+  "$BASE/v1/chat/completions")
+SANE=$(printf '%s' "$AFTER" | python3 -c "
+import sys, json, re
+try:
+    text = json.load(sys.stdin)['choices'][0]['message']['content']
+except Exception:
+    print('unparseable'); raise SystemExit
+# The two observed corruption signatures are an empty string and a run of
+# punctuation like '()()()()'. Nothing here judges quality: a 360M model
+# answering 'Hi' is correct, and two earlier versions of this check failed it
+# by demanding a minimum length. Test only what actually distinguishes a
+# poisoned context from a terse answer.
+stripped = text.strip()
+letters = len(re.findall(r'[A-Za-z]', stripped))
+ratio = letters / len(stripped) if stripped else 0
+print('ok' if letters >= 1 and ratio >= 0.5 else 'garbage:' + repr(text[:60]))
+")
+if [ "$SANE" = "ok" ]; then
+  printf '  \033[32mok\033[0m   %-46s\n' "the model still talks sense afterwards"; pass=$((pass+1))
+else
+  printf '  \033[31mFAIL\033[0m %-46s %s\n' "the model still talks sense afterwards" "$SANE"; fail=$((fail+1))
+fi
+wait_idle || true
 
 # A prompt far past the context cap must fail cleanly rather than hang or crash.
 python3 - "$MODEL" > "$TMP/big.json" <<'PYJSON'

@@ -103,14 +103,23 @@ extension InferenceServer {
         // Some Ollama clients probe the root before anything else and refuse to
         // proceed unless it answers with this exact string. Several of them probe
         // with HEAD rather than GET, and read a 404 as "no server here".
-        for route in ["GET /", "HEAD /"] {
-            await server.appendRoute(HTTPRoute(route)) { [self] _ in
-                HTTPResponse(
-                    statusCode: .ok,
-                    headers: await corsHeaders(),
-                    body: Data("Ollama is running".utf8)
-                )
-            }
+        await server.appendRoute("GET /") { [self] request in
+            await handleRoot(request)
+        }
+        await server.appendRoute("HEAD /") { [self] _ in
+            HTTPResponse(
+                statusCode: .ok,
+                headers: await corsHeaders(),
+                body: Data("Ollama is running".utf8)
+            )
+        }
+        // An unambiguous path to type, for when someone was told "open your
+        // phone's address" and got the probe string instead.
+        await server.appendRoute("GET /setup") { [self] _ in
+            await handleSetupPage()
+        }
+        await server.appendRoute("POST /pair") { [self] request in
+            await handlePair(request)
         }
         await server.appendRoute("HEAD /api/version") { [self] _ in
             jsonResponse(Ollama.VersionResponse(version: PocketdKit.version), headers: await corsHeaders())
@@ -137,6 +146,11 @@ extension InferenceServer {
             var backend: String
             var model: String?
             var maxContextTokens: Int
+            /// How many generations are running. A phone serves one at a time,
+            /// so a client seeing 1 knows a 503 is contention rather than a
+            /// fault, and can wait instead of failing over.
+            var activeRequests: Int
+            var maxConcurrentRequests: Int
         }
         let engine = currentEngine()
         return jsonResponse(
@@ -145,7 +159,9 @@ extension InferenceServer {
                 version: PocketdKit.version,
                 backend: engine.backendName,
                 model: await engine.loadedModel()?.id,
-                maxContextTokens: contextCap()
+                maxContextTokens: contextCap(),
+                activeRequests: activeRequestCount(),
+                maxConcurrentRequests: configuration.maxConcurrentRequests
             ),
             headers: corsHeaders()
         )

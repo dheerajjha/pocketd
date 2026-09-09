@@ -22,6 +22,16 @@ actor LlamaEngine: InferenceEngine {
 
     private var client: AnyLLMClient?
     private var model: ModelRecord?
+    /// Set when a generation was cancelled part-way. llama.cpp keeps a KV cache
+    /// and LocalLLMClient keeps a prompt cache on top of it, and a generation
+    /// that stops mid-decode leaves both describing tokens that were never
+    /// finished. The next request reuses that prefix and the model emits
+    /// garbage — verified on a device: a clean context answers "Hello! I am
+    /// Smol LM…", and after one abandoned stream the same prompt returns an
+    /// empty string. Context.clear() would fix it in one call but is not
+    /// reachable outside LocalLLMClient's own DEBUG builds, so the context is
+    /// rebuilt instead, lazily, on the next request that needs it.
+    private var contextIsDirty = false
     private let fileURL: @Sendable (ModelRecord) -> URL
     private var sampling: SamplingProfile
 
@@ -103,7 +113,12 @@ actor LlamaEngine: InferenceEngine {
         let token = UUID()
         try await acquire(token)
         defer { release(token) }
+        try await loadHoldingGate(model)
+    }
 
+    /// The load itself, for callers that already hold the gate. Taking it twice
+    /// would deadlock the actor against itself.
+    private func loadHoldingGate(_ model: ModelRecord) async throws {
         let url = fileURL(model)
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw InferenceError.modelNotFound(model.id)
@@ -121,11 +136,21 @@ actor LlamaEngine: InferenceEngine {
                     context: min(model.contextLength, sampling.contextTokens),
                     temperature: sampling.temperature,
                     topK: sampling.topK,
-                    topP: sampling.topP
+                    topP: sampling.topP,
+                    // LocalLLMClient defaults to pausing generation on
+                    // UIApplication.willResignActive, checked before every
+                    // single token. That is right for a chat app and ruinous
+                    // for a server: a notification banner, a Control Center
+                    // swipe or the app switcher freezes an in-flight stream
+                    // with the socket still open and no error, so the client
+                    // hangs until its own read timeout. A server must fail
+                    // loudly or not at all — never stall silently.
+                    options: .init(disableAutoPause: true)
                 )
             )
             client = AnyLLMClient(llama)
             self.model = model
+            contextIsDirty = false
         } catch {
             throw InferenceError.backend(String(describing: error))
         }
@@ -175,9 +200,25 @@ actor LlamaEngine: InferenceEngine {
 
         // Read residency AFTER acquiring: a load may have swapped the model
         // while this request was queued.
-        guard let client, let model else {
+        guard var client = self.client, let model else {
             continuation.finish(throwing: InferenceError.noModelLoaded)
             return
+        }
+
+        // Pay for a previous cancellation now, once, rather than serving
+        // garbage from a poisoned cache.
+        if contextIsDirty {
+            do {
+                try await loadHoldingGate(model)
+                guard let rebuilt = self.client else {
+                    continuation.finish(throwing: InferenceError.noModelLoaded)
+                    return
+                }
+                client = rebuilt
+            } catch {
+                continuation.finish(throwing: error)
+                return
+            }
         }
         guard request.modelID.isEmpty || request.modelID == model.id else {
             continuation.finish(throwing: InferenceError.modelMismatch(requested: request.modelID, loaded: model.id))
@@ -262,6 +303,9 @@ actor LlamaEngine: InferenceEngine {
                 }
             }
             flush()
+            // Any generation that did not run to its natural end leaves the
+            // caches describing tokens that were never decoded.
+            if reason == .cancelled || Task.isCancelled { contextIsDirty = true }
             continuation.yield(.finished(
                 reason: reason,
                 // Counted from what was actually sent, so usage never describes
@@ -270,6 +314,7 @@ actor LlamaEngine: InferenceEngine {
             ))
             continuation.finish()
         } catch {
+            contextIsDirty = true
             continuation.finish(throwing: InferenceError.backend(String(describing: error)))
         }
     }
