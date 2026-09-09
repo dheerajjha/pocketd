@@ -19,6 +19,21 @@ curl http://192.168.1.42:11434/v1/chat/completions \
 That is a phone answering. The port is Ollama's default on purpose: a client
 already pointed at a desktop Ollama needs its host changed and nothing else.
 
+![The Server tab: the phone's address in large monospace, a six-digit pairing code, and a setup URL to open on a laptop](docs/screenshot-server.png)
+
+## Chat from your laptop, with nothing installed
+
+The phone already runs a web server, so it serves the client too. Open its
+address in a browser and you get a chat window — streaming, model picker,
+system prompt, stop button, history kept locally, tokens per second per reply.
+No Docker, no account, no extension.
+
+![The chat client served by the phone, showing a streamed reply and 20.6 tokens per second](docs/screenshot-chat.png)
+
+The page asks once for the six digits shown on the phone and remembers the key.
+`/setup` has the same handshake and hands back ready-to-paste configs for curl,
+Continue, opencode, the OpenAI SDKs, Open WebUI and Aider.
+
 ## Why this exists
 
 Every local-LLM app for iOS is a chat window. The model is right there, running
@@ -78,6 +93,8 @@ Errors come back in the dialect you asked in: OpenAI's nested `{"error":{…}}`
 or Ollama's flat `{"error":"…"}`, because a client fed the wrong one reports
 "unknown error" and hides the reason.
 
+![The Models tab, with each model badged against a real device memory budget](docs/screenshot-models.png)
+
 ## Which models actually fit
 
 An iPhone 14 has 6 GB of RAM and iOS lets one app touch roughly 45% of it —
@@ -128,8 +145,13 @@ These are not bugs, and pretending otherwise would waste your afternoon.
 
 ## Verified
 
-Run end to end on an iPhone 17 simulator (iOS 26.5) with real SmolLM2 360M
-weights and real llama.cpp:
+Run end to end on a physical **iPhone 14** (iOS 26.5) and on an iPhone 17
+simulator, with real SmolLM2 360M weights and real llama.cpp:
+
+- **29.4 tok/s** on the iPhone 14 with Metal — 200 tokens in 6.8s. The same
+  build on the simulator, which is CPU-only, manages 5.6.
+- `opencode` configured against the phone answers a prompt end to end
+- the browser chat client streams at 20.6 chunks/s
 
 - 386 MB downloaded in under 20 seconds, loaded, served
 - reachable from the host Mac at the phone's LAN address
