@@ -18,6 +18,9 @@ public struct ModelRecord: Sendable, Codable, Equatable, Identifiable, Hashable 
     /// separately, because KV cache is what actually exhausts a phone.
     public var contextLength: Int
     public var license: String
+    /// Overrides the Hugging Face location. Set for weights served from a
+    /// mirror or a machine on the same network, and by the test suite.
+    public var sourceURL: URL?
 
     public init(
         id: String,
@@ -28,7 +31,8 @@ public struct ModelRecord: Sendable, Codable, Equatable, Identifiable, Hashable 
         quantization: String,
         sizeBytes: Int64,
         contextLength: Int,
-        license: String
+        license: String,
+        sourceURL: URL? = nil
     ) {
         self.id = id
         self.displayName = displayName
@@ -39,10 +43,11 @@ public struct ModelRecord: Sendable, Codable, Equatable, Identifiable, Hashable 
         self.sizeBytes = sizeBytes
         self.contextLength = contextLength
         self.license = license
+        self.sourceURL = sourceURL
     }
 
     public var downloadURL: URL {
-        URL(string: "https://huggingface.co/\(repoID)/resolve/main/\(filename)?download=true")!
+        sourceURL ?? URL(string: "https://huggingface.co/\(repoID)/resolve/main/\(filename)?download=true")!
     }
 
     /// Weights plus a working allowance for the KV cache and the runtime. The

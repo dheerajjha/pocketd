@@ -89,7 +89,7 @@ public actor ModelStore {
 
     public func delete(_ model: ModelRecord) throws {
         try? FileManager.default.removeItem(at: fileURL(for: model))
-        try? FileManager.default.removeItem(at: partialURL(for: model))
+        try? FileManager.default.removeItem(at: resumeDataURL(for: model))
         manifest[model.id] = nil
         persist()
     }
@@ -122,75 +122,51 @@ public actor ModelStore {
     private func performDownload(
         _ model: ModelRecord,
         allowingOversized: Bool,
-        onProgress: @Sendable (DownloadProgress) -> Void
+        onProgress: @escaping @Sendable (DownloadProgress) -> Void
     ) async throws {
         guard allowingOversized || budget.fit(for: model).allowsDownload else {
             throw ModelStoreError.insufficientMemory(model: model.id)
         }
         try checkDiskSpace(for: model)
 
-        let partial = partialURL(for: model)
-        var received = fileSize(at: partial)
+        let destination = fileURL(for: model)
+        let resumeURL = resumeDataURL(for: model)
+        let resumeData = try? Data(contentsOf: resumeURL)
+        let declaredSize = model.sizeBytes
+        let id = model.id
 
-        var request = URLRequest(url: model.downloadURL)
-        if received > 0 {
-            request.setValue("bytes=\(received)-", forHTTPHeaderField: "Range")
+        let downloader = FileDownloader(
+            destination: destination,
+            resumeDataURL: resumeURL
+        ) { received, expected in
+            onProgress(DownloadProgress(
+                modelID: id,
+                receivedBytes: received,
+                // URLSession reports -1 when the server sends no length, which
+                // renders as a progress bar stuck at zero. The catalogue size is
+                // the better estimate in that case.
+                totalBytes: expected > 0 ? expected : declaredSize
+            ))
         }
 
-        let (bytes, response) = try await session.bytes(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw ModelStoreError.httpStatus(0)
-        }
-        // 206 means the server honoured our Range and we append; 200 means it
-        // ignored it and is sending the whole file, so the partial is stale.
-        switch http.statusCode {
-        case 206:
-            break
-        case 200:
-            received = 0
-            try? FileManager.default.removeItem(at: partial)
-        default:
-            throw ModelStoreError.httpStatus(http.statusCode)
-        }
-
-        let total = received + max(http.expectedContentLength, 0)
-        if !FileManager.default.fileExists(atPath: partial.path) {
-            FileManager.default.createFile(atPath: partial.path, contents: nil)
-        }
-        let handle = try FileHandle(forWritingTo: partial)
-        try handle.seekToEnd()
-        defer { try? handle.close() }
-
-        var buffer = Data()
-        buffer.reserveCapacity(1 << 20)
-        var lastReported = received
-
-        for try await byte in bytes {
-            buffer.append(byte)
-            if buffer.count >= 1 << 20 {
-                try handle.write(contentsOf: buffer)
-                received += Int64(buffer.count)
-                buffer.removeAll(keepingCapacity: true)
-                // Report at most once per megabyte; a per-byte callback would
-                // spend more time updating SwiftUI than writing the file.
-                if received - lastReported >= 1 << 20 {
-                    onProgress(DownloadProgress(modelID: model.id, receivedBytes: received, totalBytes: total))
-                    lastReported = received
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                downloader.start(request: URLRequest(url: model.downloadURL), resumeData: resumeData) { result in
+                    switch result {
+                    case .success:
+                        continuation.resume()
+                    case .failure(let error):
+                        continuation.resume(throwing: error)
+                    }
                 }
             }
-            try Task.checkCancellation()
+        } onCancel: {
+            downloader.cancelSavingResumeData()
         }
-        if !buffer.isEmpty {
-            try handle.write(contentsOf: buffer)
-            received += Int64(buffer.count)
-        }
-        try handle.close()
 
-        try? FileManager.default.removeItem(at: fileURL(for: model))
-        try FileManager.default.moveItem(at: partial, to: fileURL(for: model))
         manifest[model.id] = model
         persist()
-        onProgress(DownloadProgress(modelID: model.id, receivedBytes: received, totalBytes: max(total, received)))
+        onProgress(DownloadProgress(modelID: id, receivedBytes: declaredSize, totalBytes: declaredSize))
     }
 
     private func checkDiskSpace(for model: ModelRecord) throws {
@@ -201,13 +177,11 @@ public actor ModelStore {
         }
     }
 
-    private func partialURL(for model: ModelRecord) -> URL {
-        directory.appendingPathComponent("\(model.id).gguf.partial")
-    }
-
-    private func fileSize(at url: URL) -> Int64 {
-        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
-        return (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+    /// Where URLSession's resume data is parked between attempts. This is not a
+    /// partial file: it is the opaque blob carrying the validators that let the
+    /// server prove the bytes already on disk are still the right ones.
+    private func resumeDataURL(for model: ModelRecord) -> URL {
+        directory.appendingPathComponent("\(model.id).resume")
     }
 
     private func persist() {
