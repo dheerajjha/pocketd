@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # A job that cannot get a runner should fail in minutes rather than sit in
+    # the queue until GitHub cancels it six hours later, which reads as a broken
+    # build and blocks every pull request behind it.
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: swift --version
+
+      # PocketdKit depends on an HTTP server and nothing else, which is the
+      # whole point: the entire API surface is checked here in about a second,
+      # with no simulator and no llama.cpp compile. If this job gets slow,
+      # something has leaked across the InferenceEngine boundary.
+      - name: Test the package
+        run: swift test
+
+  app:
+    name: app (iOS simulator)
+    runs-on: macos-15
+    # The app target builds llama.cpp from source through LocalLLMClient, which
+    # is minutes of C++ even with a warm cache. It is a separate job so that a
+    # Swift-level break in the package reports in one minute instead of fifteen.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      # The .xcodeproj is generated, so CI regenerating it is also the check
+      # that project.yml is valid and complete.
+      - name: Generate the project
+        run: xcodegen generate
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: ${{ runner.os }}-spm-${{ hashFiles('project.yml', 'Package.swift') }}
+          restore-keys: ${{ runner.os }}-spm-
+
+      # Code signing is off: this proves the app compiles, and nothing here can
+      # or should produce a signed build. -skipMacroValidation is required
+      # because LocalLLMClient ships a Swift macro plugin, and Xcode blocks one
+      # until a human clicks Trust & Enable — a prompt no runner can answer.
+      - name: Build for the simulator
+        run: |
+          xcodebuild \
+            -project Pocketd.xcodeproj \
+            -scheme Pocketd \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath .build/xcode \
+            -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            build

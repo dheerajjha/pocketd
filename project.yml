@@ -1,0 +1,75 @@
+# The Xcode project is generated, not committed. A .xcodeproj is a merge-conflict
+# generator that hides its own diffs; this file is the reviewable source of truth.
+# Run `xcodegen generate` (or `make app`) after changing it.
+name: Pocketd
+
+options:
+  bundleIdPrefix: dev.pocketd
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+packages:
+  PocketdKit:
+    path: .
+  LocalLLMClient:
+    url: https://github.com/tattn/LocalLLMClient.git
+    from: 0.5.0
+
+targets:
+  Pocketd:
+    type: application
+    platform: iOS
+    sources:
+      - path: App/Sources
+    info:
+      path: App/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Pocketd
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # Required since iOS 14 for any app that listens on or scans the LAN.
+        # Without it the listening socket accepts nothing from other devices and
+        # fails silently, which is the single most confusing way for this app to
+        # break.
+        # Everything here is plain HTTP on a private address by design. Without
+        # this exception App Transport Security blocks the app's own requests to
+        # local hosts, which is how the in-app diagnostics fail on a device but
+        # not in the simulator.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSLocalNetworkUsageDescription: >-
+          Pocketd serves the language model running on this device to other
+          devices on your network. Everything stays on your local network.
+        # Read by AppModel to size the memory budget honestly. Keep it in step
+        # with the entitlements file.
+        PocketdHasIncreasedMemoryLimit: true
+    entitlements:
+      path: App/Resources/Pocketd.entitlements
+      properties:
+        # Raises the jetsam ceiling from roughly 45% to roughly 58% of physical
+        # RAM, which is the difference between a 4B model loading and being
+        # killed on a 6 GB device.
+        com.apple.developer.kernel.increased-memory-limit: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.pocketd.app
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_STRICT_CONCURRENCY: complete
+    dependencies:
+      - package: PocketdKit
+        product: PocketdKit
+      - package: LocalLLMClient
+        product: LocalLLMClient
+      - package: LocalLLMClient
+        product: LocalLLMClientLlama

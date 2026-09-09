@@ -1,0 +1,31 @@
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+*.xcuserstate
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Model weights. These are gigabytes and are downloaded into the app sandbox,
+# not into the repository — the patterns are here as a backstop for anyone who
+# drops one in by hand. Deliberately not `Models/`, which would also swallow
+# Sources/PocketdKit/Models.
+*.gguf
+*.safetensors
+
+# Editor and OS cruft
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Upstream and competitor checkouts read while building this: other people's
+# repositories under their own licenses, never vendored. The script that
+# fetches them is committed; what it fetches is not.
+reference/*
+!reference/sync.sh
+!reference/README.md
