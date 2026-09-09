@@ -219,7 +219,7 @@ extension InferenceServer {
         let entry = RequestLogEntry(
             method: request.method.rawValue,
             path: request.path,
-            clientAddress: request.remoteIPAddress,
+            clientAddress: request.peerAddress,
             streamed: streamed
         )
         await log.record(entry)

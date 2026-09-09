@@ -85,7 +85,7 @@ extension InferenceServer {
             )
         }
 
-        switch await pairing.redeem(payload.code, from: request.remoteIPAddress) {
+        switch await pairing.redeem(payload.code, from: request.peerAddress) {
         case .paired:
             let host = pairedHost()
             var model = await currentEngine().loadedModel()?.id
