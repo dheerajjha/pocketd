@@ -10,6 +10,7 @@ final class AppModel {
 
     private(set) var serverState: InferenceServer.State = .stopped
     private(set) var log: [RequestLogEntry] = []
+    private(set) var pairing = PairingSession.Snapshot()
     var configuration: ServerConfiguration {
         didSet { persistConfiguration() }
     }
@@ -100,6 +101,11 @@ final class AppModel {
                 }
             }
         })
+        observers.append(Task { [server] in
+            for await snapshot in await server.pairing.stream() {
+                await MainActor.run { self.pairing = snapshot }
+            }
+        })
         observers.append(Task { [server, engine] in
             for await entries in await server.log.stream() {
                 // The server loads models behind the app's back when a request
@@ -132,6 +138,12 @@ final class AppModel {
         do {
             try await server.apply(configuration)
             try await server.start()
+            // A code is only worth showing until someone has used one. After
+            // that the laptop has the key and the phone should stop displaying
+            // six digits it no longer needs.
+            if await server.pairing.snapshot().hasPaired == false {
+                await server.openPairing()
+            }
         } catch {
             lastServerError = friendlyMessage(for: error)
         }
@@ -141,6 +153,7 @@ final class AppModel {
         serverShouldRun = false
         UserDefaults.standard.set(false, forKey: Keys.serverShouldRun)
         await server.stop()
+        await server.closePairing()
     }
 
     /// Called on every return to the foreground. iOS closes the listening socket
@@ -176,6 +189,18 @@ final class AppModel {
 
     func clearLog() async {
         await server.log.clear()
+    }
+
+    func newPairingCode() async {
+        await server.openPairing()
+    }
+
+    /// What a laptop should be told to open. The setup path is spelled out
+    /// because the bare address answers the Ollama probe string to anything
+    /// that is not a browser, and that reads like a broken server.
+    var setupURL: URL? {
+        guard case let .running(host, port) = serverState else { return nil }
+        return URL(string: "http://\(host):\(port)/setup")
     }
 
     var serverURL: URL? {

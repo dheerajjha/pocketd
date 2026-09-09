@@ -3,13 +3,25 @@ import PocketdKit
 
 struct ServerView: View {
     @Environment(AppModel.self) private var model
+    @State private var copied: String?
+    @State private var copyTick = 0
+    @State private var snippetIndex = 0
+    @State private var showKey = false
 
     var body: some View {
         NavigationStack {
             List {
                 statusSection
-                if let url = model.serverURL {
-                    connectSection(url: url)
+                if model.serverState.isRunning {
+                    // Gated on an open code, not on whether pairing has ever
+                    // happened: asking for a second code has to show it, and a
+                    // card that only ever appears once cannot do that.
+                    if model.pairing.isOpen || !model.pairing.hasPaired {
+                        pairingSection
+                    }
+                    if model.pairing.hasPaired {
+                        connectSection
+                    }
                 }
                 if let error = model.lastServerError {
                     Section {
@@ -25,16 +37,53 @@ struct ServerView: View {
                     Button("Clear") { Task { await model.clearLog() } }
                 }
             }
+            .sensoryFeedback(.success, trigger: copyTick)
         }
     }
 
+    // MARK: - Status
+
     private var statusSection: some View {
         Section {
+            if case let .running(host, port) = model.serverState {
+                // The address is the whole product, so it is the hero and it is
+                // one large tap target. Tapping copies it; on a Mac signed into
+                // the same Apple ID, Universal Clipboard means the next stop is
+                // Cmd-V in an editor.
+                Button {
+                    copy(model.serverURL?.absoluteString ?? host, as: "address")
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(copied == "address" ? "COPIED" : "SERVING")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(copied == "address" ? Color.green : .secondary)
+                        Text(host)
+                            .font(.system(size: 34, weight: .semibold, design: .monospaced))
+                            .minimumScaleFactor(0.5)
+                            .lineLimit(1)
+                        Text(":\(String(port))")
+                            .font(.system(.title3, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .textSelection(.enabled)
+                .accessibilityLabel("Server address \(host) port \(port). Double tap to copy.")
+            } else {
+                HStack {
+                    Circle()
+                        .fill(model.serverState.isRunning ? .green : .secondary)
+                        .frame(width: 10, height: 10)
+                    Text(statusText).font(.headline)
+                }
+            }
+
             HStack {
-                Circle()
-                    .fill(model.serverState.isRunning ? .green : .secondary)
-                    .frame(width: 10, height: 10)
-                Text(statusText).font(.headline)
+                Text(model.serverState.isRunning ? "Anyone on this network can reach it." : statusText)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 Spacer()
                 Button(model.serverState.isRunning ? "Stop" : "Start") {
                     Task {
@@ -46,7 +95,7 @@ struct ServerView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(model.loadedModelID == nil && !model.serverState.isRunning)
+                .disabled(startStopDisabled)
             }
 
             if model.loadedModelID == nil {
@@ -59,30 +108,113 @@ struct ServerView: View {
         }
     }
 
-    private func connectSection(url: URL) -> some View {
-        Section("Connect") {
-            LabeledContent("Base URL") {
-                Text(url.absoluteString).font(.system(.body, design: .monospaced))
-            }
-            if model.configuration.requiresAuth {
-                LabeledContent("API key") {
-                    Text(model.configuration.apiKey)
-                        .font(.system(.caption, design: .monospaced))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+    private var startStopDisabled: Bool {
+        if case .starting = model.serverState { return true }
+        return model.loadedModelID == nil && !model.serverState.isRunning
+    }
+
+    // MARK: - Pairing
+
+    private var pairingSection: some View {
+        Section("Connect a laptop") {
+            if let setup = model.setupURL {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Open this on your laptop")
+                        .font(.subheadline.weight(.medium))
+                    Text(setup.absoluteString)
+                        .font(.system(.callout, design: .monospaced))
+                        .textSelection(.enabled)
                 }
             }
 
-            ShareLink(item: curlSnippet(url: url)) {
-                Label("Share curl command", systemImage: "square.and.arrow.up")
+            if let code = model.pairing.code {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(code)
+                        .font(.system(size: 40, weight: .semibold, design: .monospaced))
+                        .kerning(6)
+                        .accessibilityLabel("Pairing code \(code.map(String.init).joined(separator: " "))")
+                    if let expires = model.pairing.expires {
+                        Text("Expires \(expires, style: .relative)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Button("New code") { Task { await model.newPairingCode() } }
+            } else {
+                Button("Show a pairing code") { Task { await model.newPairingCode() } }
             }
-            Button {
-                UIPasteboard.general.string = curlSnippet(url: url)
-            } label: {
-                Label("Copy curl command", systemImage: "doc.on.doc")
+
+            if model.pairing.failureCount >= PairingSession.maxAttempts,
+               let address = model.pairing.lastFailureAddress {
+                Label(
+                    "\(model.pairing.failureCount) wrong codes from \(address). That code is dead — tap New code.",
+                    systemImage: "exclamationmark.triangle"
+                )
+                .font(.footnote)
+                .foregroundStyle(.orange)
             }
         }
     }
+
+    // MARK: - Connected
+
+    private var connectSection: some View {
+        Section("Connected") {
+            let snippets = ClientSnippets.all(
+                baseURL: model.serverURL ?? URL(string: "http://127.0.0.1")!,
+                apiKey: model.configuration.requiresAuth ? model.configuration.apiKey : nil,
+                model: model.loadedModelID ?? "your-model"
+            )
+
+            if model.configuration.requiresAuth {
+                HStack {
+                    Text("API key").foregroundStyle(.secondary)
+                    Spacer()
+                    Text(showKey ? model.configuration.apiKey : "••••••••••••")
+                        .font(.system(.caption, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Button(showKey ? "Hide" : "Show") { showKey.toggle() }
+                        .font(.caption)
+                }
+                Button {
+                    copy(model.configuration.apiKey, as: "key")
+                } label: {
+                    Label(copied == "key" ? "Copied" : "Copy API key", systemImage: "key")
+                }
+            }
+
+            Picker("Client", selection: $snippetIndex) {
+                ForEach(Array(snippets.enumerated()), id: \.offset) { index, snippet in
+                    Text(snippet.title).tag(index)
+                }
+            }
+            .pickerStyle(.menu)
+
+            if let snippet = snippets[safe: snippetIndex] {
+                Text(snippet.body)
+                    .font(.system(size: 11, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let note = snippet.note {
+                    Text(note).font(.caption2).foregroundStyle(.secondary)
+                }
+                Button {
+                    copy(snippet.body, as: "snippet")
+                } label: {
+                    Label(copied == "snippet" ? "Copied" : "Copy for \(snippet.title)", systemImage: "doc.on.doc")
+                }
+                ShareLink(item: snippet.body) {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
+            }
+
+            Button("Show a new pairing code") { Task { await model.newPairingCode() } }
+                .font(.footnote)
+        }
+    }
+
+    // MARK: - Log
 
     private var logSection: some View {
         Section("Requests") {
@@ -100,18 +232,10 @@ struct ServerView: View {
                             .foregroundStyle(entry.statusCode == 200 ? .green : .orange)
                     }
                     HStack(spacing: 8) {
-                        if let client = entry.clientAddress {
-                            Text(client)
-                        }
-                        if let rate = entry.tokensPerSecond {
-                            Text(String(format: "%.1f tok/s", rate))
-                        }
-                        if let tokens = entry.completionTokens {
-                            Text("\(tokens) tok")
-                        }
-                        if entry.streamed {
-                            Text("stream")
-                        }
+                        if let client = entry.clientAddress { Text(client) }
+                        if let rate = entry.tokensPerSecond { Text(String(format: "%.1f tok/s", rate)) }
+                        if let tokens = entry.completionTokens { Text("\(tokens) tok") }
+                        if entry.streamed { Text("stream") }
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -129,14 +253,19 @@ struct ServerView: View {
         }
     }
 
-    private func curlSnippet(url: URL) -> String {
-        let auth = model.configuration.requiresAuth
-            ? "  -H \"Authorization: Bearer \(model.configuration.apiKey)\" \\\n"
-            : ""
-        return """
-        curl \(url.absoluteString)/v1/chat/completions \\
-          -H "Content-Type: application/json" \\
-        \(auth)  -d '{"model":"\(model.loadedModelID ?? "")","messages":[{"role":"user","content":"hello"}]}'
-        """
+    private func copy(_ value: String, as kind: String) {
+        UIPasteboard.general.string = value
+        copied = kind
+        copyTick += 1
+        Task {
+            try? await Task.sleep(for: .seconds(1.2))
+            if copied == kind { copied = nil }
+        }
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }
