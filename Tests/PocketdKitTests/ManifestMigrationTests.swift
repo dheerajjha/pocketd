@@ -57,16 +57,35 @@ struct CataloguePromiseTests {
     /// this app has no way to supply. `scripts/verify-catalogue.sh` checks the
     /// URLs over the network; this checks the shape offline so a bad entry
     /// cannot be added silently.
-    @Test("no catalogue entry points at a known-gated repository")
+    @Test("no catalogue entry points at a first-party repository that gates")
     func noGatedRepositories() {
-        // google/* GGUF repos require accepting terms before the API answers.
-        let gatedOwners = ["google/", "meta-llama/", "mistralai/"]
+        // The rule is not "avoid Google models" — it is "avoid repositories
+        // that require accepting terms", which the vendors' own GGUF repos do
+        // and the community mirrors do not. A gated repo answers 401 from the
+        // API itself, and this app has no token flow for a user to satisfy it.
+        // scripts/verify-catalogue.sh proves reachability over the network;
+        // this catches a bad entry being added offline.
+        let gatingOwners = ["google/", "meta-llama/", "mistralai/"]
         for model in ModelCatalog.all {
-            for owner in gatedOwners {
+            for owner in gatingOwners {
                 #expect(model.repoID.hasPrefix(owner) == false,
-                        "\(model.id) points at \(model.repoID), which is gated")
+                        "\(model.id) points at \(model.repoID); use a mirror")
             }
         }
+    }
+
+    @Test("the fit badge is computed from the real file size")
+    func gemmaSizeIsTheRealOne() throws {
+        // This entry previously claimed 1.8 GB, inferred from "2B effective
+        // parameters". E2B is a MatFormer: the effective count describes the
+        // compute, not the weights, and the file is 3.1 GB. The badge said
+        // Fits on a 6 GB phone where it cannot fit even with the entitlement.
+        let gemma = try #require(ModelCatalog.model(withID: "gemma-4-e2b"))
+        #expect(gemma.sizeBytes > 3_000_000_000)
+
+        let iPhone14 = DeviceBudget(physicalMemoryBytes: 6 * 1024 * 1024 * 1024,
+                                    hasIncreasedMemoryLimit: true)
+        #expect(iPhone14.fit(for: gemma) == .willNotFit)
     }
 
     @Test("every entry declares a plausible size")

@@ -127,13 +127,25 @@ entitlement this app ships. The Models tab labels every model against that
 budget and makes you confirm a download that will not fit, with the two numbers
 on screen, rather than letting you find out after 2 GB of bandwidth.
 
-| Model | Q4 size | iPhone 14 (6 GB) | iPhone 16 Pro (8 GB) |
+Every size below is the real `Content-Length` of the file, checked by
+`scripts/verify-catalogue.sh`, not a number inferred from the parameter count.
+
+| Model | File | iPhone 14 (6 GB) | iPhone 16 Pro (8 GB) |
 | --- | --- | --- | --- |
-| SmolLM2 360M | 0.4 GB | Fits | Fits |
-| Llama 3.2 1B | 0.8 GB | Fits | Fits |
-| Qwen3 1.7B | 1.1 GB | Fits | Fits |
-| Llama 3.2 3B | 2.0 GB | Tight | Fits |
-| Qwen3 4B | 2.5 GB | Needs the entitlement | Fits |
+| SmolLM2 360M | 0.39 GB | Fits | Fits |
+| SmolVLM 500M + projector | 0.55 GB | Fits | Fits |
+| Llama 3.2 1B | 0.81 GB | Fits | Fits |
+| Qwen3 1.7B | 1.11 GB | Fits | Fits |
+| Llama 3.2 3B | 2.02 GB | Tight | Fits |
+| Qwen3 4B | 2.50 GB | Needs the entitlement | Fits |
+| Gemma 3 4B + projector | 3.34 GB | Too large | Tight |
+| Gemma 4 E2B | 3.11 GB | Too large | Tight |
+
+Gemma 4 E2B is the one that catches people out, and it caught me out. "E2B"
+means two billion *effective* parameters — that describes the compute, not the
+weights. It is a MatFormer, the file carries the full nested model, and Q4_K_M
+is 3.1 GB rather than the ~1.8 GB the name suggests. It does not fit a 6 GB
+phone even with the entitlement.
 
 Expect roughly 15–25 tok/s for the 2B class on an A15, dropping to single
 digits at 3–4B. The `128K` context Gemma 4 advertises is real for the weights

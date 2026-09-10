@@ -14,6 +14,24 @@ public enum ModelCatalog {
     /// Gemma 4's repo is gated, and Qwen's own repo does not publish the Q4 of
     /// that size at all. `scripts/verify-catalogue.sh` checks every URL.
     public static let all: [ModelRecord] = [
+        // Gemma 4's edge variant. Note the size: E2B is a MatFormer, so "2B
+        // effective parameters" describes the compute, not the weights — the
+        // file carries the full nested model and is 3.1 GB at Q4_K_M, not the
+        // ~1.8 GB the parameter count suggests. It therefore does NOT fit a
+        // 6 GB iPhone even with the increased memory limit, and the fit badge
+        // says so. Google's own GGUF repo does not exist under that name and
+        // its other Gemma repos are gated, so this is unsloth's mirror.
+        ModelRecord(
+            id: "gemma-4-e2b",
+            displayName: "Gemma 4 E2B",
+            repoID: "unsloth/gemma-4-E2B-it-GGUF",
+            filename: "gemma-4-E2B-it-Q4_K_M.gguf",
+            parameters: "2B effective",
+            quantization: "Q4_K_M",
+            sizeBytes: 3_106_738_272,
+            contextLength: 131_072,
+            license: "Gemma Terms of Use"
+        ),
         ModelRecord(
             id: "qwen3-1.7b",
             displayName: "Qwen3 1.7B",
