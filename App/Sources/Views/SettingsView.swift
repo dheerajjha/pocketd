@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var portText = ""
     @FocusState private var isPortFocused: Bool
     @State private var showKeyWarning = false
+    @State private var showingDataInspector = false
     @Environment(\.openURL) private var openURL
 
     /// The display name of whatever is resident, for the sentence under the
@@ -159,6 +160,14 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Button("See and delete everything Pocketd stores") {
+                        showingDataInspector = true
+                    }
+                } footer: {
+                    Text("Every model, conversation, setting and permission on this phone, with a real byte count and a real delete — and an accurate list of the only place anything ever goes.")
+                }
+
+                Section {
                     Button("Show the introduction again") {
                         model.replayOnboarding()
                     }
@@ -178,6 +187,7 @@ struct SettingsView: View {
                 // before meaning anything reads as broken.
                 Section {
                     Toggle("Read calendar and reminders", isOn: $model.personalDataToolsEnabled)
+                    Toggle("Read health data", isOn: $model.healthToolsEnabled)
                     if model.personalDataToolsEnabled {
                         // Above the permission warnings, because it outranks
                         // them: a model that will never call the tools makes
@@ -247,6 +257,7 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+            .sheet(isPresented: $showingDataInspector) { DataInspectorView() }
             .onAppear {
                 draft = model.configuration
                 portText = String(model.configuration.port)

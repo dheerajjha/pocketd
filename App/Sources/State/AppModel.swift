@@ -88,6 +88,7 @@ final class AppModel {
         static let autoOffloadInBackground = "pocketd.autoOffloadInBackground"
         static let idleOffloadSeconds = "pocketd.idleOffloadSeconds"
         static let personalDataTools = "pocketd.personalDataTools"
+        static let healthTools = "pocketd.healthTools"
         static let completedOnboarding = "pocketd.completedOnboarding"
     }
 
@@ -126,10 +127,12 @@ final class AppModel {
         // `personalDataToolsEnabled` here would see its declared default and
         // launch with the tools off for someone who turned them on.
         let toolsEnabled = UserDefaults.standard.bool(forKey: Keys.personalDataTools)
+        let healthEnabled = UserDefaults.standard.bool(forKey: Keys.healthTools)
         let engine = LlamaEngine(
             fileURL: { store.fileURL(for: $0) },
             projectorURL: { store.projectorURL(for: $0) },
-            tools: Self.tools(personalData: toolsEnabled)
+            tools: Self.registrations(personalData: toolsEnabled, health: healthEnabled),
+            exempt: Self.selfTestTools()
         )
         self.engine = engine
 
@@ -163,6 +166,7 @@ final class AppModel {
         autoOffloadInBackground = UserDefaults.standard.object(forKey: Keys.autoOffloadInBackground) as? Bool ?? true
         idleOffloadSeconds = UserDefaults.standard.integer(forKey: Keys.idleOffloadSeconds)
         personalDataToolsEnabled = toolsEnabled
+        healthToolsEnabled = healthEnabled
     }
 
     func bootstrap() async {
@@ -719,6 +723,24 @@ final class AppModel {
     /// that is on, a calendar that is never read, and no way to find out why.
     private(set) var personalDataToolGate: ToolGate.Decision = .noModelLoaded
 
+    /// Health is a separate switch from the calendar, deliberately.
+    ///
+    /// It is a separate grant, a separate iOS sheet, and its own schema cost on
+    /// every prompt — and someone who is relaxed about the app reading their
+    /// week is often not relaxed about it reading their heart.
+    var healthToolsEnabled = false {
+        didSet {
+            guard healthToolsEnabled != oldValue else { return }
+            UserDefaults.standard.set(healthToolsEnabled, forKey: Keys.healthTools)
+            Task { await applyPersonalDataTools() }
+        }
+    }
+
+    /// What iOS said when the switch was flipped — never a claim about whether
+    /// a read was granted. HealthKit does not report that, and any UI implying
+    /// otherwise is a lie the app cannot substantiate.
+    private(set) var healthAvailability: HealthAvailability = .available
+
     private func refreshToolGate() async {
         personalDataToolGate = await engine.toolGate
     }
@@ -738,16 +760,36 @@ final class AppModel {
     /// exercises the tool-calling loop on a device without needing EventKit, a
     /// permission prompt or a calendar with anything in it, and it has to keep
     /// working whether or not the real tools are on.
-    private static func tools(personalData: Bool) -> [any LLMTool] {
-        var registered: [any LLMTool] = []
+    /// The tools the product registers, each tagged with the capability it
+    /// belongs to so the engine's budget can drop a whole capability rather
+    /// than an arbitrary tool.
+    ///
+    /// Priority is the array order, and it is a product judgement: the calendar
+    /// answers the question people actually ask most, and health is the largest
+    /// schema of the three, so on a window too small for everything health is
+    /// the one that goes.
+    private static func registrations(
+        personalData: Bool,
+        health: Bool
+    ) -> [(tool: any LLMTool, group: CapabilityGroup)] {
+        var registered: [(tool: any LLMTool, group: CapabilityGroup)] = []
         if personalData {
-            registered.append(CalendarEventsTool())
-            registered.append(RemindersTool())
+            registered.append((CalendarEventsTool(), .calendar))
+            registered.append((RemindersTool(), .reminders))
         }
-        if ProcessInfo.processInfo.arguments.contains("-pocketd-selftest-tool") {
-            registered.append(EchoTool())
+        // Availability-guarded so a device with no Health store never pays
+        // schema tokens for a tool that could only ever refuse.
+        if health, HealthAccess.isAvailable {
+            registered.append((HealthSummaryTool(), .health))
         }
         return registered
+    }
+
+    /// Outside the budget on purpose: a diagnostic is not a capability, and
+    /// charging it against the ceiling would let the self-test alter the thing
+    /// it exists to test.
+    private static func selfTestTools() -> [any LLMTool] {
+        ProcessInfo.processInfo.arguments.contains("-pocketd-selftest-tool") ? [EchoTool()] : []
     }
 
     /// Asks for the permissions, then tells the engine what it is carrying.
@@ -774,7 +816,17 @@ final class AppModel {
         // Not a reload. The engine records the new set and rebuilds its client
         // on the next request that needs one, so a user who flips the switch
         // and puts the phone down pays nothing at all.
-        await engine.updateTools(Self.tools(personalData: personalDataToolsEnabled))
+        if healthToolsEnabled {
+            // At the switch, not at first use. iOS puts the Health sheet up as
+            // a modal, and first use is mid-generation — the stream open, the
+            // gate held, and nothing on screen connecting the sheet to what the
+            // user typed. Whatever they tap there is not a decision.
+            healthAvailability = await HealthAccess.shared.requestAllReadAccess()
+        }
+        await engine.updateTools(
+            Self.registrations(personalData: personalDataToolsEnabled, health: healthToolsEnabled),
+            exempt: Self.selfTestTools()
+        )
     }
 
     /// Re-reads what iOS thinks, without prompting.
@@ -1107,11 +1159,24 @@ final class AppModel {
         generationTask = Task { [engine] in
             do {
                 for try await event in try await engine.generate(request) {
-                    guard case let .token(chunk) = event else { continue }
-                    await MainActor.run {
-                        if !self.conversation.isEmpty {
-                            self.conversation[self.conversation.count - 1].content += chunk
+                    switch event {
+                    case .token(let chunk):
+                        await MainActor.run {
+                            if !self.conversation.isEmpty {
+                                self.conversation[self.conversation.count - 1].content += chunk
+                            }
                         }
+                    case .answerCard(let card):
+                        // The tool's own output, not the model's account of it.
+                        // It arrives before the narration and is what the reader
+                        // should believe if the two ever disagree.
+                        await MainActor.run {
+                            if !self.conversation.isEmpty {
+                                self.conversation[self.conversation.count - 1].cards.append(card)
+                            }
+                        }
+                    case .toolCallStarted, .finished:
+                        break
                     }
                 }
             } catch {

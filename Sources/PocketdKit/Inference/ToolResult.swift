@@ -52,3 +52,46 @@ public enum ToolResult {
         failure("\(name) could not run and returned nothing. Answer without it.")
     }
 }
+
+public extension ToolResult {
+    /// What one tool call produced: the text the model reads, and the card the
+    /// user sees.
+    ///
+    /// Two renderings of one payload, built together so they cannot come from
+    /// different data. The prompt half is `encode` unchanged, byte for byte —
+    /// a tool whose name is in no catalogue gets a nil card and a prompt
+    /// identical to the one it produced before this type existed.
+    struct Rendered: Sendable, Equatable {
+        public var prompt: String
+        public var card: AnswerCard?
+
+        public init(prompt: String, card: AnswerCard? = nil) {
+            self.prompt = prompt
+            self.card = card
+        }
+    }
+
+    /// Renders a tool's output for both readers at once.
+    ///
+    /// The card is built from the same dictionary that becomes the prompt, and
+    /// never from the model's reply to it — which is the whole point: the model
+    /// narrates a card it cannot alter.
+    ///
+    /// `arguments` has no default, and that is load-bearing. Every caller is a
+    /// tool loop holding `call.arguments`, so a default would serve nobody but
+    /// the caller who forgets — and forgetting is silent: `AnswerCardBuilders`
+    /// finds no `range`, and every card in the app is headed "Calendar" instead
+    /// of "Today", which is precisely the vagueness these cards exist to
+    /// remove. A compile error is cheaper than spotting that in a screenshot.
+    static func render(
+        _ data: [String: any Sendable],
+        from tool: String,
+        arguments: String,
+        using catalogue: AnswerCardCatalogue = .standard
+    ) -> Rendered {
+        Rendered(
+            prompt: encode(data),
+            card: catalogue.card(for: tool, arguments: arguments, data: data)
+        )
+    }
+}

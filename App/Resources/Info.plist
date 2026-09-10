@@ -32,6 +32,10 @@
 	</array>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Pocketd lets the AI assistant running on this iPhone answer questions about your schedule, such as what is on today. Your events are read on this device only, are never uploaded, and are never sent to the other devices this app serves.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>Pocketd lets the AI assistant running on this iPhone answer questions about your activity, heart and sleep, such as how last night compares with your usual. Your health data is read on this device only, is never uploaded, and is never sent to the other devices this app serves.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>Pocketd does not write to Health. This permission is requested only because iOS requires the description to be present whenever an app links HealthKit.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Pocketd serves the language model running on this device to other devices on your network. Everything stays on your local network.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>

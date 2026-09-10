@@ -81,7 +81,21 @@ public struct ContextGuard: Sendable, Equatable {
 
     public static func toolOverhead(toolsJSON: String, templateIsToolNative: Bool) -> Int {
         guard !toolsJSON.isEmpty else { return 0 }
-        let schema = estimateTokens(toolsJSON) * (templateIsToolNative ? 2 : 1)
+        return toolOverhead(schemaCharacters: toolsJSON.count, templateIsToolNative: templateIsToolNative)
+    }
+
+    /// The same price, quoted before there is a string to measure.
+    ///
+    /// `CapabilityBudget` has to decide which schemas will be serialised, which
+    /// means pricing a set that does not exist yet. Splitting the arithmetic out
+    /// rather than restating it there is not tidiness: if the budget's estimate
+    /// and the guard's reservation could drift apart, the budget would admit a
+    /// tool the guard then charges more for, under-reserve by the difference,
+    /// and hand llama.cpp the oversized batch this whole file exists to prevent.
+    public static func toolOverhead(schemaCharacters: Int, templateIsToolNative: Bool) -> Int {
+        guard schemaCharacters > 0 else { return 0 }
+        let schema = ((schemaCharacters + charactersPerToken - 1) / charactersPerToken)
+            * (templateIsToolNative ? 2 : 1)
         return schema + (toolPreambleCharacters + charactersPerToken - 1) / charactersPerToken
     }
 

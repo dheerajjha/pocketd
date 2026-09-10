@@ -62,6 +62,16 @@ struct ChatView: View {
                                                 .frame(maxWidth: .infinity)
                                         }
                                         bubble(for: message, at: index)
+                                        // Outside the bubble, at the full width
+                                        // of the page. A bubble is sized for a
+                                        // sentence and indented away from the
+                                        // opposite margin; a card is a table,
+                                        // and the 40 points a bubble gives up
+                                        // are 40 points a row of times cannot
+                                        // spare.
+                                        ForEach(Array(message.cards.enumerated()), id: \.offset) { _, card in
+                                            AnswerCardView(card: card)
+                                        }
                                     }
                                     .id(index)
                                 }
@@ -267,7 +277,12 @@ struct ChatView: View {
     // MARK: - Copy
 
     private func copy(_ message: ChatMessage, at index: Int) {
-        UIPasteboard.general.string = message.content
+        // The cards too. The substance of an answer that ran a tool is drawn
+        // rather than written, so copying the prose alone hands back "here is
+        // your day" and none of the day.
+        UIPasteboard.general.string = ([message.content] + message.cards.map(\.transcript))
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
         copiedMessage = index
         copyTick += 1
         Task {

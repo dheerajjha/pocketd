@@ -223,12 +223,13 @@ extension InferenceServer {
                             if let frame = try? ServerSentEvents.frame(json: chunk(delta: OpenAI.Delta(content: text)), encoder: encoder) {
                                 continuation.yield(frame)
                             }
-                        case .toolCallStarted:
+                        case .toolCallStarted, .answerCard:
                             // Server-side detail. The tool runs here and its
                             // result reaches the client only as text, so there
                             // is nothing honest to put in an OpenAI delta —
                             // `tool_calls` would tell the client to execute
-                            // something it has no tool for.
+                            // something it has no tool for, and a card is a
+                            // rendering only the app on the phone can draw.
                             break
                         case .finished(let reason, let tokenUsage):
                             usage = tokenUsage

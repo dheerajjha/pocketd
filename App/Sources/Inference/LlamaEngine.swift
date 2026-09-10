@@ -82,7 +82,15 @@ actor LlamaEngine: InferenceEngine {
     /// tools are handed over is a property of whatever is resident at the time.
     /// Collapsing the two would mean a network client loading a model the phone
     /// user never chose could turn the tools on or off for them.
-    private var requestedTools: [any LLMTool]
+    private var requestedTools: [(tool: any LLMTool, group: CapabilityGroup)]
+    /// Registered whatever the budget decides, because it is not a capability.
+    /// Charging a diagnostic against the product's ceiling would let the
+    /// self-test change the thing it is testing.
+    private var exemptTools: [any LLMTool]
+    /// What was admitted, what was refused, and what each refusal would cost.
+    /// Surfaced for the same reason `toolGate` is: a capability that is quietly
+    /// absent is a switch that is on and does nothing.
+    private(set) var capabilityPlan: CapabilityBudget.Plan?
     /// Why `tools` is or is not `requestedTools`. Surfaced so Settings can say
     /// which model refused and why, rather than showing a switch that is on and
     /// does nothing.
@@ -163,13 +171,15 @@ actor LlamaEngine: InferenceEngine {
         projectorURL: @escaping @Sendable (ModelRecord) -> URL? = { _ in nil },
         defaultSampling: SamplingParameters = .default,
         contextTokens: Int = 4096,
-        tools: [any LLMTool] = []
+        tools: [(tool: any LLMTool, group: CapabilityGroup)] = [],
+        exempt: [any LLMTool] = []
     ) {
         self.fileURL = fileURL
         self.projectorURL = projectorURL
         self.defaultSampling = defaultSampling
         self.contextTokens = contextTokens
         self.requestedTools = tools
+        self.exemptTools = exempt
         // Empty until a model is resident, because until then there is nothing
         // to decide against. Nothing is lost: a client is only ever built
         // inside `loadHoldingGate`, which decides first.
@@ -184,6 +194,29 @@ actor LlamaEngine: InferenceEngine {
     /// One function so the two can never be derived from different arrays,
     /// which is the shape of bug that leaves a tool the model can see and the
     /// engine cannot run.
+    /// What each tool contributes to the serialised array.
+    ///
+    /// Measured with the same serialiser the library injects, which is the only
+    /// reason the budget's estimate and `ContextGuard`'s reservation can agree.
+    /// If they could drift, the budget would admit a tool the guard then charges
+    /// more for, under-reserve by the difference, and hand llama.cpp the
+    /// oversized batch the guard exists to prevent. The two brackets come off
+    /// because `CapabilityBudget` adds them back once for the whole set.
+    private static func descriptors(
+        for registrations: [(tool: any LLMTool, group: CapabilityGroup)]
+    ) -> [CapabilityTool] {
+        registrations.enumerated().map { index, registration in
+            let wrapped = AnyLLMTool(registration.tool)
+            let schema = (try? [wrapped].toOAICompatJSONString(options: [])) ?? ""
+            return CapabilityTool(
+                name: wrapped.name,
+                group: registration.group,
+                priority: index,
+                schemaCharacters: max(0, schema.count - 2)
+            )
+        }
+    }
+
     private static func derive(from tools: [any LLMTool]) -> (byName: [String: AnyLLMTool], json: String) {
         let wrapped = tools.map { AnyLLMTool($0) }
         // First registration wins. Two tools sharing a name is a programming
@@ -283,8 +316,12 @@ actor LlamaEngine: InferenceEngine {
     /// would leave the live `toolsByName` pointing at the previous instances of
     /// two tools that happen to serialise the same — right today, and the kind
     /// of thing that stops being right quietly.
-    func updateTools(_ tools: [any LLMTool]) {
+    func updateTools(
+        _ tools: [(tool: any LLMTool, group: CapabilityGroup)],
+        exempt: [any LLMTool] = []
+    ) {
         self.requestedTools = tools
+        self.exemptTools = exempt
         applyGate(for: model)
         // No model means no chat template, so there is nothing yet to price the
         // schema against. The load recomputes it.
@@ -304,7 +341,24 @@ actor LlamaEngine: InferenceEngine {
             chatTemplate: residentChatTemplate,
             sizeLabel: residentSizeLabel
         )
-        let granted = toolGate.registersTools ? requestedTools : []
+        // Capability first, then budget: a model the gate refuses is handed
+        // nothing, so there is no budget left to spend on it.
+        let allowed = toolGate.registersTools ? requestedTools : []
+        let budget = CapabilityBudget(
+            contextTokens: min(model?.contextLength ?? contextTokens, contextTokens),
+            templateIsToolNative: residentTemplateIsToolNative
+        )
+        // Paired by index rather than by re-wrapping: `descriptors` already
+        // named every tool, and `AnyLLMTool` takes a concrete conformer, so
+        // rebuilding one from `any LLMTool` inside a closure does not compile.
+        let priced = Self.descriptors(for: allowed)
+        let plan = budget.admit(priced)
+        capabilityPlan = allowed.isEmpty ? nil : plan
+        let admitted = Set(plan.toolNames)
+        let granted = zip(allowed, priced)
+            .filter { admitted.contains($0.1.name) }
+            .map(\.0.tool)
+            + (toolGate.registersTools ? exemptTools : [])
         let derived = Self.derive(from: granted)
         self.tools = granted
         self.toolsByName = derived.byName
@@ -759,7 +813,14 @@ actor LlamaEngine: InferenceEngine {
                     // silence: the tool body, and then a second prefill of the
                     // entire conversation, with nothing to show for either.
                     continuation.yield(.toolCallStarted(name: call.name))
-                    outputs.append((call.id, await execute(call, using: activeTools)))
+                    let rendered = await execute(call, using: activeTools)
+                    // Out before the model has written a word about it. The
+                    // payload is already authoritative; the prose that follows
+                    // is narration over something the reader can already read,
+                    // which is why a small model getting the narration slightly
+                    // wrong costs the reader nothing.
+                    if let card = rendered.card { continuation.yield(.answerCard(card)) }
+                    outputs.append((call.id, rendered.prompt))
                 }
                 // Those bytes really do enter the next prompt, so they are
                 // counted. The duplicated prefill is not: usage describes the
@@ -832,18 +893,22 @@ actor LlamaEngine: InferenceEngine {
     /// 500 for a user whose question never needed the tool in the first place.
     /// Here every failure — unknown name, undecodable arguments, a tool that
     /// threw — becomes a short line the model can read and work around.
-    private func execute(_ call: LLMToolCall, using tools: [String: AnyLLMTool]) async -> String {
+    private func execute(_ call: LLMToolCall, using tools: [String: AnyLLMTool]) async -> ToolResult.Rendered {
         guard let tool = tools[call.name] else {
-            return ToolResult.unknownTool(named: call.name)
+            return ToolResult.Rendered(prompt: ToolResult.unknownTool(named: call.name))
         }
         do {
-            return ToolResult.encode(try await tool.call(argumentsJSON: call.arguments).data)
+            return ToolResult.render(
+                try await tool.call(argumentsJSON: call.arguments).data,
+                from: call.name,
+                arguments: call.arguments
+            )
         } catch {
             // Deliberately not `error.localizedDescription`: the model repeats
             // what it reads, and a decoding error's description is a paragraph
             // of Swift type names aimed at us, not at whoever asked the
             // question.
-            return ToolResult.failed(tool: call.name)
+            return ToolResult.Rendered(prompt: ToolResult.failed(tool: call.name))
         }
     }
 }

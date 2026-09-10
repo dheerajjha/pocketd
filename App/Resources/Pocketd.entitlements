@@ -8,5 +8,18 @@
 	     capability on the App ID; `make device-install` builds without it. -->
 	<key>com.apple.developer.kernel.increased-memory-limit</key>
 	<true/>
+	<!-- HealthKit. The access array is deliberately empty: that is the base
+	     capability, and clinical health records are a separate, far broader
+	     grant this app has no use for. No background-delivery key either —
+	     nothing here observes, and background queries do not run in the
+	     Simulator regardless.
+
+	     This is the one entitlement that can break a device build on its own:
+	     automatic signing fails unless HealthKit is also enabled on the App ID
+	     in the developer portal. Simulator builds are unaffected. -->
+	<key>com.apple.developer.healthkit</key>
+	<true/>
+	<key>com.apple.developer.healthkit.access</key>
+	<array/>
 </dict>
 </plist>

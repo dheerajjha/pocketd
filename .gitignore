@@ -32,3 +32,8 @@ reference/*
 
 # Agent worktrees
 .claude/
+
+# Competitor screenshots kept for reference, like reference/. Thirty megabytes
+# of someone else's app UI does not belong in a public repository — the notes
+# taken from them are in docs and the plan, which is the part with any value.
+NewUI&FeatureMocks/

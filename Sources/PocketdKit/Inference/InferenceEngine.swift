@@ -72,6 +72,17 @@ public enum GenerationEvent: Sendable, Equatable {
     /// streaming schema has a field for "the server is running a tool on your
     /// behalf", and inventing one breaks clients that parse strictly.
     case toolCallStarted(name: String)
+    /// A tool has run and its result is drawable. Emitted before the model has
+    /// written a word about it, which is the correct order: the payload is
+    /// already authoritative, and the prose that follows is narration over
+    /// something the user can already read.
+    ///
+    /// Deliberately not on the wire, for the same reason as `toolCallStarted`
+    /// and one more. Neither streaming schema has a field for it, and a card is
+    /// a rendering rather than an answer — a network client that received one
+    /// would have to draw it, and the only client here that can is the app on
+    /// the phone. The routes drop it; the transcript keeps it.
+    case answerCard(AnswerCard)
     case finished(reason: FinishReason, usage: TokenUsage)
 }
 
@@ -141,6 +152,10 @@ public extension InferenceEngine {
                 // A buffered caller sees only the answer. The announcement
                 // exists to fill the silence of a stream, and there is no
                 // silence to fill here.
+                break
+            case .answerCard:
+                // This convenience returns a string, and a card is not one.
+                // A caller that wants the cards has to read the stream.
                 break
             case .finished(let r, let u):
                 reason = r

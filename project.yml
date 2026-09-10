@@ -60,6 +60,21 @@ targets:
           about your reminders, such as what is overdue. Your reminders are read
           on this device only, are never uploaded, and are never sent to the
           other devices this app serves.
+        # Both are required, and the app crashes on requestAuthorization if
+        # either is missing — not a warning, a termination. The write string is
+        # present because HealthKit demands it whenever the framework is linked,
+        # even though nothing here writes: the read tools are read-only and the
+        # share set passed to requestAuthorization is empty.
+        NSHealthShareUsageDescription: >-
+          Pocketd lets the AI assistant running on this iPhone answer questions
+          about your activity, heart and sleep, such as how last night compares
+          with your usual. Your health data is read on this device only, is
+          never uploaded, and is never sent to the other devices this app
+          serves.
+        NSHealthUpdateUsageDescription: >-
+          Pocketd does not write to Health. This permission is requested only
+          because iOS requires the description to be present whenever an app
+          links HealthKit.
         # Required to advertise over Bonjour. Without these exact service types
         # publish fails silently and the phone is discoverable by nothing.
         NSBonjourServices:
