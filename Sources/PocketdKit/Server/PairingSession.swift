@@ -82,10 +82,17 @@ public actor PairingSession {
     @discardableResult
     public func open() -> String {
         let code = String(format: "%06d", Int.random(in: 0...999_999))
+        // pairedAt carries over. Rebuilding the whole snapshot dropped it,
+        // so asking for a second code hid the API key and every client
+        // snippet — and the button that did it lived inside the section it
+        // hid. close() had always preserved it; open() had not.
         state = Snapshot(
             code: code,
             expires: now().addingTimeInterval(Self.lifetime),
-            attemptsRemaining: Self.maxAttempts
+            attemptsRemaining: Self.maxAttempts,
+            lastFailureAddress: state.lastFailureAddress,
+            failureCount: state.failureCount,
+            pairedAt: state.pairedAt
         )
         broadcast()
         return code

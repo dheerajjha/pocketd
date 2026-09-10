@@ -8,26 +8,22 @@ import Foundation
 /// a jetsam kill. Arbitrary repositories are still reachable through
 /// `ModelStore.custom(repoID:filename:)`; they just are not recommended.
 public enum ModelCatalog {
+    /// Every entry must be publicly downloadable without a token. A gated
+    /// repository answers 401 from the API itself, which surfaced here as the
+    /// first two rows of the list failing the moment anyone tapped them —
+    /// Gemma 4's repo is gated, and Qwen's own repo does not publish the Q4 of
+    /// that size at all. `scripts/verify-catalogue.sh` checks every URL.
     public static let all: [ModelRecord] = [
-        ModelRecord(
-            id: "gemma-4-e2b",
-            displayName: "Gemma 4 E2B",
-            repoID: "google/gemma-4-E2B-it-GGUF",
-            filename: "gemma-4-E2B-it-Q4_K_M.gguf",
-            parameters: "2B (effective)",
-            quantization: "Q4_K_M",
-            sizeBytes: 1_800_000_000,
-            contextLength: 131_072,
-            license: "Gemma Terms of Use"
-        ),
         ModelRecord(
             id: "qwen3-1.7b",
             displayName: "Qwen3 1.7B",
-            repoID: "Qwen/Qwen3-1.7B-GGUF",
+            // Qwen's own repo publishes only Q8_0 of this size, so the
+            // Q4_K_M comes from unsloth's mirror. Verified by scripts/verify-catalogue.sh.
+            repoID: "unsloth/Qwen3-1.7B-GGUF",
             filename: "Qwen3-1.7B-Q4_K_M.gguf",
             parameters: "1.7B",
             quantization: "Q4_K_M",
-            sizeBytes: 1_100_000_000,
+            sizeBytes: 1_107_409_472,
             contextLength: 32_768,
             license: "Apache-2.0",
             toolSupport: .yes

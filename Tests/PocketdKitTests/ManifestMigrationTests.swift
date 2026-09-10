@@ -48,3 +48,45 @@ struct ManifestMigrationTests {
         #expect(ModelRecord.isProjector(filename: "gemma-3-4b-it-Q4_K_M.gguf") == false)
     }
 }
+
+@Suite("Catalogue promises")
+struct CataloguePromiseTests {
+
+    /// Two entries — the first two rows — answered 401 and 404 for weeks. The
+    /// 401 was a gated Hugging Face repo, which cannot work without a token
+    /// this app has no way to supply. `scripts/verify-catalogue.sh` checks the
+    /// URLs over the network; this checks the shape offline so a bad entry
+    /// cannot be added silently.
+    @Test("no catalogue entry points at a known-gated repository")
+    func noGatedRepositories() {
+        // google/* GGUF repos require accepting terms before the API answers.
+        let gatedOwners = ["google/", "meta-llama/", "mistralai/"]
+        for model in ModelCatalog.all {
+            for owner in gatedOwners {
+                #expect(model.repoID.hasPrefix(owner) == false,
+                        "\(model.id) points at \(model.repoID), which is gated")
+            }
+        }
+    }
+
+    @Test("every entry declares a plausible size")
+    func sizesArePlausible() {
+        for model in ModelCatalog.all {
+            // A size of zero, or a wildly wrong one, makes the memory fit badge
+            // a lie — and the badge is what someone trusts before spending
+            // gigabytes of bandwidth.
+            #expect(model.sizeBytes > 100_000_000, "\(model.id) declares an implausible size")
+            #expect(model.sizeBytes < 20_000_000_000)
+            if model.projectorFilename != nil {
+                #expect(model.projectorSizeBytes > 0, "\(model.id) has a projector with no declared size")
+            }
+        }
+    }
+
+    @Test("a tool-capable model is actually in the catalogue")
+    func toolModelExists() {
+        // V4 gates the device tools on a tool-capable model. If the only one
+        // listed cannot be downloaded, the feature is unreachable.
+        #expect(ModelCatalog.all.contains { $0.toolSupport == .yes })
+    }
+}

@@ -250,6 +250,12 @@ enum ChatPage {
         b.appendChild(span);
       }
       col.appendChild(b);
+      if (m.error) {
+        const err = document.createElement("div");
+        err.className = "err-frame";
+        err.textContent = "\u26A0\uFE0E " + m.error;
+        col.appendChild(err);
+      }
       if (m.meta) {
         const meta = document.createElement("div");
         meta.className = "meta";
@@ -346,6 +352,8 @@ enum ChatPage {
       };
       if (system) body.messages.push({ role: "system", content: system });
       for (const m of messages.slice(0, -1)) {
+        // A turn that failed before producing anything is not context.
+        if (m.role === "assistant" && !m.content) continue;
         if (m.images && m.images.length) {
           // OpenAI's typed content parts. Ollama's shape is a flat images[]
           // array instead; the server accepts both, this page speaks OpenAI.
@@ -353,6 +361,7 @@ enum ChatPage {
           for (const src of m.images) parts.push({ type: "image_url", image_url: { url: src } });
           body.messages.push({ role: m.role, content: parts });
         } else {
+          // Only content. An error row is ours, not the model's.
           body.messages.push({ role: m.role, content: m.content });
         }
       }
@@ -419,7 +428,12 @@ enum ChatPage {
         const last = messages[messages.length - 1];
         const secs = (performance.now() - started) / 1000;
         if (failed) {
-          last.content += (last.content ? "\n\n" : "") + "⚠︎ " + failed;
+          // On `last.error`, never appended to `last.content`. The next
+          // send builds history from the transcript, so an error written
+          // into the message came back to the model as its own prior turn
+          // — and it would then apologise for a transport failure it had
+          // never produced.
+          last.error = failed;
         } else if (chunks) {
           last.meta = `${chunks} chunks · ${(chunks / secs).toFixed(1)}/s · ${secs.toFixed(1)}s`;
         } else {

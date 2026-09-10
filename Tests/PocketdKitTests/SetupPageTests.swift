@@ -249,3 +249,34 @@ struct PairingPersistenceTests {
         #expect(await PairingSession(store: .init(defaults: defaults)).snapshot().hasPaired == false)
     }
 }
+
+@Suite("Asking for a new code")
+struct NewCodeTests {
+
+    /// `open()` rebuilt the whole snapshot and dropped `pairedAt`, so tapping
+    /// "Show a new pairing code" hid the API key and every client snippet —
+    /// and the button that did it lived inside the section it hid. `close()`
+    /// had always preserved it; `open()` had not.
+    @Test("a new code does not un-pair you")
+    func openPreservesPairedState() async {
+        let session = PairingSession(store: .init(defaults: nil))
+        let code = await session.open()
+        #expect(await session.redeem(code, from: nil) == .paired)
+        #expect(await session.snapshot().hasPaired)
+
+        _ = await session.open()
+        #expect(await session.snapshot().hasPaired, "the key and snippets must not vanish")
+        #expect(await session.snapshot().isOpen)
+    }
+
+    @Test("a new code does not erase the record of who failed")
+    func openPreservesFailures() async {
+        let session = PairingSession(store: .init(defaults: nil))
+        let code = await session.open()
+        _ = await session.redeem(code == "111111" ? "222222" : "111111", from: "10.0.0.5")
+        #expect(await session.snapshot().failureCount == 1)
+
+        _ = await session.open()
+        #expect(await session.snapshot().lastFailureAddress == "10.0.0.5")
+    }
+}

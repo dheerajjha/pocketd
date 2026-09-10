@@ -114,7 +114,12 @@ struct ModelsView: View {
                     .font(.caption)
             } else if installed {
                 HStack {
-                    if model.loadedModelID == record.id {
+                    if model.loadingModelID == record.id {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("Loading…").font(.caption).foregroundStyle(.secondary)
+                        }
+                    } else if model.loadedModelID == record.id {
                         Label("Loaded", systemImage: "checkmark.circle.fill")
                             .font(.caption)
                             .foregroundStyle(.green)
@@ -139,6 +144,14 @@ struct ModelsView: View {
                     }
                 }
                 .buttonStyle(.bordered)
+            }
+
+            if let paused = model.downloadPaused[record.id] {
+                Text(paused).font(.caption2).foregroundStyle(.orange)
+                Button("Discard partial download", role: .destructive) {
+                    Task { await model.discardPartialDownload(record) }
+                }
+                .font(.caption2)
             }
 
             if let error = model.downloadErrors[record.id] {

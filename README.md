@@ -132,7 +132,6 @@ on screen, rather than letting you find out after 2 GB of bandwidth.
 | SmolLM2 360M | 0.4 GB | Fits | Fits |
 | Llama 3.2 1B | 0.8 GB | Fits | Fits |
 | Qwen3 1.7B | 1.1 GB | Fits | Fits |
-| Gemma 4 E2B | 1.8 GB | Fits | Fits |
 | Llama 3.2 3B | 2.0 GB | Tight | Fits |
 | Qwen3 4B | 2.5 GB | Needs the entitlement | Fits |
 
@@ -238,6 +237,7 @@ Foundation Models means writing one conformance, not touching the routes.
 
 ```bash
 make test        # the package: fast, no simulator
+./scripts/verify-catalogue.sh   # every model URL still resolves, sizes still right
 make app         # regenerate the Xcode project
 make build-sim   # compile the app target (slow: builds llama.cpp)
 make smoke BASE=http://192.168.1.42:11434 KEY=pk-...   # probe a running server

@@ -4,6 +4,7 @@ import PocketdKit
 struct ChatView: View {
     @Environment(AppModel.self) private var model
     var goTo: (AppTab) -> Void = { _ in }
+    private let topAnchor = "pocketd.chat.top"
 
     var body: some View {
         @Bindable var model = model
@@ -29,6 +30,7 @@ struct ChatView: View {
                 } else {
                     ScrollViewReader { proxy in
                         ScrollView {
+                            Color.clear.frame(height: 0).id(topAnchor)
                             if let notice = model.modelSwitchNotice {
                                 HStack(alignment: .top, spacing: 8) {
                                     Image(systemName: "arrow.triangle.2.circlepath")
@@ -58,11 +60,30 @@ struct ChatView: View {
                         }
                         .scrollDismissesKeyboard(.interactively)
                         .onChange(of: model.conversation.last?.content) { _, _ in
+                            // Guarded: with an empty conversation this was
+                            // scrollTo(-1), which left the view holding its
+                            // old offset and showing a black screen with the
+                            // empty state scrolled off the top.
+                            guard !model.conversation.isEmpty else { return }
                             withAnimation {
                                 proxy.scrollTo(model.conversation.count - 1, anchor: .bottom)
                             }
                         }
+                        .onChange(of: model.conversation.isEmpty) { _, isEmpty in
+                            if isEmpty { proxy.scrollTo(topAnchor, anchor: .top) }
+                        }
                     }
+                }
+
+                if let error = model.generationError {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle")
+                        Text(error).font(.footnote)
+                        Spacer()
+                    }
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal)
+                    .padding(.vertical, 6)
                 }
 
                 composer

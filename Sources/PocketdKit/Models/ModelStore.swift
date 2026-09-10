@@ -23,6 +23,57 @@ public enum ModelStoreError: Error, Sendable, Equatable {
     case notInstalled(String)
 }
 
+extension ModelStoreError: LocalizedError {
+    /// Without this the UI printed `httpStatus(401)` at the user. The 401 in
+    /// particular needs explaining rather than showing: it means the Hugging
+    /// Face repository is gated, which no amount of retrying will fix.
+    public var errorDescription: String? {
+        switch self {
+        case .insufficientMemory(let model):
+            "\(model) is larger than this device can hold."
+        case let .insufficientDisk(needed, free):
+            "Needs \(ByteCountFormatter.string(fromByteCount: needed, countStyle: .file)) and only \(ByteCountFormatter.string(fromByteCount: free, countStyle: .file)) is free."
+        case .httpStatus(401), .httpStatus(403):
+            "This model's repository requires a Hugging Face account. Pocketd cannot download it."
+        case .httpStatus(404):
+            "This model is no longer published at that address."
+        case .httpStatus(let code):
+            "The download server answered \(code)."
+        case .notInstalled(let model):
+            "\(model) is not downloaded."
+        }
+    }
+}
+
+/// A download that stopped for a reason that will pass.
+public enum DownloadInterruption: Sendable, Equatable {
+    case connectionLost
+    case offline
+
+    /// iOS suspends the app the moment the user switches away, which drops the
+    /// transfer. That is documented platform behaviour, not a failure, and the
+    /// resume data on disk means the bytes are not lost — so it must not be
+    /// reported as an error, least of all by printing the NSError, whose
+    /// userInfo carries the signed CDN URL and the whole resume blob.
+    public static func from(_ error: any Error) -> DownloadInterruption? {
+        switch (error as NSError).code {
+        case NSURLErrorNetworkConnectionLost, NSURLErrorTimedOut:
+            return .connectionLost
+        case NSURLErrorNotConnectedToInternet, NSURLErrorDataNotAllowed:
+            return .offline
+        default:
+            return nil
+        }
+    }
+
+    public var message: String {
+        switch self {
+        case .connectionLost: "Paused — Pocketd has to stay open to download. Tap to resume."
+        case .offline: "Paused — no network. Tap to resume."
+        }
+    }
+}
+
 /// Owns the model files on disk and the manifest that describes them.
 ///
 /// Downloads resume. This is not a nicety: the files are gigabytes, the device
@@ -91,6 +142,18 @@ public actor ModelStore {
 
     public func localURL(forID id: String) -> URL? {
         manifest[id].map { fileURL(for: $0) }
+    }
+
+    /// Discards a paused download's resume data. The partial bytes live in
+    /// URLSession's own temporary storage, which the system reclaims once
+    /// the resume blob that references them is gone.
+    public func discardPartial(_ model: ModelRecord) {
+        try? FileManager.default.removeItem(at: resumeDataURL(for: model))
+        if model.projectorFilename != nil {
+            try? FileManager.default.removeItem(
+                at: directory.appendingPathComponent("\(model.id).mmproj.resume")
+            )
+        }
     }
 
     public func delete(_ model: ModelRecord) throws {

@@ -35,6 +35,9 @@ final class AppModel {
     private(set) var installed: [ModelRecord] = []
     private(set) var downloads: [String: DownloadProgress] = [:]
     private(set) var downloadErrors: [String: String] = [:]
+    /// Interrupted rather than failed: the bytes are still on disk and the
+    /// next tap resumes them.
+    private(set) var downloadPaused: [String: String] = [:]
     private(set) var loadedModelID: String?
     private(set) var isLoadingModel = false
     let budget: DeviceBudget
@@ -331,6 +334,7 @@ final class AppModel {
     func download(_ model: ModelRecord, allowingOversized: Bool = false) {
         guard downloadTasks[model.id] == nil else { return }
         downloadErrors[model.id] = nil
+        downloadPaused[model.id] = nil
         downloads[model.id] = DownloadProgress(modelID: model.id, receivedBytes: 0, totalBytes: model.sizeBytes)
 
         downloadTasks[model.id] = Task { [store] in
@@ -351,7 +355,15 @@ final class AppModel {
                 }
             } catch {
                 await MainActor.run {
-                    self.downloadErrors[model.id] = String(describing: error)
+                    // Never String(describing:) a URL error here: its userInfo
+                    // carries the signed CDN URL and the entire resume blob,
+                    // and all of it landed on screen.
+                    if let paused = DownloadInterruption.from(error) {
+                        self.downloadPaused[model.id] = paused.message
+                    } else {
+                        self.downloadErrors[model.id] =
+                            (error as? LocalizedError)?.errorDescription ?? "The download failed."
+                    }
                     self.downloads[model.id] = nil
                     self.downloadTasks[model.id] = nil
                 }
@@ -360,9 +372,26 @@ final class AppModel {
     }
 
     func cancelDownload(_ model: ModelRecord) {
+        let kept = downloads[model.id]?.receivedBytes ?? 0
         downloadTasks[model.id]?.cancel()
         downloadTasks[model.id] = nil
         downloads[model.id] = nil
+        // Cancelling keeps the bytes so the next tap resumes. That is the
+        // right behaviour and it was completely invisible: the row reverted
+        // to a plain Download button, indistinguishable from never having
+        // started, while hundreds of megabytes sat on disk with no way to
+        // reclaim them short of deleting the app.
+        if kept > 0 {
+            downloadPaused[model.id] = "Paused — "
+                + ByteCountFormatter.string(fromByteCount: kept, countStyle: .file)
+                + " kept. Tap Download to resume, or Discard to free it."
+        }
+    }
+
+    /// Throws away a paused download's bytes.
+    func discardPartialDownload(_ model: ModelRecord) async {
+        await store.discardPartial(model)
+        downloadPaused[model.id] = nil
     }
 
     func delete(_ model: ModelRecord) async {
@@ -377,16 +406,31 @@ final class AppModel {
     /// `remember: false` for the restore at launch — reloading what was already
     /// chosen should not overwrite the choice, and a fallback certainly should
     /// not silently become the new preference.
+    /// The id currently being loaded, so the row can say so. `isLoadingModel`
+    /// alone greyed out every Load button in the list with no indication of
+    /// which one was working, or that anything was happening at all.
+    private(set) var loadingModelID: String?
+
     func loadModel(_ model: ModelRecord, remember: Bool = true) async {
+        // The engine serialises everything that touches the llama context,
+        // so a load issued mid-generation simply blocked — for minutes, with
+        // every button greyed and nothing on screen explaining why. Cancel
+        // the reply first and say that is what happened.
+        if isGenerating {
+            stopGenerating()
+            generationError = "Stopped the reply to load \(model.displayName)."
+        }
         isLoadingModel = true
-        defer { isLoadingModel = false }
+        loadingModelID = model.id
+        defer { isLoadingModel = false; loadingModelID = nil }
         do {
             try await engine.load(model: model)
             syncLoadedModel(model.id)
             if remember { UserDefaults.standard.set(model.id, forKey: Keys.loadedModel) }
         } catch {
             syncLoadedModel(nil)
-            downloadErrors[model.id] = String(describing: error)
+            downloadErrors[model.id] = (error as? LocalizedError)?.errorDescription
+                ?? "Could not load \(model.displayName)."
         }
     }
 
@@ -403,8 +447,15 @@ final class AppModel {
         let previous = loadedModelID
         loadedModelID = id
         if userInitiated {
-            conversation.removeAll()
-            modelSwitchNotice = nil
+            // Kept, not cleared. Deleting a model asks for confirmation
+            // because the download is expensive; the transcript was thrown
+            // away silently, and it is the thing that cannot be recovered.
+            if previous != nil, !conversation.isEmpty {
+                modelSwitchNotice = "Switched to \(id ?? "another model"). "
+                    + "This conversation was started with \(previous ?? "a different model")."
+            } else {
+                modelSwitchNotice = nil
+            }
         } else if previous != nil, !conversation.isEmpty {
             modelSwitchNotice = "A request from another device loaded \(id ?? "another model"). This conversation was started with \(previous ?? "a different model")."
         }
@@ -412,6 +463,9 @@ final class AppModel {
 
     /// Shown in Chat when the resident model changed underneath the user.
     private(set) var modelSwitchNotice: String?
+    /// Transport failures live here rather than in the transcript, so they
+    /// are never sent back to the model as prior context.
+    private(set) var generationError: String?
 
     func dismissModelSwitchNotice() { modelSwitchNotice = nil }
 
@@ -421,6 +475,7 @@ final class AppModel {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isGenerating, loadedModelID != nil else { return }
         draft = ""
+        generationError = nil
         conversation.append(.user(text))
         conversation.append(.assistant(""))
         isGenerating = true
@@ -452,9 +507,13 @@ final class AppModel {
                 }
             } catch {
                 await MainActor.run {
-                    if !self.conversation.isEmpty {
-                        self.conversation[self.conversation.count - 1].content += "\n\n_Error: \(error)_"
-                    }
+                    // Kept OUT of the message. Appending it made the error
+                    // part of the assistant's turn, and the next send
+                    // replayed it as something the model had said — so it
+                    // would then explain its own transport failure back to
+                    // the user as though it were a reply.
+                    self.generationError = (error as? LocalizedError)?.errorDescription
+                        ?? "The reply could not be completed."
                 }
             }
             await MainActor.run { self.isGenerating = false }

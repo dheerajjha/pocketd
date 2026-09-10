@@ -1,4 +1,4 @@
-.PHONY: test app build-sim smoke device-install clean
+.PHONY: test app build-sim smoke catalogue device-install clean
 
 # The package is the part that CI can check in seconds without a simulator.
 test:
@@ -53,6 +53,12 @@ device-install: app
 		build
 	xcrun devicectl device install app --device $(DEVICE) \
 		.build/device/Build/Products/Debug-iphoneos/Pocketd.app
+
+# Two catalogue entries answered 401 and 404 for weeks — the first two rows of
+# the list, so the first thing a new user tapped always failed. Nothing in the
+# build could see it.
+catalogue:
+	./scripts/verify-catalogue.sh
 
 clean:
 	rm -rf .build Pocketd.xcodeproj
