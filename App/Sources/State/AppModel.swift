@@ -1,4 +1,5 @@
 import Foundation
+import LocalLLMClient
 import Observation
 import PocketdKit
 import SwiftUI
@@ -86,6 +87,7 @@ final class AppModel {
         static let serverShouldRun = "pocketd.serverShouldRun"
         static let autoOffloadInBackground = "pocketd.autoOffloadInBackground"
         static let idleOffloadSeconds = "pocketd.idleOffloadSeconds"
+        static let personalDataTools = "pocketd.personalDataTools"
     }
 
     init() {
@@ -118,16 +120,15 @@ final class AppModel {
                 ?? directory.appendingPathComponent("Conversations")
         )
 
+        // Read before the engine exists rather than from the stored property,
+        // because property observers do not run during initialisation: reading
+        // `personalDataToolsEnabled` here would see its declared default and
+        // launch with the tools off for someone who turned them on.
+        let toolsEnabled = UserDefaults.standard.bool(forKey: Keys.personalDataTools)
         let engine = LlamaEngine(
             fileURL: { store.fileURL(for: $0) },
             projectorURL: { store.projectorURL(for: $0) },
-            // Empty by default, and that is the shipping configuration:
-            // registering any tool injects a schema preamble into every prompt,
-            // whether or not the user ever asks for one. Launch with
-            // `-pocketd-selftest-tool` to exercise the tool-calling loop on a
-            // device without needing EventKit, a permission prompt or a
-            // calendar with anything in it.
-            tools: ProcessInfo.processInfo.arguments.contains("-pocketd-selftest-tool") ? [EchoTool()] : []
+            tools: Self.tools(personalData: toolsEnabled)
         )
         self.engine = engine
 
@@ -160,6 +161,7 @@ final class AppModel {
         // touched the switch.
         autoOffloadInBackground = UserDefaults.standard.object(forKey: Keys.autoOffloadInBackground) as? Bool ?? true
         idleOffloadSeconds = UserDefaults.standard.integer(forKey: Keys.idleOffloadSeconds)
+        personalDataToolsEnabled = toolsEnabled
     }
 
     func bootstrap() async {
@@ -458,6 +460,7 @@ final class AppModel {
         if loadedModelID == model.id {
             await engine.unload()
             syncLoadedModel(nil)
+            await recalibrateAfterUnload()
         }
         try? await store.delete(model)
         installed = await store.installed()
@@ -486,6 +489,11 @@ final class AppModel {
         do {
             try await engine.load(model: model)
             syncLoadedModel(model.id)
+            // This model is resident right now, so its estimate is no longer a
+            // prediction — it is a measurement of what this device tolerates.
+            // Recording it is what makes the next verdict better than a guess.
+            budget.recordSuccessfulLoad(of: model)
+            await store.updateBudget(budget)
             if remember { UserDefaults.standard.set(model.id, forKey: Keys.loadedModel) }
         } catch {
             syncLoadedModel(nil)
@@ -512,6 +520,7 @@ final class AppModel {
             generationError = "Stopped the reply to offload the model."
         }
         await engine.unload()
+        await recalibrateAfterUnload()
         syncLoadedModel(nil)
         offloadNotice = serverShouldRun
             ? "Memory freed. The next request from a connected device loads it again."
@@ -671,6 +680,119 @@ final class AppModel {
         dismissedDownloads.remove(id)
     }
 
+    // MARK: - Assistant tools
+
+    /// Whether the calendar and reminder tools are registered with the engine.
+    ///
+    /// Off by default, and it has to be a decision rather than a nicety.
+    /// Registering a tool does not wait to be useful: the library appends every
+    /// schema plus a fixed instruction preamble to the system message of
+    /// *every* prompt, so a question about pasta is charged for a calendar the
+    /// model was never going to open. `LlamaEngine.promptOverheadTokens`
+    /// measures that and `ContextGuard` reserves it, which on a 4K window is a
+    /// few hundred tokens of conversation the user no longer has.
+    var personalDataToolsEnabled = false {
+        didSet {
+            guard personalDataToolsEnabled != oldValue else { return }
+            UserDefaults.standard.set(personalDataToolsEnabled, forKey: Keys.personalDataTools)
+            Task { await applyPersonalDataTools() }
+        }
+    }
+
+    /// What the engine did with the switch, and why.
+    ///
+    /// Settings needs this because the switch is one thing and the effect is
+    /// another: `personalDataToolsEnabled` says what the user asked for, and
+    /// this says what the model currently in memory will actually be given. The
+    /// two disagreed silently before, which is how a user ends up with a switch
+    /// that is on, a calendar that is never read, and no way to find out why.
+    private(set) var personalDataToolGate: ToolGate.Decision = .noModelLoaded
+
+    private func refreshToolGate() async {
+        personalDataToolGate = await engine.toolGate
+    }
+
+    /// What iOS says about each entity right now, for Settings to show.
+    ///
+    /// Kept rather than read on demand because `EKEventStore.authorizationStatus`
+    /// is a synchronous TCC lookup that a SwiftUI body would run on every
+    /// redraw, and because the interesting transitions — the prompt being
+    /// answered, the user coming back from iOS Settings — are events, not
+    /// polling.
+    private(set) var personalDataAuthorization: [PersonalDataEntity: PersonalDataAuthorization] = [:]
+
+    /// What gets registered for a given state of the switch.
+    ///
+    /// The self-test tool is independent of it: `-pocketd-selftest-tool`
+    /// exercises the tool-calling loop on a device without needing EventKit, a
+    /// permission prompt or a calendar with anything in it, and it has to keep
+    /// working whether or not the real tools are on.
+    private static func tools(personalData: Bool) -> [any LLMTool] {
+        var registered: [any LLMTool] = []
+        if personalData {
+            registered.append(CalendarEventsTool())
+            registered.append(RemindersTool())
+        }
+        if ProcessInfo.processInfo.arguments.contains("-pocketd-selftest-tool") {
+            registered.append(EchoTool())
+        }
+        return registered
+    }
+
+    /// Asks for the permissions, then tells the engine what it is carrying.
+    ///
+    /// The prompt goes here, at the switch, and not at first tool use. iOS puts
+    /// it up as a modal alert, and first use is in the middle of a generation:
+    /// the engine is holding its gate, the stream is open and producing
+    /// nothing, and the user is being asked a question about their calendar
+    /// with no visible connection to the sentence they typed. Whatever they tap
+    /// under those conditions is not really a decision. At the switch it is one
+    /// — they have just said the word "calendar" themselves — and it is also
+    /// the only moment that leaves Settings able to show what iOS decided.
+    ///
+    /// The tools still ask again at use, because `EventAccess.requestReadAccess`
+    /// is where a permission that changed while the app was backgrounded gets
+    /// noticed. Asking twice costs nothing: iOS shows its prompt once, and
+    /// every later call returns the standing answer without any UI.
+    private func applyPersonalDataTools() async {
+        if personalDataToolsEnabled {
+            for entity in PersonalDataEntity.allCases {
+                personalDataAuthorization[entity] = await EventAccess.shared.requestReadAccess(to: entity)
+            }
+        }
+        // Not a reload. The engine records the new set and rebuilds its client
+        // on the next request that needs one, so a user who flips the switch
+        // and puts the phone down pays nothing at all.
+        await engine.updateTools(Self.tools(personalData: personalDataToolsEnabled))
+    }
+
+    /// Re-reads what iOS thinks, without prompting.
+    ///
+    /// Settings calls this on appear: the one way a granted permission becomes
+    /// a denied one is the user leaving for iOS Settings and coming back, and
+    /// nothing about that trip tells this process anything.
+    func refreshPersonalDataAuthorization() {
+        // The gate is re-read whether or not the switch is on: it is what the
+        // row shows to explain an inert switch, and the trip to iOS Settings is
+        // not the only thing that can have happened while this screen was away.
+        Task { await refreshToolGate() }
+        guard personalDataToolsEnabled else { return }
+        for entity in PersonalDataEntity.allCases {
+            personalDataAuthorization[entity] = EventAccess.authorization(for: entity)
+        }
+    }
+
+
+    /// Takes a memory reading now that nothing is resident.
+    ///
+    /// Only ever called straight after an unload. A reading taken with a model
+    /// in memory measures the model rather than the device, and the running
+    /// maximum this feeds is only meaningful if every sample is comparable.
+    private func recalibrateAfterUnload() async {
+        budget.recordCleanStateMemory()
+        await store.updateBudget(budget)
+    }
+
     // MARK: - Idle residency
 
     /// Release the model when the app is backgrounded. On by default: a
@@ -730,6 +852,7 @@ final class AppModel {
         guard Date().timeIntervalSince(lastAny) >= Double(idleOffloadSeconds) else { return }
 
         await engine.unload()
+        await recalibrateAfterUnload()
         syncLoadedModel(nil, userInitiated: false)
         autoReleased = (resident, .idle)
     }
@@ -795,6 +918,7 @@ final class AppModel {
         // having quit itself.
         if isGenerating { stopGenerating() }
         await engine.unload()
+        await recalibrateAfterUnload()
         syncLoadedModel(nil, userInitiated: false)
         autoReleased = (resident, .background)
     }
@@ -823,6 +947,12 @@ final class AppModel {
         guard id != loadedModelID else { return }
         let previous = loadedModelID
         loadedModelID = id
+        // Whether the assistant tools are live is a property of the resident
+        // model, so it is re-read exactly where the resident model changes —
+        // which includes the swaps this app did not initiate. A network client
+        // loading Llama 3.2 1B silently turns the tools off, and the Settings
+        // row has to say so rather than keep showing the last model's answer.
+        Task { await refreshToolGate() }
         if userInitiated {
             // Kept, not cleared. Deleting a model asks for confirmation
             // because the download is expensive; the transcript was thrown
@@ -861,6 +991,21 @@ final class AppModel {
         var messages: [ChatMessage] = []
         if !systemPrompt.isEmpty { messages.append(.system(systemPrompt)) }
         messages.append(contentsOf: conversation.dropLast())
+        // Unconditional, unlike the tools, because it is nearly free and
+        // because without it the assistant is wrong rather than merely
+        // unhelpful: a model that does not know the date answers "what's on
+        // tomorrow" from whenever its training data stopped, and says it with
+        // the same confidence as everything else. See `DateContext` for why
+        // this is a sentence and not a `get_current_datetime` tool.
+        //
+        // It does cost one thing, and it is worth naming: the string carries a
+        // clock time, so it changes between turns, and LocalLLMClient's prompt
+        // cache is a prefix match on the rendered text. Crossing a minute
+        // boundary mid-conversation therefore re-prefills what was already
+        // decoded. Prefill is the cheap half of a generation and the trade is
+        // an obviously right one — an answer that is a second slower against an
+        // answer that is wrong about what day it is.
+        messages = DateContext.inject(into: messages)
 
         // The Chat tab is a human holding the phone, which is the one origin
         // allowed to reach personal data. Every other path — including the

@@ -44,6 +44,54 @@ enum MessageMarkdown {
     ///   as a paragraph full of backticks and asterisks until the closing fence
     ///   lands, at which point the whole reply reflows. Code that arrives as
     ///   code stays code.
+    /// Splits a reasoning model's `<think>` block off the front of a reply.
+    ///
+    /// Qwen3 opens almost every answer with several hundred words of working,
+    /// and rendering it as prose buries the answer below a screen of the model
+    /// talking to itself — which is exactly the model that turned out to be the
+    /// one able to use tools, so this is not a corner case.
+    ///
+    /// The close tag may not have arrived yet. An unterminated block is all
+    /// reasoning and no answer, which is the correct reading mid-stream and
+    /// stops the answer flickering in and out as tokens land.
+    static func splitReasoning(from text: String) -> (reasoning: String?, answer: String, isComplete: Bool) {
+        let open = "<think>"
+        let close = "</think>"
+        // Plural, and that is not defensive coding. A tool turn runs the model
+        // twice — once to decide on the call, once to speak with the result —
+        // and both rounds land in one message, so a reply that used a tool
+        // carries two reasoning blocks. Stripping only the first left the
+        // second rendering as literal `<think>` in the bubble.
+        var rest = Substring(text)
+        var collected: [String] = []
+
+        while true {
+            let trimmed = rest.drop { $0.isWhitespace }
+
+            // A half-arrived opening tag. Rendering `<think` as the answer and
+            // then retracting it one token later is the same flicker the block
+            // parser holds markers back to avoid; the neutral placeholder is
+            // right here, because we genuinely do not know yet. Only `<` is
+            // ambiguous with real prose — no other prefix of `<think>` opens a
+            // plausible reply — so at most one character waits one token.
+            if !trimmed.isEmpty, trimmed.count < open.count, open.hasPrefix(trimmed) {
+                return (collected.isEmpty ? nil : collected.joined(separator: "\n\n"), "", true)
+            }
+            guard trimmed.hasPrefix(open) else { break }
+
+            let afterOpen = trimmed.dropFirst(open.count)
+            guard let closeRange = afterOpen.range(of: close) else {
+                collected.append(String(afterOpen))
+                return (collected.joined(separator: "\n\n"), "", false)
+            }
+            collected.append(String(afterOpen[..<closeRange.lowerBound]))
+            rest = afterOpen[closeRange.upperBound...]
+        }
+
+        guard !collected.isEmpty else { return (nil, text, true) }
+        return (collected.joined(separator: "\n\n"), String(rest), true)
+    }
+
     static func blocks(of text: String) -> [MessageBlock] {
         let lines = text.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
         var blocks: [MessageBlock] = []

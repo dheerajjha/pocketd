@@ -7,6 +7,15 @@ struct SettingsView: View {
     @State private var portText = ""
     @FocusState private var isPortFocused: Bool
     @State private var showKeyWarning = false
+    @Environment(\.openURL) private var openURL
+
+    /// The display name of whatever is resident, for the sentence under the
+    /// personal-data switch. Falls back to the id: a model added through search
+    /// has no curated name, and naming it badly is better than not naming it.
+    private var loadedModelName: String {
+        guard let id = model.loadedModelID else { return "No model" }
+        return model.catalog.first { $0.id == id }?.displayName ?? id
+    }
 
     /// nil when the field is a usable port.
     private var portProblem: String? {
@@ -154,6 +163,58 @@ struct SettingsView: View {
                         .lineLimit(2...6)
                 }
 
+                // Alongside Memory rather than in the Apply group: this changes
+                // what the app does, not what the server is configured with,
+                // and it puts a permission prompt on screen — a switch that
+                // asks iOS for your calendar and then waits for a second tap
+                // before meaning anything reads as broken.
+                Section {
+                    Toggle("Read calendar and reminders", isOn: $model.personalDataToolsEnabled)
+                    if model.personalDataToolsEnabled {
+                        // Above the permission warnings, because it outranks
+                        // them: a model that will never call the tools makes
+                        // the calendar permission beside the point. Shown even
+                        // when the answer is yes, because "on" and "working"
+                        // were the same word here until they were not, and the
+                        // only way to make the switch mean what it looks like
+                        // it means is to say which model is honouring it.
+                        if let note = model.personalDataToolGate.explanation(modelName: loadedModelName) {
+                            Text(note)
+                                .font(.footnote)
+                                .foregroundStyle(model.personalDataToolGate.isRefusal ? Color.orange : Color.secondary)
+                        }
+                        ForEach(PersonalDataEntity.allCases, id: \.self) { entity in
+                            if let status = model.personalDataAuthorization[entity], !status.canRead {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(entity.noun.capitalized)
+                                    // The sentence the tool itself would hand
+                                    // the model, shown to the user instead. One
+                                    // wording for one problem, and it already
+                                    // names the exact screen.
+                                    Text(status.explanation(for: entity))
+                                        .font(.footnote)
+                                        .foregroundStyle(.orange)
+                                }
+                            }
+                        }
+                        if model.personalDataAuthorization.values.contains(where: { !$0.canRead }) {
+                            // Opens the front door and no further: the calendar
+                            // and reminder switches live under Privacy &
+                            // Security, per entity, and no app can deep-link a
+                            // user to them. The line above says which corridor.
+                            Button("Open iOS Settings") {
+                                if let url = URL(string: UIApplication.openSettingsURLString) {
+                                    openURL(url)
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Personal data")
+                } footer: {
+                    Text("Off, the assistant answers from the conversation alone. On, it can say what is on today or what is overdue — and every other reply has less room, because both tools are described to the model before it reads a word you typed, whether or not the answer needs them. On a small model with a 4K window that is a few hundred words of conversation gone. Requests from other devices never reach this data either way.")
+                }
+
                 Section {
                     Button("Apply") {
                         // Guarded by portProblem, so the silent fallback that
@@ -181,6 +242,9 @@ struct SettingsView: View {
             .onAppear {
                 draft = model.configuration
                 portText = String(model.configuration.port)
+                // The only way a grant becomes a refusal is a trip to iOS
+                // Settings, and nothing about coming back tells this process.
+                model.refreshPersonalDataAuthorization()
             }
             .confirmationDialog(
                 "Generate a new API key?",

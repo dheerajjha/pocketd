@@ -8,6 +8,57 @@ import Testing
 @Suite("Client compatibility")
 struct CompatibilityTests {
 
+    @Test("the prompt a client sends is the prompt the model gets")
+    func serverDoesNotRewriteTheClientsPrompt() async throws {
+        // The Chat tab prepends `DateContext` to its own system turn, because a
+        // model that does not know the date answers "what's on tomorrow" from
+        // whenever its training data stopped. That injection stops at the socket,
+        // and deliberately.
+        //
+        // Two reasons, both about what a client is promised. A seed is the
+        // stronger one: the engine rebuilds its whole context whenever a request
+        // pins randomness, precisely so that a seed means what the client thinks
+        // it means — and a system message carrying a clock would make the same
+        // seeded request answer differently at 14:31 than it did at 14:30, with
+        // nothing in the response saying why. The second is plainer: this
+        // endpoint claims to be a drop-in for Ollama and llama-server, and
+        // neither edits the messages you send. A network client that wants the
+        // date already knows it and can say so; the phone's own user cannot,
+        // because the app writes their prompt for them.
+        let engine = EchoEngine()
+        let harness = try await TestServer.start(engine: engine)
+        defer { Task { await harness.stop() } }
+
+        let sent = [
+            OpenAI.Message(role: "system", content: "You are terse."),
+            OpenAI.Message(role: "user", content: "hi")
+        ]
+        let (status, _) = try await harness.send(try harness.request("POST", "/v1/chat/completions", json:
+            OpenAI.ChatCompletionRequest(model: "echo", messages: sent, stream: false)
+        ))
+        #expect(status == 200)
+
+        let seen = await engine.receivedMessages
+        #expect(seen.count == 2, "no turn may be invented on the caller's behalf")
+        #expect(seen.first?.role == .system)
+        #expect(seen.first?.content == "You are terse.", "the client's system prompt arrives unedited")
+    }
+
+    @Test("a client that sends no system turn is not given one")
+    func serverInventsNoSystemTurn() async throws {
+        let engine = EchoEngine()
+        let harness = try await TestServer.start(engine: engine)
+        defer { Task { await harness.stop() } }
+
+        let (status, _) = try await harness.send(try harness.request("POST", "/api/chat", json:
+            Ollama.ChatRequest(model: "echo", messages: [Ollama.Message(role: "user", content: "hi")], stream: false)
+        ))
+        #expect(status == 200)
+
+        let seen = await engine.receivedMessages
+        #expect(seen.contains { $0.role == .system } == false)
+    }
+
     @Test("answers a HEAD probe at the root")
     func headRoot() async throws {
         let harness = try await TestServer.start()

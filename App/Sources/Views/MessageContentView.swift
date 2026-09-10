@@ -9,15 +9,71 @@ import SwiftUI
 struct MessageContentView: View {
     let text: String
 
+    @State private var isReasoningExpanded = false
+
     var body: some View {
+        let split = MessageMarkdown.splitReasoning(from: text)
+        VStack(alignment: .leading, spacing: 10) {
+            if let reasoning = split.reasoning, !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                reasoningBlock(reasoning, isComplete: split.isComplete)
+            }
+            answer(of: split.answer, hadReasoning: split.reasoning != nil, isComplete: split.isComplete)
+        }
+    }
+
+    /// Collapsed by default, and it stays collapsed once the answer starts.
+    ///
+    /// Deliberately not auto-expanding while the model thinks: a block that
+    /// unfurls and then snaps shut moves the answer under the reader's eyes at
+    /// the exact moment it becomes worth reading.
+    @ViewBuilder
+    private func reasoningBlock(_ reasoning: String, isComplete: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.snappy) { isReasoningExpanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "brain")
+                    Text(isComplete ? "Thought it through" : "Thinking…")
+                    Image(systemName: "chevron.down")
+                        .font(.caption2)
+                        .rotationEffect(.degrees(isReasoningExpanded ? 0 : -90))
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isComplete ? "The model's reasoning" : "The model is reasoning")
+            .accessibilityValue(isReasoningExpanded ? "Expanded" : "Collapsed")
+
+            if isReasoningExpanded {
+                Text(reasoning.trimmingCharacters(in: .whitespacesAndNewlines))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 8)
+                    .overlay(alignment: .leading) {
+                        Rectangle().fill(.secondary.opacity(0.3)).frame(width: 2)
+                    }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func answer(of text: String, hadReasoning: Bool, isComplete: Bool) -> some View {
         let blocks = MessageMarkdown.blocks(of: text)
 
         if blocks.isEmpty {
             // Either nothing has arrived yet, or all that has arrived is half a
-            // delimiter. Both mean the same thing to a reader.
-            Text("…")
-                .foregroundStyle(.secondary)
-                .accessibilityLabel("Replying")
+            // delimiter. Both mean the same thing to a reader — except while a
+            // reasoning block is still open, where "Thinking…" above already
+            // says it and a second placeholder is just noise.
+            if !hadReasoning || isComplete {
+                Text("…")
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Replying")
+            }
         } else {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in

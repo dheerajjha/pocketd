@@ -30,6 +30,16 @@ public enum GGUFMetadata {
     /// looked up until this one has been read.
     public static let architectureKey = "general.architecture"
 
+    /// llama.cpp's `LLM_KV_GENERAL_SIZE_LABEL`: `"1B"`, `"1.7B"`, `"135M"`.
+    ///
+    /// The parameter count as the conversion wrote it, which is the only
+    /// version of that number this app can get for a model nobody curated —
+    /// `HuggingFaceSearch` has no figure to put in `ModelRecord.parameters` and
+    /// writes an em dash. It is also the more truthful of the two where both
+    /// exist: the catalogue calls Gemma 4 E2B "2B effective", describing what
+    /// it costs to run, while its own header says 4.6B.
+    public static let sizeLabelKey = "general.size_label"
+
     /// One string per vocabulary entry. The only thing anyone here wants from
     /// it is how many there are, which is why `Value` carries an array's length
     /// and not its contents: a quarter of a million Swift `String`s built to
@@ -59,6 +69,22 @@ public enum GGUFMetadata {
     /// cannot, and should assume the more expensive answer.
     public static func chatTemplate(inFileAt url: URL) -> String? {
         string(forKey: chatTemplateKey, inFileAt: url)
+    }
+
+    /// Everything `ToolGate` needs from a model's header, read in one pass.
+    ///
+    /// One function rather than two accessors because both are wanted at the
+    /// same instant — a load — and each call maps the file again. A model is a
+    /// gigabyte of it.
+    public static func toolEvidence(inFileAt url: URL) -> (chatTemplate: String?, sizeLabel: String?) {
+        guard let found = values(forKeys: [chatTemplateKey, sizeLabelKey], inFileAt: url) else {
+            return (nil, nil)
+        }
+        func text(_ key: String) -> String? {
+            guard case .string(let value)? = found[key] else { return nil }
+            return value
+        }
+        return (text(chatTemplateKey), text(sizeLabelKey))
     }
 
     public static func string(forKey key: String, inFileAt url: URL) -> String? {

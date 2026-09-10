@@ -21,6 +21,11 @@ public enum ModelStoreError: Error, Sendable, Equatable {
     case insufficientDisk(needed: Int64, free: Int64)
     case httpStatus(Int)
     case notInstalled(String)
+    /// The bytes on disk are not the bytes that were promised. Carries both
+    /// numbers because "incomplete" on its own is not something a user can act
+    /// on, and because the gap is the evidence that this was truncation rather
+    /// than a wrong catalogue entry.
+    case incompleteDownload(model: String, expected: Int64, actual: Int64)
 }
 
 extension ModelStoreError: LocalizedError {
@@ -41,6 +46,13 @@ extension ModelStoreError: LocalizedError {
             "The download server answered \(code)."
         case .notInstalled(let model):
             "\(model) is not downloaded."
+        case let .incompleteDownload(model, expected, actual):
+            """
+            \(model) did not download completely — \
+            \(ByteCountFormatter.string(fromByteCount: actual, countStyle: .file)) of \
+            \(ByteCountFormatter.string(fromByteCount: expected, countStyle: .file)) arrived. \
+            The partial file has been removed; download it again.
+            """
         }
     }
 }
@@ -71,6 +83,49 @@ public enum DownloadInterruption: Sendable, Equatable {
         case .connectionLost: "Paused — Pocketd has to stay open to download. Tap to resume."
         case .offline: "Paused — no network. Tap to resume."
         }
+    }
+}
+
+/// What the server said this transfer would deliver, watched as it happens.
+///
+/// The size to check a finished download against is a genuine choice, and the
+/// catalogue is the wrong end of it. `ModelRecord.sizeBytes` is metadata typed
+/// by hand and it has been wrong in this project by 1.3 GB on a Gemma entry —
+/// checking against it makes a typo indistinguishable from a truncated file and
+/// turns a cosmetic bug into a model nobody can ever install. `Content-Length`
+/// is what *this* transfer promised, from the CDN that is actually serving the
+/// object, and truncation is by definition "fewer bytes arrived than were
+/// promised". So the announcement wins wherever there is one, and the catalogue
+/// is only the fallback for a server that sends no length at all — which is
+/// also the one case where URLSession itself cannot notice a short read.
+///
+/// `expected` is tracked against `written` because a resumed transfer can
+/// report the length of the *range* rather than of the file. An announcement
+/// smaller than the bytes that actually landed is not a statement about the
+/// file's size, so it is discarded rather than used to reject a complete
+/// download for being too long.
+// The delegate calls in on URLSession's queue while the actor reads the result,
+// so the lock is doing real work — the same arrangement, and the same reason,
+// as `FileDownloader`'s.
+private final class AnnouncedSize: @unchecked Sendable {
+    private let lock = NSLock()
+    private var expected: Int64 = 0
+    private var written: Int64 = 0
+
+    func observe(written bytes: Int64, expected total: Int64) {
+        lock.lock()
+        defer { lock.unlock() }
+        if total > expected { expected = total }
+        if bytes > written { written = bytes }
+    }
+
+    /// The announced total, or `nil` when there was none or it contradicts the
+    /// transfer.
+    var bytes: Int64? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard expected > 0, expected >= written else { return nil }
+        return expected
     }
 }
 
@@ -167,12 +222,7 @@ public actor ModelStore {
     }
 
     public func delete(_ model: ModelRecord) throws {
-        try? FileManager.default.removeItem(at: fileURL(for: model))
-        try? FileManager.default.removeItem(at: resumeDataURL(for: model))
-        if let projector = projectorURL(for: model) {
-            try? FileManager.default.removeItem(at: projector)
-            try? FileManager.default.removeItem(at: directory.appendingPathComponent("\(model.id).mmproj.resume"))
-        }
+        discardFiles(for: model)
         manifest[model.id] = nil
         persist()
     }
@@ -217,11 +267,13 @@ public actor ModelStore {
         let resumeData = try? Data(contentsOf: resumeURL)
         let declaredSize = model.sizeBytes
         let id = model.id
+        let announced = AnnouncedSize()
 
         let downloader = FileDownloader(
             destination: destination,
             resumeDataURL: resumeURL
         ) { received, expected in
+            announced.observe(written: received, expected: expected)
             onProgress(DownloadProgress(
                 modelID: id,
                 receivedBytes: received,
@@ -241,6 +293,7 @@ public actor ModelStore {
             guard resumeData != nil, !(error is CancellationError) else { throw error }
             try? FileManager.default.removeItem(at: resumeURL)
             let retry = FileDownloader(destination: destination, resumeDataURL: resumeURL) { received, expected in
+                announced.observe(written: received, expected: expected)
                 onProgress(DownloadProgress(
                     modelID: id,
                     receivedBytes: received,
@@ -250,13 +303,29 @@ public actor ModelStore {
             try await run(retry, for: model, resumeData: nil)
         }
 
+        // Before anything else touches these bytes. A GGUF that is short by a
+        // chunk does not fail politely at the reader — it takes llama.cpp, and
+        // with it the process, and on a phone that is serving there is no crash
+        // dialog to see: what happens is that a laptop's connection drops
+        // mid-answer with no error anywhere.
+        let weightsBytes = try verifiedSize(
+            of: destination,
+            announced: announced.bytes,
+            catalogued: declaredSize,
+            model: model
+        )
+
         // The projector is useless on its own and the weights are useless
         // without it for a vision model, so the model is not marked installed
-        // until both are on disk.
+        // until both are on disk — and, since this landed, until both are the
+        // size they were meant to be.
+        var projectorBytes = model.projectorSizeBytes
         if let remote = model.projectorURL, let local = projectorURL(for: model) {
             let projectorResume = directory.appendingPathComponent("\(model.id).mmproj.resume")
             let total = declaredSize + model.projectorSizeBytes
-            let downloader = FileDownloader(destination: local, resumeDataURL: projectorResume) { received, _ in
+            let projectorAnnounced = AnnouncedSize()
+            let downloader = FileDownloader(destination: local, resumeDataURL: projectorResume) { received, expected in
+                projectorAnnounced.observe(written: received, expected: expected)
                 onProgress(DownloadProgress(
                     modelID: id,
                     receivedBytes: declaredSize + received,
@@ -275,16 +344,99 @@ public actor ModelStore {
             } onCancel: {
                 downloader.cancelSavingResumeData()
             }
+            projectorBytes = try verifiedSize(
+                of: local,
+                announced: projectorAnnounced.bytes,
+                catalogued: model.projectorSizeBytes,
+                model: model
+            )
         }
 
         // The file exists now, so the memory estimate stops being a guess. Read
         // once, here: the header never changes, and every fit badge and refusal
         // from this point on is computed from the model's real shape rather
         // than from a flat percentage of its file size.
-        manifest[model.id] = model.readingDimensions(fromFileAt: fileURL(for: model))
+        var installed = model.readingDimensions(fromFileAt: destination)
+        // And the sizes stop being a guess too. Verification has just measured
+        // both files, so keeping the catalogue's numbers in the manifest would
+        // leave every later estimate — and `largestSuccessfulLoad`, which is
+        // supposed to be a proof — resting on the same hand-typed figure that
+        // was once out by 1.3 GB.
+        installed.sizeBytes = weightsBytes
+        installed.projectorSizeBytes = projectorBytes
+        manifest[model.id] = installed
         persist()
-        let total = declaredSize + model.projectorSizeBytes
+        let total = weightsBytes + projectorBytes
         onProgress(DownloadProgress(modelID: id, receivedBytes: total, totalBytes: total))
+    }
+
+    /// The file's real size, or a thrown error and no file at all.
+    ///
+    /// Deliberately not a hash. PocketPal's comment on the same check
+    /// (`src/utils/index.ts`) is that hashing is unreliable and expensive, and
+    /// on a phone that is the whole story: SHA-256 over a 4 GB GGUF is tens of
+    /// seconds of wall clock and battery at the exact moment the user is
+    /// waiting to use the thing, to catch a class of corruption — silently
+    /// flipped bytes in an otherwise complete transfer — that TLS and TCP
+    /// checksums have already made vanishingly rare. Truncation is the failure
+    /// that actually happens, and truncation is visible in the length.
+    ///
+    /// The 0.1% band is PocketPal's number and it is sized for the fallback
+    /// path: a hand-written catalogue figure is off by rounding, not by a
+    /// chunk. On a 4 GB model that is 4 MB of slack, orders of magnitude below
+    /// any dropped-connection truncation and orders above any rounding.
+    ///
+    /// The comparison is two-sided. A file that is too *long* is a resume that
+    /// went wrong — a server that ignored the Range header and sent the whole
+    /// body to be appended to bytes already on disk — and the result is exactly
+    /// as unloadable as a short one.
+    private func verifiedSize(
+        of file: URL,
+        announced: Int64?,
+        catalogued: Int64,
+        model: ModelRecord
+    ) throws -> Int64 {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: file.path)
+        let actual = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+
+        // No reference at all: a server that announced nothing, for a record
+        // whose size the catalogue leaves at zero — which is most projectors
+        // and every model added at runtime through `/api/models/add`. There is
+        // nothing to compare against, and inventing a comparison would refuse
+        // downloads that are fine.
+        let expected = announced ?? catalogued
+        guard expected > 0 else { return actual }
+
+        let drift = abs(Double(actual - expected)) / Double(expected)
+        guard drift > Self.sizeTolerance else { return actual }
+
+        // Nothing half-installed survives. The bad file goes, and so does the
+        // resume blob beside it: `FileDownloader` already calls a blob that
+        // produced a failed transfer poison, because it is replayed on every
+        // subsequent attempt and would make the model permanently unreachable.
+        // Both files go even when only one was wrong — a weights file the
+        // manifest does not list is a multi-gigabyte leak that `delete` can
+        // never be called on.
+        discardFiles(for: model)
+        throw ModelStoreError.incompleteDownload(
+            model: model.displayName,
+            expected: expected,
+            actual: actual
+        )
+    }
+
+    /// The proportional difference between what was promised and what arrived
+    /// that still counts as the same file.
+    static let sizeTolerance = 0.001
+
+    /// Removes every byte this model owns, leaving the manifest alone.
+    private func discardFiles(for model: ModelRecord) {
+        try? FileManager.default.removeItem(at: fileURL(for: model))
+        try? FileManager.default.removeItem(at: resumeDataURL(for: model))
+        if let projector = projectorURL(for: model) {
+            try? FileManager.default.removeItem(at: projector)
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent("\(model.id).mmproj.resume"))
+        }
     }
 
     private func run(
@@ -312,13 +464,38 @@ public actor ModelStore {
         // A nil capacity is a failed query, not a full disk; a zero capacity is
         // a full disk. Conflating them lets a download start on a full device
         // and die mid-transfer with an opaque CFNetwork error.
+        //
+        // `forImportantUsage` is the only key worth asking on iOS — plain
+        // `volumeAvailableCapacity` reports what is unused right now and
+        // ignores the gigabytes of purgeable caches the system will evict when
+        // something important needs them, so it under-reports and refuses
+        // downloads that would have succeeded.
         let values = try? directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
         guard let capacity = values?.volumeAvailableCapacityForImportantUsage else { return }
         let free = Int64(capacity)
-        guard free > model.sizeBytes else {
-            throw ModelStoreError.insufficientDisk(needed: model.sizeBytes, free: free)
+        // Weights *and* projector. A vision model downloads two files, and a
+        // check that counted only the first passed happily and then ran out of
+        // disk partway through the second — after the multi-gigabyte one had
+        // already been paid for.
+        let needed = model.totalDownloadBytes + Self.diskReserveBytes
+        guard free > needed else {
+            throw ModelStoreError.insufficientDisk(needed: needed, free: free)
         }
     }
+
+    /// Room left over after the weights land.
+    ///
+    /// Two reasons it cannot be zero. The number above is the optimistic one by
+    /// construction — it counts purgeable space as available, so it is not free
+    /// bytes but free-bytes-if-the-system-cooperates, and it can overstate by
+    /// more than a rounding error. And a device driven to actually zero free
+    /// bytes is its own failure: iOS starts evicting aggressively, writes begin
+    /// failing, and the app is a candidate for termination — a download that
+    /// technically fits and leaves the phone unusable has not succeeded.
+    ///
+    /// 512 MB covers the resume blob, the manifest rewrite and the slack the
+    /// system wants, and is small next to the models it gates.
+    static let diskReserveBytes: Int64 = 512 * 1024 * 1024
 
     /// Where URLSession's resume data is parked between attempts. This is not a
     /// partial file: it is the opaque blob carrying the validators that let the

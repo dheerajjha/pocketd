@@ -27,6 +27,16 @@ public actor EchoEngine: InferenceEngine {
 
     public var lastSampling: SamplingParameters? { receivedSampling.last }
 
+    /// The messages of the most recent request, exactly as the route layer built
+    /// them.
+    ///
+    /// Here for the same reason `receivedSampling` is: a prompt the server
+    /// rewrites on its way through — a date prepended, a system turn invented —
+    /// is invisible in the response body, because nothing here reads the prompt
+    /// to answer. The only place such a change shows up is what the engine was
+    /// handed.
+    public private(set) var receivedMessages: [ChatMessage] = []
+
     /// - Parameter announcesToolCall: When set, the stream opens with a
     ///   `.toolCallStarted` event naming this tool. Nothing here executes a
     ///   tool; the point is that every consumer of a `GenerationEvent` stream —
@@ -63,6 +73,7 @@ public actor EchoEngine: InferenceEngine {
         // Recorded before the rejections above would matter, but after them, so
         // the log describes requests that were actually served.
         receivedSampling.append(request.resolvedSampling(defaults: defaultSampling))
+        receivedMessages = request.messages
 
         // Echo the last user turn back, which makes assertions in tests read as
         // "what went in came out" rather than depending on sampled text.

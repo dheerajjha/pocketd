@@ -75,26 +75,73 @@ actor LlamaEngine: InferenceEngine {
     private var residentSampling: SamplingParameters?
     private var residentContextTokens: Int?
 
-    /// Tools, in the order they were registered.
+    /// What Settings asked for, before the resident model gets a say.
     ///
-    /// Frozen for the engine's lifetime, because they are frozen for the
-    /// client's: `LlamaClient` stores them in a `let` and builds its chat
-    /// parameters once, in `init`. Varying them per request would mean
-    /// reloading gigabytes of weights per request.
-    private let tools: [any LLMTool]
+    /// Kept apart from `tools` because the switch and the answer are different
+    /// facts: the switch is global and survives a model swap, while whether the
+    /// tools are handed over is a property of whatever is resident at the time.
+    /// Collapsing the two would mean a network client loading a model the phone
+    /// user never chose could turn the tools on or off for them.
+    private var requestedTools: [any LLMTool]
+    /// Why `tools` is or is not `requestedTools`. Surfaced so Settings can say
+    /// which model refused and why, rather than showing a switch that is on and
+    /// does nothing.
+    private(set) var toolGate: ToolGate.Decision = .noModelLoaded
+
+    /// The tools actually granted, in the order they were registered — what the
+    /// *next* client will be built with, which is not necessarily what the live
+    /// one has.
+    ///
+    /// Frozen for the client's lifetime even though not for the engine's:
+    /// `LlamaClient` stores its tools in a `let` and builds its chat parameters
+    /// from them once, in `init` (`LlamaClient.swift:12,45`). Nothing can add a
+    /// tool to a client that already exists, so a Settings toggle here relates
+    /// to `residentToolsJSON` exactly as `defaultSampling` relates to
+    /// `residentSampling`: the two disagree until some request actually needs
+    /// the difference, and that request pays for it. A user who turns tools on
+    /// and never asks another question pays nothing.
+    private var tools: [any LLMTool]
     /// Our own dispatch table. `ToolExecutor`, which the library uses for the
     /// same job, is `package` and therefore unreachable from here — but
     /// `AnyLLMTool.call(argumentsJSON:)` is public, so the table is all that
     /// was missing.
-    private let toolsByName: [String: AnyLLMTool]
-    /// The schema text the library will inject, serialised once. Only its
-    /// length is ever used.
-    private let toolsJSON: String
+    private var toolsByName: [String: AnyLLMTool]
+    /// The schema text the library will inject, serialised once per change.
+    /// Only its length is ever used — and its identity, below.
+    private var toolsJSON: String
+    /// What the live client was actually built with.
+    ///
+    /// The serialised schema rather than the array, because `LLMTool` is not
+    /// `Equatable` and because this string *is* the difference that matters:
+    /// it is the text the library bakes into the chat parameters, so two tool
+    /// sets that serialise identically genuinely need no rebuild.
+    private var residentToolsJSON: String?
+    /// Whether the resident model's chat template renders tool schemas itself.
+    ///
+    /// Read from the GGUF header at load and kept, so that toggling tools can
+    /// re-price the prompt without going back to the file. Defaults to the
+    /// dearer answer for the same reason `overhead` does.
+    private var residentTemplateIsToolNative = true
+    /// The header facts `ToolGate` reads, kept for the same reason: flipping
+    /// the switch has to be able to re-decide without touching the file.
+    ///
+    /// Note that these are the raw values, where `residentTemplateIsToolNative`
+    /// above is already collapsed to a `Bool` that defaults to `true` on an
+    /// unreadable header. That default is the safe direction for a context
+    /// budget and the dangerous one for a gate, so the gate is given the
+    /// optional and decides for itself what silence means.
+    private var residentChatTemplate: String?
+    private var residentSizeLabel: String?
     /// What the tools silently add to every prompt, in `ContextGuard` tokens.
     ///
-    /// Computed when the client is built and never per request: it depends on
-    /// the tools, which are fixed at init, and on the model's chat template,
-    /// which is fixed at load. Nothing about a request can change it.
+    /// Recomputed when the tools change or a model loads, never per request:
+    /// nothing about a request can move it. Deliberately describes the
+    /// *configured* tools rather than the resident ones — a request that
+    /// arrives after the toggle rebuilds the client before it generates, so the
+    /// schema it will be charged for is the one named here, and a guard sized
+    /// from the resident set would under-reserve by the whole preamble. The
+    /// guard exists because under-reserving means llama.cpp asserts on an
+    /// oversized batch and takes the process down.
     private var toolOverheadTokens = 0
 
     var promptOverheadTokens: Int { toolOverheadTokens }
@@ -104,12 +151,13 @@ actor LlamaEngine: InferenceEngine {
     private var waiters: [UUID: CheckedContinuation<Void, any Error>] = [:]
     private var waitOrder: [UUID] = []
 
-    /// - Parameter tools: Registered for the engine's whole life. An empty
-    ///   array is not merely the default, it is a promise: the library's
-    ///   `processMessages` returns the messages untouched when no tool is
-    ///   registered, so nothing is injected, nothing is charged against the
-    ///   context budget, and the prompt is byte-for-byte what it was before
-    ///   this file learned about tools.
+    /// - Parameter tools: What to start with. An empty array is not merely the
+    ///   default, it is a promise: the library's `processMessages` returns the
+    ///   messages untouched when no tool is registered, so nothing is injected,
+    ///   nothing is charged against the context budget, and the prompt is
+    ///   byte-for-byte what it was before this file learned about tools. That
+    ///   promise survives `updateTools([])` too, which is the whole point of
+    ///   letting the set change.
     init(
         fileURL: @escaping @Sendable (ModelRecord) -> URL,
         projectorURL: @escaping @Sendable (ModelRecord) -> URL? = { _ in nil },
@@ -121,16 +169,32 @@ actor LlamaEngine: InferenceEngine {
         self.projectorURL = projectorURL
         self.defaultSampling = defaultSampling
         self.contextTokens = contextTokens
-        self.tools = tools
+        self.requestedTools = tools
+        // Empty until a model is resident, because until then there is nothing
+        // to decide against. Nothing is lost: a client is only ever built
+        // inside `loadHoldingGate`, which decides first.
+        self.tools = []
+        let derived = Self.derive(from: [])
+        self.toolsByName = derived.byName
+        self.toolsJSON = derived.json
+    }
+
+    /// The dispatch table and the schema text that follow from a tool array.
+    ///
+    /// One function so the two can never be derived from different arrays,
+    /// which is the shape of bug that leaves a tool the model can see and the
+    /// engine cannot run.
+    private static func derive(from tools: [any LLMTool]) -> (byName: [String: AnyLLMTool], json: String) {
         let wrapped = tools.map { AnyLLMTool($0) }
         // First registration wins. Two tools sharing a name is a programming
         // error either way, but silently preferring the later one would make
         // which tool ran depend on array order at a call site far from here.
-        self.toolsByName = Dictionary(wrapped.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        let byName = Dictionary(wrapped.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
         // `options: []` matches how the library serialises the same array into
         // the preamble, so the estimate measures the string that is actually
         // injected rather than a prettier one.
-        self.toolsJSON = wrapped.isEmpty ? "" : ((try? wrapped.toOAICompatJSONString(options: [])) ?? "")
+        let json = wrapped.isEmpty ? "" : ((try? wrapped.toOAICompatJSONString(options: [])) ?? "")
+        return (byName, json)
     }
 
     func loadedModel() -> ModelRecord? { model }
@@ -199,6 +263,54 @@ actor LlamaEngine: InferenceEngine {
         contextTokens = max(1, tokens)
     }
 
+    /// The Settings entry point for tools: what the next client will be built
+    /// with.
+    ///
+    /// Same lazy contract again, and for a heavier reason. Changing tools means
+    /// a new `llama_context`, a re-mapped model, a re-parsed chat template and
+    /// a cold prompt cache — the same seconds a changed sampler costs — so
+    /// flipping the switch reloads nothing and the next request that needs a
+    /// different client builds it.
+    ///
+    /// The prompt price, though, is charged immediately: `toolOverheadTokens`
+    /// is what the route layer sizes its `ContextGuard` from, and it has to
+    /// describe the prompt the *next* request will produce, not the one the
+    /// last one did.
+    ///
+    /// Unconditional rather than guarded on a change: `residentToolsJSON` is
+    /// what decides whether anything is rebuilt, and re-deriving a table that
+    /// turns out to be identical costs one dictionary. Comparing here instead
+    /// would leave the live `toolsByName` pointing at the previous instances of
+    /// two tools that happen to serialise the same — right today, and the kind
+    /// of thing that stops being right quietly.
+    func updateTools(_ tools: [any LLMTool]) {
+        self.requestedTools = tools
+        applyGate(for: model)
+        // No model means no chat template, so there is nothing yet to price the
+        // schema against. The load recomputes it.
+        self.toolOverheadTokens = model == nil ? 0 : overhead()
+    }
+
+    /// Reduces what was asked for to what the resident model will be given.
+    ///
+    /// Called from both places the answer can change — the switch and a load —
+    /// so that `tools`, `toolsByName` and `toolsJSON` cannot describe different
+    /// sets. A refusal here is not merely inert: `toolsJSON` becomes empty, so
+    /// `overhead()` is zero and a model that cannot use the tools is not
+    /// charged several hundred tokens of context for carrying their schemas.
+    private func applyGate(for model: ModelRecord?) {
+        toolGate = ToolGate.decide(
+            model: model,
+            chatTemplate: residentChatTemplate,
+            sizeLabel: residentSizeLabel
+        )
+        let granted = toolGate.registersTools ? requestedTools : []
+        let derived = Self.derive(from: granted)
+        self.tools = granted
+        self.toolsByName = derived.byName
+        self.toolsJSON = derived.json
+    }
+
     func load(model: ModelRecord) async throws {
         let token = UUID()
         try await acquire(token)
@@ -221,6 +333,12 @@ actor LlamaEngine: InferenceEngine {
         toolOverheadTokens = 0
         residentSampling = nil
         residentContextTokens = nil
+        residentToolsJSON = nil
+        residentChatTemplate = nil
+        residentSizeLabel = nil
+        // Before the file is even opened, so that a load which throws below
+        // leaves no tools behind for the next request to be handed.
+        applyGate(for: nil)
 
         do {
             // The simulator's Metal driver cannot allocate the buffers the
@@ -246,6 +364,30 @@ actor LlamaEngine: InferenceEngine {
                 }
                 projector = path
             }
+
+            // Read before the client is built, not after, because the client
+            // freezes its tool array in a `let` at construction: a gate decided
+            // afterwards could only be honoured by throwing that client away.
+            //
+            // It has to come out of the GGUF header directly: llama.cpp reads
+            // the template as `tokenizer.chat_template`, but LocalLLMClient
+            // keeps both `Model` and `Context.model` internal and exposes
+            // `LlamaClient._context` only in its own DEBUG builds, so there is
+            // no way to ask the client we are about to build what template it
+            // will use.
+            //
+            // An unreadable header is charged the higher of the two prices for
+            // the context guard. Over-reserving refuses a prompt that would
+            // have fitted; the guard exists because under-reserving means
+            // llama.cpp asserts on an oversized batch and takes the process
+            // down. `ToolGate` reads the same silence the other way round and
+            // registers nothing, which is the safe direction for it.
+            let header = GGUFMetadata.toolEvidence(inFileAt: url)
+            residentChatTemplate = header.chatTemplate
+            residentSizeLabel = header.sizeLabel
+            residentTemplateIsToolNative = header.chatTemplate
+                .map(ContextGuard.templateIsToolNative) ?? true
+            applyGate(for: model)
 
             let resolvedContext = min(model.contextLength, contextTokens)
             let llama = try await LocalLLMClient.llama(
@@ -286,35 +428,26 @@ actor LlamaEngine: InferenceEngine {
             client = AnyLLMClient(llama)
             self.model = model
             contextIsDirty = false
-            toolOverheadTokens = overhead(forModelAt: url)
+            toolOverheadTokens = overhead()
             // Recorded from what was passed, not from what is configured now:
             // this is the sampler that exists, and it is what the next request
-            // has to be compared against.
+            // has to be compared against. The tools are recorded from
+            // `toolsJSON` for the same reason — `tools` was read a few lines
+            // above to build the client, and this is that same array's schema.
             residentSampling = sampling
             residentContextTokens = resolvedContext
+            residentToolsJSON = toolsJSON
         } catch {
             throw InferenceError.backend(String(describing: error))
         }
     }
 
-    /// What the registered tools will add to every prompt, once the client for
-    /// this file exists.
-    ///
-    /// The template has to come out of the GGUF header directly: llama.cpp
-    /// reads it as `tokenizer.chat_template`, but LocalLLMClient keeps both
-    /// `Model` and `Context.model` internal and exposes `LlamaClient._context`
-    /// only in its own DEBUG builds, so there is no way to ask the client we
-    /// just built what template it is using.
-    private func overhead(forModelAt url: URL) -> Int {
-        guard !tools.isEmpty else { return 0 }
-        let template = GGUFMetadata.chatTemplate(inFileAt: url)
-        return ContextGuard.toolOverhead(
+    /// What the configured tools will add to every prompt of the resident
+    /// model, in `ContextGuard` tokens.
+    private func overhead() -> Int {
+        ContextGuard.toolOverhead(
             toolsJSON: toolsJSON,
-            // An unreadable header is charged the higher of the two prices.
-            // Over-reserving refuses a prompt that would have fitted; the guard
-            // exists because under-reserving means llama.cpp asserts on an
-            // oversized batch and takes the process down.
-            templateIsToolNative: template.map(ContextGuard.templateIsToolNative) ?? true
+            templateIsToolNative: residentTemplateIsToolNative
         )
     }
 
@@ -329,6 +462,10 @@ actor LlamaEngine: InferenceEngine {
         toolOverheadTokens = 0
         residentSampling = nil
         residentContextTokens = nil
+        residentToolsJSON = nil
+        residentChatTemplate = nil
+        residentSizeLabel = nil
+        applyGate(for: nil)
     }
 
     // MARK: - Generation
@@ -391,9 +528,13 @@ actor LlamaEngine: InferenceEngine {
         // in one place so no path can rebuild twice or forget to.
         //
         // `contextIsDirty` pays for a previous cancellation, once, rather than
-        // serving garbage from a poisoned cache. The two comparisons pay for a
-        // request that wants a different sampler or a different window. The last
-        // clause is the one that looks redundant and is not: an explicit seed
+        // serving garbage from a poisoned cache. The three comparisons pay for
+        // a request that wants a different sampler, a different window, or a
+        // different set of tools — the last of those because the client froze
+        // its tools in a `let` at construction, so there is no cheaper way to
+        // honour a Settings toggle, and no way at all to skip it: a client
+        // built without tools ignores every call the model makes, silently.
+        // The last clause is the one that looks redundant and is not: an explicit seed
         // compares equal to the resident one on the second identical request,
         // and skipping the rebuild there would hand that client a *different*
         // answer to the same seeded prompt, because llama.cpp's distribution
@@ -402,6 +543,7 @@ actor LlamaEngine: InferenceEngine {
         let mustRebuild = contextIsDirty
             || residentSampling != sampling
             || residentContextTokens != min(model.contextLength, contextTokens)
+            || residentToolsJSON != toolsJSON
             || sampling.pinsRandomness
         if mustRebuild {
             do {
@@ -416,6 +558,13 @@ actor LlamaEngine: InferenceEngine {
                 return
             }
         }
+
+        // Pinned for the rest of this generation, because from here on there
+        // are `await`s a Settings toggle can slip between. The client's tools
+        // were frozen at the rebuild above and cannot follow, so reading the
+        // configured table later would answer a call the running client never
+        // offered — or take the no-tools stream on a client that has them.
+        let activeTools = toolsByName
 
         // Defence in depth: the Chat tab calls the engine directly, so the
         // route-layer guard does not cover it, and an oversized prompt here is a
@@ -466,9 +615,15 @@ actor LlamaEngine: InferenceEngine {
         // would be off by one: a stop of exactly that length starting at the
         // boundary would have its first character already sent.
         let holdBack = stops.map(\.count).max() ?? 0
+        // The same shape of problem as the hold-back above, for tool syntax the
+        // backend's parser did not claim. Armed from the tools that are
+        // actually registered, so a generation with none behaves exactly as it
+        // did before this existed.
+        let screen = ToolSyntaxScreen(toolNames: Array(activeTools.keys))
 
         var produced = ""     // everything the model emitted, truncated at a stop
         var sent = 0          // characters already yielded downstream
+        var screened = 0      // characters the screen has already passed
         var reason = FinishReason.stop
         // Set when the turn ended on its own terms — a stop sequence, the token
         // limit, or cancellation. Nothing further may be generated, the tool
@@ -514,7 +669,7 @@ actor LlamaEngine: InferenceEngine {
             // have cost every existing user characters off the end of some
             // replies to buy a feature they had not turned on.
             var pending: AsyncThrowingStream<StreamingChunk, any Error>?
-            if toolsByName.isEmpty {
+            if activeTools.isEmpty {
                 let text = try await client.textStream(from: input)
                 pending = AsyncThrowingStream { continuation in
                     let task = Task {
@@ -560,30 +715,33 @@ actor LlamaEngine: InferenceEngine {
                         // Earliest match across all stops, not the first stop in
                         // the array — otherwise a later-listed stop that occurs
                         // sooner is missed and text past it is emitted.
+                        // Neither of the two halts below flushes any more, and
+                        // that is the point: everything now leaves through the
+                        // single resolve-then-flush after the loop, so there is
+                        // no path on which a leak reaches the transcript
+                        // because the turn happened to end on a stop sequence
+                        // rather than on its own.
                         if let hit = stops.compactMap({ produced.range(of: $0) }).min(by: { $0.lowerBound < $1.lowerBound }) {
                             produced = String(produced[..<hit.lowerBound])
                             sent = min(sent, produced.count)
-                            flush()
+                            screened = min(screened, produced.count)
                             reason = .stop
                             halted = true
                             break loop
                         }
 
                         if let limit, estimateTokens(produced) >= limit {
-                            flush()
                             reason = .length
                             halted = true
                             break loop
                         }
 
-                        if holdBack > 0 {
-                            let safe = max(sent, produced.count - holdBack)
-                            if safe > sent {
-                                continuation.yield(.token(String(produced[offset(sent)..<offset(safe)])))
-                                sent = safe
-                            }
-                        } else {
-                            flush()
+                        screened = screen.safeCount(in: produced, clearedThrough: screened)
+                        var safe = screened
+                        if holdBack > 0 { safe = min(safe, produced.count - holdBack) }
+                        if safe > sent {
+                            continuation.yield(.token(String(produced[offset(sent)..<offset(safe)])))
+                            sent = safe
                         }
                     }
                 }
@@ -591,7 +749,7 @@ actor LlamaEngine: InferenceEngine {
                 // `roundsLeft` is what discards a tool call emitted on the
                 // resume pass: on that pass it is already zero, so the calls
                 // collected above are simply never looked at again.
-                guard roundsLeft > 0, !halted, !calls.isEmpty, !toolsByName.isEmpty else { break }
+                guard roundsLeft > 0, !halted, !calls.isEmpty, !activeTools.isEmpty else { break }
                 roundsLeft -= 1
 
                 var outputs: [(String, String)] = []
@@ -601,7 +759,7 @@ actor LlamaEngine: InferenceEngine {
                     // silence: the tool body, and then a second prefill of the
                     // entire conversation, with nothing to show for either.
                     continuation.yield(.toolCallStarted(name: call.name))
-                    outputs.append((call.id, await execute(call)))
+                    outputs.append((call.id, await execute(call, using: activeTools)))
                 }
                 // Those bytes really do enter the next prompt, so they are
                 // counted. The duplicated prefill is not: usage describes the
@@ -630,6 +788,17 @@ actor LlamaEngine: InferenceEngine {
                     toolOutputs: outputs,
                     originalInput: input
                 )
+            }
+            // The last moment anything can be retracted. Everything above only
+            // ever withheld text; this is where withheld tool syntax is
+            // replaced by a sentence about it, and where a turn that turned out
+            // to be clean gets its tail back.
+            if case .leaked(let keeping) = screen.resolve(produced) {
+                produced = String(produced.prefix(keeping))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                sent = min(sent, produced.count)
+                if !produced.isEmpty { produced += "\n\n" }
+                produced += ToolSyntaxScreen.notice
             }
             flush()
             // Any generation that did not run to its natural end leaves the
@@ -663,8 +832,8 @@ actor LlamaEngine: InferenceEngine {
     /// 500 for a user whose question never needed the tool in the first place.
     /// Here every failure — unknown name, undecodable arguments, a tool that
     /// threw — becomes a short line the model can read and work around.
-    private func execute(_ call: LLMToolCall) async -> String {
-        guard let tool = toolsByName[call.name] else {
+    private func execute(_ call: LLMToolCall, using tools: [String: AnyLLMTool]) async -> String {
+        guard let tool = tools[call.name] else {
             return ToolResult.unknownTool(named: call.name)
         }
         do {

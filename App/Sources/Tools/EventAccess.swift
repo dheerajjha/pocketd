@@ -2,42 +2,10 @@ import EventKit
 import Foundation
 import PocketdKit
 
-// MARK: - What comes back
-
-/// One event, reduced to values that can leave the actor.
-///
-/// `EKEvent` is a reference type EventKit owns, mutates behind your back on a
-/// store refresh, and does not mark `Sendable`. Handing one to a tool body
-/// would be a data race the compiler cannot see through a completion handler,
-/// so nothing but this struct crosses the boundary.
-struct CalendarEventRow: Sendable, Equatable {
-    var title: String
-    var start: Date
-    var end: Date
-    var location: String?
-    var isAllDay: Bool
-}
-
-/// One incomplete reminder, same reasoning.
-struct ReminderRow: Sendable, Equatable {
-    var title: String
-    var due: Date?
-    /// A reminder can be due on a *date* with no time of day. Printing 00:00
-    /// for those tells the model something the user never said.
-    var dueHasTime: Bool
-    /// EventKit's scale: 1 highest, 9 lowest, 0 meaning the user set none.
-    var priority: Int
-}
-
-/// Rows, or the reason there are none. Never an error.
-///
-/// A thrown error from a tool body propagates out of LocalLLMClient's executor
-/// and ends the generation — the user watches the stream stop mid-sentence with
-/// nothing to read. Every failure mode here is a value instead.
-enum PersonalDataLookup<Row: Sendable>: Sendable {
-    case rows([Row], truncated: Bool)
-    case unauthorized(PersonalDataAuthorization)
-}
+// The value types this file used to declare — `CalendarEventRow`, `ReminderRow`
+// and `PersonalDataLookup` — now live in PocketdKit beside the code that turns
+// them into what the model reads. Nothing about them needed EventKit, and on
+// this side of the seam they could not be tested without a device.
 
 // MARK: - The store
 
@@ -57,10 +25,10 @@ actor EventAccess {
 
     private let store = EKEventStore()
 
-    /// Cap on rows. Twenty is not arbitrary: a phone-sized model gets roughly
-    /// 40–60 tokens per row of JSON, so twenty events is around a thousand
-    /// tokens of context that the answer then has to fit alongside.
-    static let rowLimit = 20
+    /// Re-exported so a caller here reads one name for one number: the row cap
+    /// and the sentence that announces truncation have to agree, and the
+    /// sentence is written where the rows are rendered.
+    static let rowLimit = PersonalDataTools.rowLimit
 
     // MARK: - Permission
 

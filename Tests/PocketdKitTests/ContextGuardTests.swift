@@ -169,6 +169,68 @@ struct PromptOverheadTests {
         """
         #expect(preamble.count == ContextGuard.toolPreambleCharacters)
     }
+
+    /// What the two personal-data tools actually cost when they are switched on.
+    ///
+    /// Reconstructed, not imported: the schema is produced by LocalLLMClient's
+    /// `@ToolArguments` macro in the app target, which this package cannot see —
+    /// so the literal is written out here the same way the preamble above is,
+    /// character for character with what `AnyLLMTool.toOAICompatJSON` builds
+    /// from `CalendarEventsTool` and `RemindersTool`. Renaming a tool or
+    /// rewording a description changes the number and this test says by how
+    /// much. It cannot notice the macro itself changing shape, which is why the
+    /// reconstruction is spelled out rather than hidden behind a constant.
+    static let personalDataToolsSchema = #"""
+    [{"type":"function","function":{"name":"get_calendar_events","description":"List the user's calendar events (meetings, appointments) for a range of days.","parameters":{"type":"object","properties":{"range":{"type":"string","description":"Which days to list.","enum":["today","tomorrow","this_week","next_week"]}},"required":["range"]}}},{"type":"function","function":{"name":"get_reminders","description":"List the user's reminders (to-dos) that are not completed yet.","parameters":{"type":"object","properties":{"filter":{"type":"string","description":"Which reminders to list.","enum":["overdue","today","tomorrow","this_week","all_open"]}},"required":["filter"]}}}]
+    """#
+
+    @Test("the calendar and reminder schemas carry every value the model may send")
+    func schemaMatchesTheRangesTheAppAccepts() {
+        // The macro writes `CalendarRange.allCases.map { $0.rawValue }` into the
+        // schema literally, so the values the model is offered and the values
+        // `PersonalDataRange` can resolve are the same list by construction —
+        // and this is what keeps the reconstruction above honest about it.
+        for range in CalendarRange.allCases {
+            #expect(Self.personalDataToolsSchema.contains("\"\(range.rawValue)\""))
+        }
+        for filter in ReminderFilter.allCases {
+            #expect(Self.personalDataToolsSchema.contains("\"\(filter.rawValue)\""))
+        }
+    }
+
+    @Test("turning the tools off gives the whole preamble back to the conversation")
+    func togglingToolsOffRestoresTheBudget() {
+        // The engine derives `toolsJSON` from the registered array and hands "" to
+        // the guard when that array is empty. Off is therefore not "cheaper", it
+        // is free: byte-for-byte the prompt the app sent before it learned about
+        // tools.
+        let off = ContextGuard(contextTokens: 4096, fixedOverheadTokens:
+            ContextGuard.toolOverhead(toolsJSON: "", templateIsToolNative: true))
+        let plain = ContextGuard(contextTokens: 4096)
+        #expect(off.promptBudget == plain.promptBudget)
+
+        // A tool-native template — Qwen3's, the only catalogue model marked
+        // tool-capable — renders the schema itself and is then handed it again
+        // by the library, so it pays twice.
+        let native = ContextGuard.toolOverhead(toolsJSON: Self.personalDataToolsSchema, templateIsToolNative: true)
+        let on = ContextGuard(contextTokens: 4096, fixedOverheadTokens: native)
+        #expect(off.promptBudget - on.promptBudget == native)
+
+        // Roughly an eighth of a 4K window, spent on every prompt including the
+        // ones that never ask about a calendar. That is the number the Settings
+        // footer is describing, and the reason the switch is off by default.
+        #expect(native > 500 && native < 600)
+        #expect(Double(native) / Double(plain.promptBudget) > 0.12)
+    }
+
+    @Test("a short window makes the same tools cost proportionally far more")
+    func smallContextsPayMore() {
+        // The overhead is fixed while the window is not, so the same two tools
+        // take an eighth of a 4K context and better than a quarter of a 2K one.
+        let native = ContextGuard.toolOverhead(toolsJSON: Self.personalDataToolsSchema, templateIsToolNative: true)
+        let small = ContextGuard(contextTokens: 2048)
+        #expect(Double(native) / Double(small.promptBudget) > 0.25)
+    }
 }
 
 @Suite("Date context")
