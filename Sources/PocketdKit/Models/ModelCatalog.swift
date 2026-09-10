@@ -5,8 +5,9 @@ import Foundation
 /// This is intentionally short. An open catalogue of every GGUF on Hugging Face
 /// is a worse experience on a 6 GB device than ten models that are known to
 /// load, because the failure mode of the former is a 3 GB download that ends in
-/// a jetsam kill. Arbitrary repositories are still reachable through
-/// `ModelStore.custom(repoID:filename:)`; they just are not recommended.
+/// a jetsam kill. Arbitrary repositories are still reachable — through the `+`
+/// on the Models tab, or `POST /api/models/add` from a laptop — they just are
+/// not recommended.
 public enum ModelCatalog {
     /// Every entry must be publicly downloadable without a token. A gated
     /// repository answers 401 from the API itself, which surfaced here as the

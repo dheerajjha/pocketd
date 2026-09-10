@@ -2,9 +2,21 @@ import SwiftUI
 import PocketdKit
 
 struct ChatView: View {
+    @State private var isShowingHistory = false
     @Environment(AppModel.self) private var model
     var goTo: (AppTab) -> Void = { _ in }
     private let topAnchor = "pocketd.chat.top"
+
+    /// When a message first appeared here. `ChatMessage` carries no clock, and
+    /// within a conversation the indices only grow, so an index is a stable key
+    /// for as long as the times mean anything. Messages this view did not watch
+    /// arrive are simply absent rather than guessed at.
+    @State private var arrived: [Int: Date] = [:]
+    /// False once the reader has scrolled away from the bottom, which is the
+    /// only reliable sign that they are reading something further up.
+    @State private var followsStream = true
+    @State private var copiedMessage: Int?
+    @State private var copyTick = 0
 
     var body: some View {
         @Bindable var model = model
@@ -31,18 +43,7 @@ struct ChatView: View {
                     ScrollViewReader { proxy in
                         ScrollView {
                             Color.clear.frame(height: 0).id(topAnchor)
-                            if let notice = model.modelSwitchNotice {
-                                HStack(alignment: .top, spacing: 8) {
-                                    Image(systemName: "arrow.triangle.2.circlepath")
-                                    Text(notice).font(.footnote)
-                                    Spacer()
-                                    Button("OK") { model.dismissModelSwitchNotice() }
-                                        .font(.footnote)
-                                }
-                                .padding(10)
-                                .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
-                                .padding([.horizontal, .top])
-                            }
+                            modelSwitchBanner
                             if model.conversation.isEmpty {
                                 ContentUnavailableView(
                                     "Ask it something",
@@ -53,24 +54,51 @@ struct ChatView: View {
                             }
                             LazyVStack(alignment: .leading, spacing: 12) {
                                 ForEach(Array(model.conversation.enumerated()), id: \.offset) { index, message in
-                                    bubble(for: message).id(index)
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        if let stamp = timeSeparator(at: index) {
+                                            Text(stamp, format: .dateTime.hour().minute())
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                                .frame(maxWidth: .infinity)
+                                        }
+                                        bubble(for: message, at: index)
+                                    }
+                                    .id(index)
                                 }
                             }
                             .padding()
                         }
                         .scrollDismissesKeyboard(.interactively)
+                        .onScrollGeometryChange(for: Bool.self) { geometry in
+                            geometry.visibleRect.maxY >= geometry.contentSize.height - 80
+                        } action: { _, isNearBottom in
+                            followsStream = isNearBottom
+                        }
                         .onChange(of: model.conversation.last?.content) { _, _ in
                             // Guarded: with an empty conversation this was
                             // scrollTo(-1), which left the view holding its
                             // old offset and showing a black screen with the
                             // empty state scrolled off the top.
-                            guard !model.conversation.isEmpty else { return }
-                            withAnimation {
-                                proxy.scrollTo(model.conversation.count - 1, anchor: .bottom)
-                            }
+                            guard !model.conversation.isEmpty, followsStream else { return }
+                            // Unanimated on purpose. Animating each token means
+                            // sixty overlapping scroll animations a second, and
+                            // on a reply taller than the screen they fight each
+                            // other into a visible lurch.
+                            proxy.scrollTo(model.conversation.count - 1, anchor: .bottom)
+                        }
+                        .onChange(of: model.conversation.count) { previous, count in
+                            guard count > 0 else { return }
+                            stampArrivals(upTo: count, grownFrom: previous)
+                            // Sending is an explicit request to be at the
+                            // bottom, wherever the reader had scrolled to.
+                            followsStream = true
+                            withAnimation { proxy.scrollTo(count - 1, anchor: .bottom) }
                         }
                         .onChange(of: model.conversation.isEmpty) { _, isEmpty in
-                            if isEmpty { proxy.scrollTo(topAnchor, anchor: .top) }
+                            if isEmpty {
+                                arrived.removeAll()
+                                proxy.scrollTo(topAnchor, anchor: .top)
+                            }
                         }
                     }
                 }
@@ -88,28 +116,105 @@ struct ChatView: View {
 
                 composer
             }
+            .sensoryFeedback(.success, trigger: copyTick)
             .navigationTitle(model.loadedModelID ?? "Chat")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                Button("New", systemImage: "square.and.pencil") { model.resetConversation() }
-                    .disabled(model.conversation.isEmpty)
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("History", systemImage: "clock.arrow.circlepath") {
+                        isShowingHistory = true
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button("New", systemImage: "square.and.pencil") { model.resetConversation() }
+                        .disabled(model.conversation.isEmpty)
+                }
             }
+            .sheet(isPresented: $isShowingHistory) { ConversationHistoryView() }
+        }
+    }
+
+    /// Extracted purely so the body type-checks.
+    ///
+    /// SwiftUI builds one expression per view body, and this one grew past
+    /// what the solver will attempt — the failure is a build timeout on the
+    /// enclosing `ScrollViewReader`, which points nowhere near the code that
+    /// caused it.
+    @ViewBuilder
+    private var modelSwitchBanner: some View {
+        if let notice = model.modelSwitchNotice {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                Text(notice).font(.footnote)
+                Spacer()
+                Button("OK") { model.dismissModelSwitchNotice() }
+                    .font(.footnote)
+            }
+            .padding(10)
+            .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+            .padding([.horizontal, .top])
         }
     }
 
     @ViewBuilder
-    private func bubble(for message: ChatMessage) -> some View {
-        HStack {
-            if message.role == .user { Spacer(minLength: 40) }
-            Text(message.content.isEmpty ? "…" : message.content)
-                .textSelection(.enabled)
-                .padding(10)
-                .background(
-                    message.role == .user ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.12),
-                    in: RoundedRectangle(cornerRadius: 12)
-                )
-            if message.role != .user { Spacer(minLength: 40) }
+    private func bubble(for message: ChatMessage, at index: Int) -> some View {
+        let isUser = message.role == .user
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+
+        HStack(spacing: 0) {
+            if isUser { Spacer(minLength: 40) }
+            Group {
+                if isUser {
+                    // Left exactly as typed. People write literal asterisks and
+                    // mean them, and a message that italicises what someone
+                    // wrote is not the message they sent.
+                    Text(message.content)
+                } else {
+                    MessageContentView(text: message.content)
+                }
+            }
+            .textSelection(.enabled)
+            .padding(10)
+            .background(
+                // System fills rather than a tinted grey: the assistant bubble
+                // has to stay a step away from the page in both appearances,
+                // and secondary/tertiary are the two the system keeps apart for
+                // us when the user switches to dark.
+                isUser ? Color.accentColor.opacity(0.18) : Color(.secondarySystemBackground),
+                in: shape
+            )
+            .overlay(shape.strokeBorder(isUser ? Color.accentColor.opacity(0.3) : Color.clear))
+            .overlay(alignment: .topTrailing) {
+                if copiedMessage == index {
+                    Label("Copied", systemImage: "checkmark")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.thinMaterial, in: Capsule())
+                        .padding(6)
+                        .transition(.opacity)
+                        // An overlay, not a row: a confirmation that changes
+                        // the bubble's height moves everything below it, and
+                        // this one appears while a reply is still streaming.
+                        .accessibilityHidden(true)
+                }
+            }
+            .animation(.easeInOut(duration: 0.15), value: copiedMessage == index)
+            .contextMenu {
+                Button("Copy", systemImage: "doc.on.doc") { copy(message, at: index) }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(accessibilityLabel(for: message))
+            // The context menu is a long press, which VoiceOver spends on its
+            // own gestures. The same copy has to exist in the actions rotor.
+            .accessibilityAction(named: "Copy message") { copy(message, at: index) }
+            if !isUser { Spacer(minLength: 40) }
         }
+    }
+
+    private func accessibilityLabel(for message: ChatMessage) -> String {
+        if message.role == .user { return "You said" }
+        return message.content.isEmpty ? "Assistant is replying" : "Assistant said"
     }
 
     private var composer: some View {
@@ -133,5 +238,41 @@ struct ChatView: View {
         .font(.title2)
         .padding()
         .background(.bar)
+    }
+
+    // MARK: - Timestamps
+
+    /// Sending appends the question and the empty answer together, so a turn
+    /// grows the conversation by two. A larger jump is a conversation being
+    /// restored, and those messages were written whenever they were written —
+    /// stamping them "now" would be the view inventing history.
+    private func stampArrivals(upTo count: Int, grownFrom previous: Int) {
+        guard count - previous <= 2 else { return }
+        for index in 0..<count where arrived[index] == nil {
+            arrived[index] = .now
+        }
+    }
+
+    /// A time is worth showing where there is a gap worth noticing. Under every
+    /// bubble of a conversation held in one sitting it is decoration, and the
+    /// send and the reply it triggers would carry the same minute twice over.
+    private func timeSeparator(at index: Int) -> Date? {
+        guard let arrival = arrived[index] else { return nil }
+        // An unknown neighbour is an unknown gap, which is exactly the case a
+        // time answers: this is where the conversation was picked back up.
+        guard index > 0, let previous = arrived[index - 1] else { return arrival }
+        return arrival.timeIntervalSince(previous) >= 300 ? arrival : nil
+    }
+
+    // MARK: - Copy
+
+    private func copy(_ message: ChatMessage, at index: Int) {
+        UIPasteboard.general.string = message.content
+        copiedMessage = index
+        copyTick += 1
+        Task {
+            try? await Task.sleep(for: .seconds(1.2))
+            if copiedMessage == index { copiedMessage = nil }
+        }
     }
 }

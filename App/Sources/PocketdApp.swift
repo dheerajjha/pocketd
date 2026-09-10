@@ -11,11 +11,10 @@ struct PocketdApp: App {
                 .environment(model)
                 .task { await model.bootstrap() }
                 .onChange(of: scenePhase) { _, phase in
-                    // The listening socket does not survive suspension, so
-                    // coming back to the foreground has to put it back.
-                    if phase == .active {
-                        Task { await model.reconcileAfterForeground() }
-                    }
+                    // Both the socket and the resident model are torn down by
+                    // suspension — one by iOS, one by us — so every transition
+                    // matters and the handler owns which is which.
+                    Task { await model.handleScenePhase(phase) }
                 }
         }
     }

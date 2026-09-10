@@ -69,6 +69,8 @@ extension InferenceServer {
             return errorResponse(status: .badRequest, message: "invalid request: \(error)", style: .ollama, headers: cors)
         }
 
+        if let rejection = refuseUnsupported(payload.options, cors: cors) { return rejection }
+
         let messages = payload.messages.map {
             ChatMessage(
                 role: ChatMessage.Role(rawValue: $0.role) ?? .user,
@@ -99,6 +101,8 @@ extension InferenceServer {
             return errorResponse(status: .badRequest, message: "invalid request: \(error)", style: .ollama, headers: cors)
         }
 
+        if let rejection = refuseUnsupported(payload.options, cors: cors) { return rejection }
+
         var messages: [ChatMessage] = []
         if let system = payload.system, !system.isEmpty { messages.append(.system(system)) }
         messages.append(.user(payload.prompt))
@@ -117,6 +121,23 @@ extension InferenceServer {
     enum OllamaShape {
         case chat
         case generate
+    }
+
+    /// 400s a request that set an option this backend cannot build a sampler
+    /// for, rather than serving it with the option quietly dropped.
+    ///
+    /// Ollama itself would accept every one of these, so a client is entitled
+    /// to assume they took effect. Being told "no" is the only outcome that
+    /// leaves the client able to tell the difference.
+    private func refuseUnsupported(_ options: Ollama.Options?, cors: HTTPHeaders) -> HTTPResponse? {
+        let refused = options?.unsupportedParameters() ?? []
+        guard !refused.isEmpty else { return nil }
+        return errorResponse(
+            status: .badRequest,
+            message: "this backend cannot honour \(refused.joined(separator: ", ")); remove the option rather than relying on it being applied",
+            style: .ollama,
+            headers: cors
+        )
     }
 
     private func runOllama(

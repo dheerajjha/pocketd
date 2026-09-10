@@ -35,6 +35,11 @@ public struct ModelRecord: Sendable, Codable, Equatable, Identifiable, Hashable 
     /// capable is how someone ends up with a feature that silently never fires.
     /// Unknown is treated as unusable at the gate, but says so differently.
     public var toolSupport: ModelCapabilities.Support
+    /// The model's own shape, read from its GGUF header once the file is on the
+    /// device. `nil` until then — a catalogue entry is a URL and a size, and
+    /// the header cannot be read over the network — which is why every estimate
+    /// derived from this has to say whether it had it.
+    public var ggufDimensions: GGUFModelDimensions?
 
     public init(
         id: String,
@@ -49,7 +54,8 @@ public struct ModelRecord: Sendable, Codable, Equatable, Identifiable, Hashable 
         sourceURL: URL? = nil,
         projectorFilename: String? = nil,
         projectorSizeBytes: Int64 = 0,
-        toolSupport: ModelCapabilities.Support = .unknown
+        toolSupport: ModelCapabilities.Support = .unknown,
+        ggufDimensions: GGUFModelDimensions? = nil
     ) {
         self.id = id
         self.displayName = displayName
@@ -64,6 +70,7 @@ public struct ModelRecord: Sendable, Codable, Equatable, Identifiable, Hashable 
         self.projectorFilename = projectorFilename
         self.projectorSizeBytes = projectorSizeBytes
         self.toolSupport = toolSupport
+        self.ggufDimensions = ggufDimensions
     }
 
     /// Decoded leniently so a manifest written by an older build still loads.
@@ -85,6 +92,11 @@ public struct ModelRecord: Sendable, Codable, Equatable, Identifiable, Hashable 
         projectorFilename = try c.decodeIfPresent(String.self, forKey: .projectorFilename)
         projectorSizeBytes = try c.decodeIfPresent(Int64.self, forKey: .projectorSizeBytes) ?? 0
         toolSupport = try c.decodeIfPresent(ModelCapabilities.Support.self, forKey: .toolSupport) ?? .unknown
+        // Decoded, then distrusted: a manifest written by a build whose reader
+        // had a bug carries numbers that parse perfectly and describe nothing.
+        // `MemoryEstimate` validates before multiplying, and falls back to the
+        // flat guess rather than believing them.
+        ggufDimensions = try c.decodeIfPresent(GGUFModelDimensions.self, forKey: .ggufDimensions)
     }
 
     public var downloadURL: URL {
@@ -102,12 +114,19 @@ public struct ModelRecord: Sendable, Codable, Equatable, Identifiable, Hashable 
     /// wrong by exactly the amount that gets someone jetsammed.
     public var totalDownloadBytes: Int64 { sizeBytes + projectorSizeBytes }
 
-    /// Weights plus a working allowance for the KV cache and the runtime. The
-    /// 1.25 multiplier is empirical, not a promise — it is what keeps a 2B Q4
-    /// model from being reported as "fits" on a device where it will be jetsammed
-    /// two thousand tokens into the first conversation.
+    /// Weights, projector, KV cache and runtime, at the full context the model
+    /// declares.
+    ///
+    /// The declared window is the pessimistic reading and the wrong one for
+    /// most callers: this app serves 4K by default and several catalogue
+    /// entries declare 128K, so a model charged for its window looks unusable
+    /// when it would load with room to spare. It is what `DeviceBudget.fit(for:)`
+    /// assumes when nobody says otherwise, and both exist so that call sites
+    /// written before context entered the estimate keep compiling. Anything
+    /// that knows the context it will serve should call
+    /// `memoryEstimate(atContext:)` with it.
     public var estimatedResidentBytes: Int64 {
-        Int64(Double(sizeBytes + projectorSizeBytes) * 1.25) + 192 * 1024 * 1024
+        memoryEstimate(atContext: contextLength).totalBytes
     }
 
     public static let echo = ModelRecord(

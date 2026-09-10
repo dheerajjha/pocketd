@@ -211,9 +211,15 @@ These are not bugs, and pretending otherwise would waste your afternoon.
   ... can be reached at Ranjus-MacBook-Pro.local.:11434
   version=0.1.0 api=openai,ollama auth=required model=smollm2-360m
   ```
-- **Sampling is bound at load time.** llama.cpp fixes temperature, top-k and
-  top-p to the context, so per-request overrides are ignored; `max_tokens` and
-  `stop` are enforced by the server itself. Set sampling in Settings.
+- **Sampling costs a reload.** llama.cpp binds its sampler to the context, so
+  honouring a changed `temperature`, `top_p`, `top_k`, `repeat_penalty` or
+  `seed` means rebuilding it. pocketd does that only when the values differ
+  from the resident ones, so repeated requests at the same settings cost
+  nothing. An explicit `seed` always rebuilds, because that is the only way it
+  reproduces. `frequency_penalty`, `presence_penalty` and `min_p` are refused
+  with a 400 naming the field rather than accepted and ignored. `max_tokens`
+  and `stop` are enforced by the server itself. The defaults every request
+  inherits are in Settings.
 - **Token counts are estimates.** `usage` is derived from a 4-characters-per-token
   approximation, not the model's tokenizer. Do not bill anyone against it.
 - **Oversized prompts are refused, not truncated.** llama.cpp does not fail
@@ -252,7 +258,7 @@ simulator, with real SmolLM2 360M weights and real llama.cpp:
 - request log reporting live throughput per client
 
 Three of those checks exist because the feature was broken and shipping when it
-was written. The package suite is 70 tests and needs no simulator.
+was written. The package suite is 251 tests and needs no simulator.
 
 ## Repository layout
 
@@ -261,7 +267,7 @@ Sources/PocketdKit/      the server, the wire formats, the model store
   Inference/             InferenceEngine protocol — the seam
   Models/                catalogue, downloads, device memory budget
   Server/                lifecycle, routes, SSE and NDJSON streaming
-Tests/PocketdKitTests/   70 tests, no simulator, no GPU
+Tests/PocketdKitTests/   251 tests, no simulator, no GPU
 scripts/smoke.sh         probes a RUNNING server the way a client would
 App/Sources/             the SwiftUI app
   Inference/             llama.cpp adapter (LocalLLMClient)

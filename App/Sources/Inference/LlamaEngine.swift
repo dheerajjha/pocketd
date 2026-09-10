@@ -13,10 +13,31 @@ import LocalLLMClientLlama
 /// hard crash rather than garbled output. Loading, unloading and generating all
 /// take the gate for exactly that reason.
 ///
-/// Sampling parameters (temperature, top-k, top-p) are fixed when the model is
-/// loaded, because llama.cpp binds them to the context. Per-request overrides in
-/// the OpenAI and Ollama payloads are therefore honoured for `max_tokens` and
-/// stop sequences, which this layer enforces itself, but not for sampling.
+/// Sampling is honoured per request, but it is not free, and the shape of this
+/// file follows from why.
+///
+/// llama.cpp keeps its sampler chain inside `llama_context`, and LocalLLMClient
+/// 0.5.0 builds that chain exactly once, in `Context.init`, from the
+/// `LlamaClient.Parameter` handed to `LlamaClient.init`. Every route back to it
+/// is closed: `Context.sampling` is internal, `Context.parameter` is a `let`,
+/// `LlamaClient.context` is `private` and reachable only from the library's own
+/// DEBUG builds. Nothing can change the sampler of a client that already
+/// exists, so honouring a change means constructing a new one — a fresh
+/// `llama_context` and KV cache, a re-mapped model, a re-parsed chat template
+/// and rebuilt chat parameters, plus the loss of the prompt cache, which makes
+/// the next prompt prefill from nothing. On a phone that is seconds, not
+/// milliseconds.
+///
+/// That cost is the reason a request carries a whole `SamplingParameters` and
+/// not a bag of overrides: an identical set compares equal and nothing happens
+/// at all, which is every request from a client that picks its temperature once
+/// and keeps it. Changing one costs a reload. Pinning a `seed` costs a reload
+/// unconditionally — llama.cpp seeds the distribution sampler when the chain is
+/// built and the RNG advances from there, so a seed only means what a client
+/// thinks it means against a sampler that has not run yet.
+///
+/// `max_tokens` and stop sequences remain this layer's own work, enforced
+/// against the token stream, and cost nothing either way.
 actor LlamaEngine: InferenceEngine {
     nonisolated var backendName: String { "llama.cpp" }
 
@@ -34,7 +55,25 @@ actor LlamaEngine: InferenceEngine {
     private var contextIsDirty = false
     private let fileURL: @Sendable (ModelRecord) -> URL
     private let projectorURL: @Sendable (ModelRecord) -> URL?
-    private var sampling: SamplingProfile
+
+    /// What a request inherits for every sampling field it does not name — the
+    /// operator's setting, not llama.cpp's, once Settings has written one.
+    private(set) var defaultSampling: SamplingParameters
+    /// The context window to ask for, capped by the model's own. Not part of
+    /// `SamplingParameters` even though changing it forces the same reload:
+    /// it is a residency decision about how much memory this device will give
+    /// the KV cache, and letting a request move it would let any caller on the
+    /// network resize the phone's working set.
+    private var contextTokens: Int
+
+    /// What the live client was actually built with, which is the only thing a
+    /// request can be compared against. Distinct from `defaultSampling`, which
+    /// is merely what the *next* build will start from — after a request has
+    /// overridden the temperature, those two disagree, and answering "do I need
+    /// to rebuild?" from the configured value instead of the resident one would
+    /// rebuild on the way back to the default and skip it on the way out.
+    private var residentSampling: SamplingParameters?
+    private var residentContextTokens: Int?
 
     /// Tools, in the order they were registered.
     ///
@@ -65,13 +104,6 @@ actor LlamaEngine: InferenceEngine {
     private var waiters: [UUID: CheckedContinuation<Void, any Error>] = [:]
     private var waitOrder: [UUID] = []
 
-    struct SamplingProfile: Sendable, Equatable {
-        var temperature: Float = 0.8
-        var topK: Int = 40
-        var topP: Float = 0.95
-        var contextTokens: Int = 4096
-    }
-
     /// - Parameter tools: Registered for the engine's whole life. An empty
     ///   array is not merely the default, it is a promise: the library's
     ///   `processMessages` returns the messages untouched when no tool is
@@ -81,12 +113,14 @@ actor LlamaEngine: InferenceEngine {
     init(
         fileURL: @escaping @Sendable (ModelRecord) -> URL,
         projectorURL: @escaping @Sendable (ModelRecord) -> URL? = { _ in nil },
-        sampling: SamplingProfile = SamplingProfile(),
+        defaultSampling: SamplingParameters = .default,
+        contextTokens: Int = 4096,
         tools: [any LLMTool] = []
     ) {
         self.fileURL = fileURL
         self.projectorURL = projectorURL
-        self.sampling = sampling
+        self.defaultSampling = defaultSampling
+        self.contextTokens = contextTokens
         self.tools = tools
         let wrapped = tools.map { AnyLLMTool($0) }
         // First registration wins. Two tools sharing a name is a programming
@@ -149,23 +183,32 @@ actor LlamaEngine: InferenceEngine {
 
     // MARK: - Residency
 
-    func updateSampling(_ profile: SamplingProfile) async throws {
-        guard profile != sampling else { return }
-        sampling = profile
-        // Sampling lives in the context, so a change only takes effect on reload.
-        if let model { try await load(model: model) }
+    /// The Settings entry point: what requests inherit from here on.
+    ///
+    /// Deliberately does not reload. The old code did, which meant moving a
+    /// slider tore down a live model to apply a setting no request had asked
+    /// for yet; the next `generate` compares against the resident sampler and
+    /// pays for the change only if it turns out to matter. A user who moves a
+    /// slider and never sends another request pays nothing.
+    func updateDefaultSampling(_ parameters: SamplingParameters) {
+        defaultSampling = parameters
+    }
+
+    /// Same lazy contract as `updateDefaultSampling`, for the context window.
+    func updateContextTokens(_ tokens: Int) {
+        contextTokens = max(1, tokens)
     }
 
     func load(model: ModelRecord) async throws {
         let token = UUID()
         try await acquire(token)
         defer { release(token) }
-        try await loadHoldingGate(model)
+        try await loadHoldingGate(model, sampling: defaultSampling)
     }
 
     /// The load itself, for callers that already hold the gate. Taking it twice
     /// would deadlock the actor against itself.
-    private func loadHoldingGate(_ model: ModelRecord) async throws {
+    private func loadHoldingGate(_ model: ModelRecord, sampling: SamplingParameters) async throws {
         let url = fileURL(model)
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw InferenceError.modelNotFound(model.id)
@@ -176,6 +219,8 @@ actor LlamaEngine: InferenceEngine {
         client = nil
         self.model = nil
         toolOverheadTokens = 0
+        residentSampling = nil
+        residentContextTokens = nil
 
         do {
             // The simulator's Metal driver cannot allocate the buffers the
@@ -202,14 +247,28 @@ actor LlamaEngine: InferenceEngine {
                 projector = path
             }
 
+            let resolvedContext = min(model.contextLength, contextTokens)
             let llama = try await LocalLLMClient.llama(
                 url: url,
                 mmprojURL: projector,
                 parameter: .init(
-                    context: min(model.contextLength, sampling.contextTokens),
-                    temperature: sampling.temperature,
+                    context: resolvedContext,
+                    // `nil` is llama.cpp's "pick a random one", which is what an
+                    // unseeded request wants. A seed that was named is narrowed
+                    // to 32 bits because `Context.init` converts it with a
+                    // trapping `UInt32.init` — a client sending anything past
+                    // 2^32 would otherwise take the process down. Two seeds that
+                    // differ only above bit 32 therefore produce the same
+                    // output, and 0xFFFFFFFF lands on llama.cpp's own sentinel
+                    // for "random"; both are documented rather than pretended
+                    // away, because there is no wider seed to give it.
+                    seed: sampling.seed.map { Int(UInt32(truncatingIfNeeded: $0)) },
+                    temperature: Float(sampling.temperature),
                     topK: sampling.topK,
-                    topP: sampling.topP,
+                    topP: Float(sampling.topP),
+                    typicalP: Float(sampling.typicalP),
+                    penaltyLastN: sampling.repeatLastN,
+                    penaltyRepeat: Float(sampling.repeatPenalty),
                     // LocalLLMClient defaults to pausing generation on
                     // UIApplication.willResignActive, checked before every
                     // single token. That is right for a chat app and ruinous
@@ -228,6 +287,11 @@ actor LlamaEngine: InferenceEngine {
             self.model = model
             contextIsDirty = false
             toolOverheadTokens = overhead(forModelAt: url)
+            // Recorded from what was passed, not from what is configured now:
+            // this is the sampler that exists, and it is what the next request
+            // has to be compared against.
+            residentSampling = sampling
+            residentContextTokens = resolvedContext
         } catch {
             throw InferenceError.backend(String(describing: error))
         }
@@ -263,6 +327,8 @@ actor LlamaEngine: InferenceEngine {
         client = nil
         model = nil
         toolOverheadTokens = 0
+        residentSampling = nil
+        residentContextTokens = nil
     }
 
     // MARK: - Generation
@@ -311,11 +377,35 @@ actor LlamaEngine: InferenceEngine {
             return
         }
 
-        // Pay for a previous cancellation now, once, rather than serving
-        // garbage from a poisoned cache.
-        if contextIsDirty {
+        // Checked before the rebuild below, not after: a request naming the
+        // wrong model is going to be refused either way, and refusing it after
+        // tearing down and reloading the resident one would let any caller on
+        // the network cost the phone a reload it can never use.
+        guard request.modelID.isEmpty || request.modelID == model.id else {
+            continuation.finish(throwing: InferenceError.modelMismatch(requested: request.modelID, loaded: model.id))
+            return
+        }
+
+        let sampling = request.resolvedSampling(defaults: defaultSampling)
+        // Everything that can only be changed by building a new client, decided
+        // in one place so no path can rebuild twice or forget to.
+        //
+        // `contextIsDirty` pays for a previous cancellation, once, rather than
+        // serving garbage from a poisoned cache. The two comparisons pay for a
+        // request that wants a different sampler or a different window. The last
+        // clause is the one that looks redundant and is not: an explicit seed
+        // compares equal to the resident one on the second identical request,
+        // and skipping the rebuild there would hand that client a *different*
+        // answer to the same seeded prompt, because llama.cpp's distribution
+        // sampler seeds itself when the chain is built and keeps advancing. A
+        // seed nobody can rely on is worse than no seed at all.
+        let mustRebuild = contextIsDirty
+            || residentSampling != sampling
+            || residentContextTokens != min(model.contextLength, contextTokens)
+            || sampling.pinsRandomness
+        if mustRebuild {
             do {
-                try await loadHoldingGate(model)
+                try await loadHoldingGate(model, sampling: sampling)
                 guard let rebuilt = self.client else {
                     continuation.finish(throwing: InferenceError.noModelLoaded)
                     return
@@ -325,11 +415,6 @@ actor LlamaEngine: InferenceEngine {
                 continuation.finish(throwing: error)
                 return
             }
-
-        }
-        guard request.modelID.isEmpty || request.modelID == model.id else {
-            continuation.finish(throwing: InferenceError.modelMismatch(requested: request.modelID, loaded: model.id))
-            return
         }
 
         // Defence in depth: the Chat tab calls the engine directly, so the
@@ -337,7 +422,7 @@ actor LlamaEngine: InferenceEngine {
         // process-killing trap inside llama.cpp rather than a thrown error.
         do {
             try ContextGuard(
-                contextTokens: min(model.contextLength, sampling.contextTokens),
+                contextTokens: min(model.contextLength, contextTokens),
                 // The tool schemas are injected downstream, inside the library,
                 // so they are invisible to a guard that only sees the messages.
                 fixedOverheadTokens: toolOverheadTokens

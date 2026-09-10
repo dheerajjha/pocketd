@@ -7,6 +7,15 @@ public struct GenerationRequest: Sendable, Equatable {
     public var modelID: String
     public var messages: [ChatMessage]
     public var options: GenerationOptions
+    /// The sampler to start from, before `options` is laid over it.
+    ///
+    /// `nil` — the normal case — means "whatever the engine is configured
+    /// with", and only the engine knows that. Pinning it here is for a caller
+    /// that wants this one request sampled a specific way regardless of the
+    /// server's settings; it does not disable `options`, which still wins for
+    /// any field it names. Read it through `resolvedSampling(defaults:)`
+    /// rather than directly.
+    public var sampling: SamplingParameters?
     /// Defaults to the restricted case on purpose: a call site that forgets to
     /// set this gets the path with no access to personal data, not the
     /// privileged one. Fail closed.
@@ -16,11 +25,13 @@ public struct GenerationRequest: Sendable, Equatable {
         modelID: String,
         messages: [ChatMessage],
         options: GenerationOptions = .default,
+        sampling: SamplingParameters? = nil,
         origin: RequestOrigin = .network(host: "unknown", port: 0)
     ) {
         self.modelID = modelID
         self.messages = messages
         self.options = options
+        self.sampling = sampling
         self.origin = origin
     }
 }
@@ -91,6 +102,13 @@ public protocol InferenceEngine: Sendable {
     /// checked it — tool schemas, mostly. Zero when nothing is registered.
     var promptOverheadTokens: Int { get async }
 
+    /// What a request inherits for every sampling field it does not name.
+    ///
+    /// Exposed rather than kept private because a client has no other way to
+    /// find out what it is being sampled with, and "you get whatever the
+    /// operator set" is only an honest answer if the number is reachable.
+    var defaultSampling: SamplingParameters { get async }
+
     /// Bring a model into memory, evicting whatever was there. On a phone there
     /// is only ever room for one.
     func load(model: ModelRecord) async throws
@@ -105,6 +123,10 @@ public protocol InferenceEngine: Sendable {
 public extension InferenceEngine {
     /// Most engines add nothing.
     var promptOverheadTokens: Int { get async { 0 } }
+
+    /// An engine with nothing configured is an engine running llama.cpp's own
+    /// defaults, which is what an unconfigured `llama-server` would do too.
+    var defaultSampling: SamplingParameters { get async { .default } }
 
     /// Convenience for non-streaming callers: drain the stream into one string.
     func complete(_ request: GenerationRequest) async throws -> (text: String, reason: FinishReason, usage: TokenUsage) {

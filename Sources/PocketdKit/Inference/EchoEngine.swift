@@ -14,21 +14,39 @@ public actor EchoEngine: InferenceEngine {
     private let delay: Duration
     private let announcesToolCall: String?
 
+    public let defaultSampling: SamplingParameters
+
+    /// Every sampler this engine has been asked for, oldest first.
+    ///
+    /// Nothing here samples anything, so this is the only evidence that a
+    /// `temperature` in a request body survived decoding, merging and the trip
+    /// across the engine seam. Recorded rather than merely last-written so a
+    /// test can assert that two identical requests really did resolve
+    /// identically — which is the property `LlamaEngine` skips a rebuild on.
+    public private(set) var receivedSampling: [SamplingParameters] = []
+
+    public var lastSampling: SamplingParameters? { receivedSampling.last }
+
     /// - Parameter announcesToolCall: When set, the stream opens with a
     ///   `.toolCallStarted` event naming this tool. Nothing here executes a
     ///   tool; the point is that every consumer of a `GenerationEvent` stream —
     ///   the two wire protocols especially — can be tested against an engine
     ///   that emits one, without a real model that decides to call one.
+    /// - Parameter defaultSampling: stands in for what an operator set in
+    ///   Settings, so the inheritance rule — a request keeps the server's value
+    ///   for every field it stays silent about — is testable without weights.
     public init(
         model: ModelRecord? = .echo,
         chunkSize: Int = 4,
         delay: Duration = .zero,
-        announcesToolCall: String? = nil
+        announcesToolCall: String? = nil,
+        defaultSampling: SamplingParameters = .default
     ) {
         self.model = model
         self.chunkSize = chunkSize
         self.delay = delay
         self.announcesToolCall = announcesToolCall
+        self.defaultSampling = defaultSampling
     }
 
     public func loadedModel() async -> ModelRecord? { model }
@@ -42,6 +60,9 @@ public actor EchoEngine: InferenceEngine {
         guard request.modelID.isEmpty || request.modelID == model.id else {
             throw InferenceError.modelMismatch(requested: request.modelID, loaded: model.id)
         }
+        // Recorded before the rejections above would matter, but after them, so
+        // the log describes requests that were actually served.
+        receivedSampling.append(request.resolvedSampling(defaults: defaultSampling))
 
         // Echo the last user turn back, which makes assertions in tests read as
         // "what went in came out" rather than depending on sampled text.

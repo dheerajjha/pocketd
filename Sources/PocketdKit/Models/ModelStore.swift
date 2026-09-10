@@ -83,10 +83,20 @@ public enum DownloadInterruption: Sendable, Equatable {
 public actor ModelStore {
     private let directory: URL
     private let session: URLSession
-    private let budget: DeviceBudget
+    private var budget: DeviceBudget
     private var manifest: [String: ModelRecord] = [:]
 
     private var manifestURL: URL { directory.appendingPathComponent("manifest.json") }
+
+    /// Keeps the download gate honest when the context limit changes.
+    ///
+    /// The gate refuses a model that will not fit, and what fits depends on the
+    /// context being served — raising the limit in Settings can turn a model
+    /// that was downloadable into one that is not, and the store has to hear
+    /// about it or it will keep answering from a stale budget.
+    public func updateBudget(_ budget: DeviceBudget) {
+        self.budget = budget
+    }
 
     public init(directory: URL, budget: DeviceBudget, session: URLSession = .shared) {
         self.directory = directory
@@ -267,7 +277,11 @@ public actor ModelStore {
             }
         }
 
-        manifest[model.id] = model
+        // The file exists now, so the memory estimate stops being a guess. Read
+        // once, here: the header never changes, and every fit badge and refusal
+        // from this point on is computed from the model's real shape rather
+        // than from a flat percentage of its file size.
+        manifest[model.id] = model.readingDimensions(fromFileAt: fileURL(for: model))
         persist()
         let total = declaredSize + model.projectorSizeBytes
         onProgress(DownloadProgress(modelID: id, receivedBytes: total, totalBytes: total))

@@ -47,6 +47,26 @@ public struct ServerConfiguration: Sendable, Equatable, Codable {
     /// client gets a 500 with an empty body. Streaming survived only because
     /// each token resets the clock. The default here is the wall-clock cost of
     /// a full context at a pessimistic three tokens a second.
+    /// What a request inherits for every sampling field it does not send.
+    ///
+    /// Here rather than in the app because it is server state: a client that
+    /// omits `temperature` is asking for the server's default, and until now
+    /// that default was a literal buried in the engine that nobody could see
+    /// or change.
+    /// Note the repeat penalty: llama.cpp's own default is 1.0 and
+    /// `SamplingParameters.default` says so, because that is the documented
+    /// truth. What ships here is 1.1, which is what pocketd has always
+    /// actually applied — it inherited LocalLLMClient's value by never setting
+    /// the field. Every model in the catalogue is between 0.3B and 4B, and at
+    /// 1.0 models that small fall into loops often enough that "correcting"
+    /// this to the documented default would be a visible regression sold as a
+    /// bug fix. It is a setting now, so anyone who disagrees can move it.
+    public var sampling: SamplingParameters = {
+        var shipped = SamplingParameters.default
+        shipped.repeatPenalty = 1.1
+        return shipped
+    }()
+
     public var connectionTimeout: TimeInterval
 
     public init(

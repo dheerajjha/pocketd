@@ -16,15 +16,20 @@ struct RootView: View {
             DeskModeView()
                 .transition(.opacity)
         } else {
-            TabView(selection: $tab) {
-                Tab("Server", systemImage: "network", value: AppTab.server) {
-                    ServerView(goTo: { tab = $0 })
+            // Above the tabs rather than inside one of them: a download is the
+            // one thing here that outlives the screen that started it.
+            VStack(spacing: 0) {
+                DownloadBanner()
+                TabView(selection: $tab) {
+                    Tab("Server", systemImage: "network", value: AppTab.server) {
+                        ServerView(goTo: { tab = $0 })
+                    }
+                    Tab("Models", systemImage: "shippingbox", value: AppTab.models) { ModelsView() }
+                    Tab("Chat", systemImage: "bubble.left.and.bubble.right", value: AppTab.chat) {
+                        ChatView(goTo: { tab = $0 })
+                    }
+                    Tab("Settings", systemImage: "gearshape", value: AppTab.settings) { SettingsView() }
                 }
-                Tab("Models", systemImage: "shippingbox", value: AppTab.models) { ModelsView() }
-                Tab("Chat", systemImage: "bubble.left.and.bubble.right", value: AppTab.chat) {
-                    ChatView(goTo: { tab = $0 })
-                }
-                Tab("Settings", systemImage: "gearshape", value: AppTab.settings) { SettingsView() }
             }
         }
     }

@@ -40,9 +40,24 @@ final class AppModel {
     private(set) var downloadPaused: [String: String] = [:]
     private(set) var loadedModelID: String?
     private(set) var isLoadingModel = false
-    let budget: DeviceBudget
+    /// Varies with the context limit: what fits depends on how much KV cache
+    /// the served context will demand, so this is not a constant of the device.
+    private(set) var budget: DeviceBudget
 
-    var catalog: [ModelRecord] { ModelCatalog.all }
+    /// The curated catalogue plus anything actually on this phone.
+    ///
+    /// These are not the same set and treating them as one list was a real
+    /// bug: `/api/models/add` can pull any GGUF on Hugging Face, it lands in
+    /// the manifest, and the Models tab — which iterated the static catalogue —
+    /// never showed it. The download worked and the model was invisible.
+    /// Installed entries win on id so a catalogue model that has been
+    /// downloaded keeps its curated name and description.
+    var catalog: [ModelRecord] {
+        var merged = ModelCatalog.all
+        let known = Set(merged.map(\.id))
+        merged.append(contentsOf: installed.filter { !known.contains($0.id) })
+        return merged
+    }
 
     // MARK: Chat
 
@@ -69,15 +84,39 @@ final class AppModel {
         static let loadedModel = "pocketd.loadedModel"
         static let systemPrompt = "pocketd.systemPrompt"
         static let serverShouldRun = "pocketd.serverShouldRun"
+        static let autoOffloadInBackground = "pocketd.autoOffloadInBackground"
+        static let idleOffloadSeconds = "pocketd.idleOffloadSeconds"
     }
 
     init() {
-        budget = .current(hasIncreasedMemoryLimit: Entitlements.hasIncreasedMemoryLimit)
+        // The configuration comes first because the memory budget depends on
+        // it: how much KV cache a model needs is set by the context this
+        // server creates, so "will it fit" cannot be answered until the served
+        // context is known.
+        //
+        // load() persists a freshly generated configuration on the spot.
+        // Relying on the didSet below would not: property observers do not run
+        // during initialisation, so the API key would be new on every launch.
+        let configurationStore = ServerConfigurationStore()
+        self.configurationStore = configurationStore
+        let configuration = configurationStore.load()
+        self.configuration = configuration
+
+        let budget = DeviceBudget.current(
+            hasIncreasedMemoryLimit: Entitlements.hasIncreasedMemoryLimit,
+            servedContextTokens: configuration.maxContextTokens
+        )
+        self.budget = budget
 
         let directory = (try? ModelStore.defaultDirectory())
             ?? FileManager.default.temporaryDirectory.appendingPathComponent("Models")
         let store = ModelStore(directory: directory, budget: budget)
         self.store = store
+
+        self.conversations = ConversationStore(
+            directory: (try? ConversationStore.defaultDirectory())
+                ?? directory.appendingPathComponent("Conversations")
+        )
 
         let engine = LlamaEngine(
             fileURL: { store.fileURL(for: $0) },
@@ -91,14 +130,6 @@ final class AppModel {
             tools: ProcessInfo.processInfo.arguments.contains("-pocketd-selftest-tool") ? [EchoTool()] : []
         )
         self.engine = engine
-
-        // load() persists a freshly generated configuration on the spot. Relying
-        // on the didSet below would not: property observers do not run during
-        // initialisation, so the API key would be new on every launch.
-        let configurationStore = ServerConfigurationStore()
-        self.configurationStore = configurationStore
-        let configuration = configurationStore.load()
-        self.configuration = configuration
 
         self.server = InferenceServer(
             configuration: configuration,
@@ -124,6 +155,11 @@ final class AppModel {
 
         systemPrompt = UserDefaults.standard.string(forKey: Keys.systemPrompt) ?? systemPrompt
         serverShouldRun = UserDefaults.standard.bool(forKey: Keys.serverShouldRun)
+        // `object(forKey:)` rather than `bool(forKey:)`: an absent key reads as
+        // false, which would turn the default off for everyone who has never
+        // touched the switch.
+        autoOffloadInBackground = UserDefaults.standard.object(forKey: Keys.autoOffloadInBackground) as? Bool ?? true
+        idleOffloadSeconds = UserDefaults.standard.integer(forKey: Keys.idleOffloadSeconds)
     }
 
     func bootstrap() async {
@@ -136,7 +172,19 @@ final class AppModel {
         governor.start()
 
         await store.load()
+        await engine.updateDefaultSampling(configuration.sampling)
         installed = await store.installed()
+
+        // Reopen what was on screen last time. Coming back to a blank Chat tab
+        // after a force-quit reads as data loss even when the transcript is
+        // safely on disk one tap away in the history.
+        await loadHistory()
+        if let latest = history.first {
+            conversation = latest.messages
+            draft = latest.draft
+            currentConversationID = latest.id
+            conversationStartedAt = latest.createdAt
+        }
 
         // Driving the idle timer from the observer is what also catches the
         // transitions the app did not initiate — a failed bind, or iOS
@@ -240,6 +288,11 @@ final class AppModel {
 
     func applyConfiguration(_ new: ServerConfiguration) async {
         configuration = new
+        // The context limit moves the memory ceiling, so every fit badge and
+        // the download gate have to be recomputed against the new one.
+        budget.servedContextTokens = new.maxContextTokens
+        await store.updateBudget(budget)
+        await engine.updateDefaultSampling(new.sampling)
         do {
             try await server.apply(new)
             lastServerError = nil
@@ -341,18 +394,23 @@ final class AppModel {
         downloadTasks[model.id] = Task { [store] in
             do {
                 for try await progress in await store.download(model, allowingOversized: allowingOversized) {
-                    await MainActor.run { self.downloads[model.id] = progress }
+                    await MainActor.run {
+                        self.downloads[model.id] = progress
+                        self.recordSample(progress)
+                    }
                 }
                 let list = await store.installed()
                 await MainActor.run {
                     self.installed = list
                     self.downloads[model.id] = nil
                     self.downloadTasks[model.id] = nil
+                    self.clearSamples(model.id)
                 }
             } catch is CancellationError {
                 await MainActor.run {
                     self.downloads[model.id] = nil
                     self.downloadTasks[model.id] = nil
+                    self.clearSamples(model.id)
                 }
             } catch {
                 await MainActor.run {
@@ -367,6 +425,7 @@ final class AppModel {
                     }
                     self.downloads[model.id] = nil
                     self.downloadTasks[model.id] = nil
+                    self.clearSamples(model.id)
                 }
             }
         }
@@ -435,6 +494,323 @@ final class AppModel {
         }
     }
 
+    /// Drops the resident model and frees its memory, keeping the file.
+    ///
+    /// Deleting was the only way to reclaim the memory, which meant paying for
+    /// the download again. On a phone that is serving, this is the more useful
+    /// half of the pair: a 4-bit 3B model holds well over a gigabyte resident,
+    /// and that is a gigabyte the phone cannot spend on anything else.
+    ///
+    /// The remembered choice is deliberately kept. A server that has been told
+    /// to run should still answer the next request, and answering it means
+    /// loading this model again — offload frees the memory now, it does not
+    /// resign from serving.
+    func offloadModel() async {
+        guard loadedModelID != nil else { return }
+        if isGenerating {
+            stopGenerating()
+            generationError = "Stopped the reply to offload the model."
+        }
+        await engine.unload()
+        syncLoadedModel(nil)
+        offloadNotice = serverShouldRun
+            ? "Memory freed. The next request from a connected device loads it again."
+            : "Memory freed. The model is still on this phone."
+    }
+
+    /// Shown after an offload, because otherwise the row simply reverts to
+    /// "Load" and nothing says the memory actually came back.
+    private(set) var offloadNotice: String?
+
+    func dismissOffloadNotice() { offloadNotice = nil }
+
+    // MARK: - Conversations
+
+    private let conversations: ConversationStore
+    /// Every saved conversation, newest first. Kept in memory so the history
+    /// list is instant; the store is the source of truth on disk.
+    private(set) var history: [Conversation] = []
+    private(set) var currentConversationID = UUID()
+    private var conversationStartedAt = Date()
+
+    /// Writes are debounced rather than done per token: a reply arrives at
+    /// dozens of tokens a second and each one would otherwise re-encode and
+    /// re-write the entire transcript.
+    private var saveTask: Task<Void, Never>?
+
+    func loadHistory() async {
+        history = await conversations.all()
+    }
+
+    private func snapshotConversation() -> Conversation {
+        Conversation(
+            id: currentConversationID,
+            title: history.first(where: { $0.id == currentConversationID })?.title ?? "",
+            createdAt: conversationStartedAt,
+            updatedAt: Date(),
+            modelID: loadedModelID,
+            messages: conversation,
+            draft: draft
+        )
+    }
+
+    /// Persists the current transcript shortly after it stops changing.
+    func scheduleConversationSave() {
+        saveTask?.cancel()
+        let snapshot = snapshotConversation()
+        saveTask = Task { [conversations] in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            try? await conversations.save(snapshot)
+            let all = await conversations.all()
+            await MainActor.run { self.history = all }
+        }
+    }
+
+    /// Saves immediately, for the paths where there may be no later chance —
+    /// backgrounding, or switching away from a conversation.
+    func flushConversation() async {
+        saveTask?.cancel()
+        try? await conversations.save(snapshotConversation())
+        history = await conversations.all()
+    }
+
+    func newConversation() async {
+        await flushConversation()
+        conversation.removeAll()
+        draft = ""
+        generationError = nil
+        modelSwitchNotice = nil
+        currentConversationID = UUID()
+        conversationStartedAt = Date()
+    }
+
+    func openConversation(_ id: UUID) async {
+        guard id != currentConversationID else { return }
+        await flushConversation()
+        guard let found = history.first(where: { $0.id == id }) else { return }
+        conversation = found.messages
+        draft = found.draft
+        currentConversationID = found.id
+        conversationStartedAt = found.createdAt
+        generationError = nil
+        modelSwitchNotice = nil
+    }
+
+    func deleteConversation(_ id: UUID) async {
+        await conversations.delete(id)
+        history = await conversations.all()
+        // Deleting what you are looking at has to leave you somewhere, and an
+        // emptied-but-still-current transcript would be saved straight back.
+        if id == currentConversationID {
+            conversation.removeAll()
+            draft = ""
+            currentConversationID = UUID()
+            conversationStartedAt = Date()
+        }
+    }
+
+    func renameConversation(_ id: UUID, to title: String) async {
+        guard var found = history.first(where: { $0.id == id }) else { return }
+        found.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        try? await conversations.save(found)
+        history = await conversations.all()
+    }
+
+    // MARK: - Download rate
+
+    /// A short history of (when, how many bytes) per download, used to quote a
+    /// rate and a time remaining.
+    ///
+    /// Instantaneous rate — bytes since the last callback over the time since
+    /// the last callback — is useless to read: it swings by an order of
+    /// magnitude between callbacks and the ETA flickers between "2 minutes"
+    /// and "40 minutes". Averaging over a window instead means the number
+    /// moves slowly enough to be worth looking at, at the cost of lagging a
+    /// genuine change in speed by a few seconds. That trade is the right way
+    /// round for something a person is watching.
+    private var downloadSamples: [String: [(at: Date, bytes: Int64)]] = [:]
+    private static let rateWindow: TimeInterval = 8
+
+    /// Downloads the user has swiped away. Cleared when the download finishes,
+    /// so dismissing the progress does not also hide the finished state.
+    private(set) var dismissedDownloads: Set<String> = []
+
+    func dismissDownloadBanner(_ id: String) { dismissedDownloads.insert(id) }
+
+    struct DownloadPace: Sendable, Equatable {
+        var bytesPerSecond: Double
+        var secondsRemaining: TimeInterval?
+    }
+
+    func pace(for id: String) -> DownloadPace? {
+        guard let samples = downloadSamples[id], samples.count >= 2,
+              let first = samples.first, let last = samples.last else { return nil }
+        let seconds = last.at.timeIntervalSince(first.at)
+        guard seconds > 0.5 else { return nil }
+        let rate = Double(last.bytes - first.bytes) / seconds
+        guard rate > 0 else { return DownloadPace(bytesPerSecond: 0, secondsRemaining: nil) }
+
+        var remaining: TimeInterval?
+        if let progress = downloads[id], progress.totalBytes > progress.receivedBytes {
+            remaining = Double(progress.totalBytes - progress.receivedBytes) / rate
+        }
+        return DownloadPace(bytesPerSecond: rate, secondsRemaining: remaining)
+    }
+
+    private func recordSample(_ progress: DownloadProgress) {
+        let now = Date()
+        var samples = downloadSamples[progress.modelID] ?? []
+        samples.append((now, progress.receivedBytes))
+        samples.removeAll { now.timeIntervalSince($0.at) > Self.rateWindow }
+        downloadSamples[progress.modelID] = samples
+    }
+
+    private func clearSamples(_ id: String) {
+        downloadSamples[id] = nil
+        dismissedDownloads.remove(id)
+    }
+
+    // MARK: - Idle residency
+
+    /// Release the model when the app is backgrounded. On by default: a
+    /// suspended process holding gigabytes is the first thing the kernel
+    /// reclaims, and the socket is closed then anyway, so nothing is lost.
+    var autoOffloadInBackground = true {
+        didSet { UserDefaults.standard.set(autoOffloadInBackground, forKey: Keys.autoOffloadInBackground) }
+    }
+
+    /// Seconds of quiet before the model is released, or 0 to keep it resident.
+    ///
+    /// This is `keep_alive`, and it exists here for the reason it exists in
+    /// Ollama: a server is idle most of the time, and a phone has other things
+    /// to do with two gigabytes. It defaults to off rather than to Ollama's
+    /// five minutes because the reload is not free here — a desktop refills
+    /// from page cache in about a second, a phone takes appreciably longer, and
+    /// silently adding that to someone's first request after lunch is a worse
+    /// surprise than the memory.
+    var idleOffloadSeconds = 0 {
+        didSet {
+            UserDefaults.standard.set(idleOffloadSeconds, forKey: Keys.idleOffloadSeconds)
+            restartIdleWatch()
+        }
+    }
+
+    private var idleWatch: Task<Void, Never>?
+    private var lastLocalActivity = Date()
+
+    /// Called whenever this device generates something itself. Requests from
+    /// the network are noticed separately, from the request log — the server
+    /// talks to the engine directly and never comes through here.
+    func noteActivity() { lastLocalActivity = Date() }
+
+    private func restartIdleWatch() {
+        idleWatch?.cancel()
+        guard idleOffloadSeconds > 0 else { idleWatch = nil; return }
+        idleWatch = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(15))
+                if Task.isCancelled { return }
+                guard let self else { return }
+                await self.releaseIfIdle()
+            }
+        }
+    }
+
+    private func releaseIfIdle() async {
+        guard idleOffloadSeconds > 0, !isGenerating, releaseSuppressions.isEmpty else { return }
+        guard let resident = loadedModelID else { return }
+
+        // The later of the two clocks. Serving a laptop all afternoon without
+        // touching the phone still counts as being in use, and unloading
+        // underneath a working coding agent would be the exact opposite of
+        // what this setting is for.
+        let lastServed = await server.log.all().last?.date ?? .distantPast
+        let lastAny = max(lastLocalActivity, lastServed)
+        guard Date().timeIntervalSince(lastAny) >= Double(idleOffloadSeconds) else { return }
+
+        await engine.unload()
+        syncLoadedModel(nil, userInitiated: false)
+        autoReleased = (resident, .idle)
+    }
+
+    // MARK: - Residency
+
+    /// Why the model left memory, when it was not the user's doing.
+    ///
+    /// The distinction decides whether it comes back on its own. A model the
+    /// user offloaded stays offloaded; one the app released to survive
+    /// backgrounding, or to stop holding a gigabyte hostage while idle, is
+    /// restored the moment it is wanted again.
+    enum ReleaseReason: String, Sendable {
+        case background
+        case idle
+    }
+
+    private(set) var autoReleased: (id: String, reason: ReleaseReason)?
+
+    /// Reasons the app is currently forbidden from auto-releasing.
+    ///
+    /// A set rather than a flag because the suppressions nest: the photo
+    /// picker can be open while a download completes. Clearing a boolean at
+    /// the end of one of those would re-arm release while the other was still
+    /// in progress.
+    private var releaseSuppressions: Set<String> = []
+
+    func suppressAutoRelease(_ reason: String) { releaseSuppressions.insert(reason) }
+    func resumeAutoRelease(_ reason: String) { releaseSuppressions.remove(reason) }
+
+    /// Scene-phase handling, and the reason it is not a two-state check.
+    ///
+    /// `.inactive` is not "leaving". It fires for a notification banner, the
+    /// app switcher, Control Centre, an incoming call sheet, and every system
+    /// permission prompt. Unloading a multi-gigabyte model there would mean a
+    /// notification arriving mid-conversation costs a full reload — so
+    /// `.inactive` is deliberately ignored and only `.background` releases.
+    func handleScenePhase(_ phase: ScenePhase) async {
+        switch phase {
+        case .background:
+            await releaseForBackground()
+        case .active:
+            await reconcileAfterForeground()
+            await restoreAutoReleasedModel()
+        case .inactive:
+            break
+        @unknown default:
+            break
+        }
+    }
+
+    private func releaseForBackground() async {
+        // Before anything else: suspension is the last moment this process is
+        // guaranteed to run again, and the debounced save may still be pending.
+        await flushConversation()
+
+        guard autoOffloadInBackground, releaseSuppressions.isEmpty else { return }
+        guard let resident = loadedModelID else { return }
+        // The socket does not survive suspension either, so nothing can arrive
+        // to be served while the weights are gone. Holding them costs the app
+        // its life: a suspended process sitting on two gigabytes is the first
+        // thing the kernel reclaims, and the user experiences that as the app
+        // having quit itself.
+        if isGenerating { stopGenerating() }
+        await engine.unload()
+        syncLoadedModel(nil, userInitiated: false)
+        autoReleased = (resident, .background)
+    }
+
+    /// Puts back what the app took away, and nothing else.
+    private func restoreAutoReleasedModel() async {
+        guard let released = autoReleased else { return }
+        guard loadedModelID == nil else { autoReleased = nil; return }
+        guard let record = catalog.first(where: { $0.id == released.id }) else {
+            autoReleased = nil
+            return
+        }
+        autoReleased = nil
+        await loadModel(record, remember: false)
+    }
+
     /// The single place the resident-model mirror changes.
     ///
     /// `userInitiated` matters: the server loads a model on demand whenever a
@@ -473,6 +849,7 @@ final class AppModel {
     // MARK: - Chat
 
     func send() {
+        noteActivity()
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isGenerating, loadedModelID != nil else { return }
         draft = ""
@@ -517,18 +894,30 @@ final class AppModel {
                         ?? "The reply could not be completed."
                 }
             }
-            await MainActor.run { self.isGenerating = false }
+            await MainActor.run {
+                self.isGenerating = false
+                self.scheduleConversationSave()
+            }
         }
     }
 
     func stopGenerating() {
+        // A stopped reply is still a reply: the partial text is on screen and
+        // has to survive the same way a finished one does.
+        defer { scheduleConversationSave() }
         generationTask?.cancel()
         generationTask = nil
         isGenerating = false
     }
 
+    /// Starts a new conversation, keeping the old one.
+    ///
+    /// This used to be `removeAll()`, which was the only destructive action in
+    /// the app that asked for no confirmation — deleting a *model* prompts,
+    /// because the download is expensive, while the transcript, which is the
+    /// one thing here that cannot be re-fetched, went silently.
     func resetConversation() {
         stopGenerating()
-        conversation.removeAll()
+        Task { await newConversation() }
     }
 }

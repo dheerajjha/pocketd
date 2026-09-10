@@ -123,13 +123,48 @@ enum OpenAI {
         var max_completion_tokens: Int?
         var stop: StringOrArray?
         var seed: UInt64?
+        /// Not in OpenAI's schema. `llama-server` accepts both on its OpenAI
+        /// endpoint and clients aimed at a llama.cpp backend send them, so
+        /// decoding them costs nothing and refusing to would be gratuitous.
+        var top_k: Int?
+        var repeat_penalty: Double?
+        /// Decoded only so that a non-zero value can be refused. See
+        /// `unsupportedParameters`.
+        var frequency_penalty: Double?
+        var presence_penalty: Double?
+        var min_p: Double?
 
         var resolvedMaxTokens: Int? { max_completion_tokens ?? max_tokens }
+
+        /// Parameters this request set that this backend cannot produce.
+        ///
+        /// Empty is the answer for a parameter left out *and* for one set to
+        /// its own no-op value: `frequency_penalty: 0` is what half the SDKs
+        /// send unprompted, and it asks for nothing, so refusing it would break
+        /// working clients to make a point. A non-zero one is a client asking
+        /// for an output distribution this server will not produce, and
+        /// answering it with silently unpenalised text is the failure this
+        /// whole change exists to remove.
+        ///
+        /// LocalLLMClient 0.5.0 pins `penalty_freq` and `penalty_present` to
+        /// zero when it builds the sampler chain and exposes no way to set
+        /// them, and derives llama.cpp's `min_p` from `top_p` rather than
+        /// taking one — so all three are out of reach from here, not merely
+        /// unimplemented.
+        func unsupportedParameters() -> [String] {
+            var refused: [String] = []
+            if let frequency_penalty, frequency_penalty != 0 { refused.append("frequency_penalty") }
+            if let presence_penalty, presence_penalty != 0 { refused.append("presence_penalty") }
+            if min_p != nil { refused.append("min_p") }
+            return refused
+        }
 
         func generationOptions() -> GenerationOptions {
             GenerationOptions(
                 temperature: temperature,
                 topP: top_p,
+                topK: top_k,
+                repeatPenalty: repeat_penalty,
                 maxTokens: resolvedMaxTokens,
                 stopSequences: stop?.values ?? [],
                 seed: seed
@@ -156,6 +191,11 @@ enum OpenAI {
         var max_tokens: Int?
         var stop: StringOrArray?
         var seed: UInt64?
+        var top_k: Int?
+        var repeat_penalty: Double?
+        var frequency_penalty: Double?
+        var presence_penalty: Double?
+        var min_p: Double?
     }
 
     struct Usage: Codable, Sendable {

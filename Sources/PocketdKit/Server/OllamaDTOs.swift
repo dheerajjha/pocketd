@@ -32,6 +32,20 @@ enum Ollama {
         var num_predict: Int?
         var stop: [String]?
         var seed: UInt64?
+        /// Decoded only so that setting it can be refused. LocalLLMClient 0.5.0
+        /// derives llama.cpp's `min_p` from `top_p` as `1 - top_p` and takes no
+        /// value of its own, so there is nothing here that could honour one.
+        var min_p: Double?
+
+        /// Options this request set that this backend cannot produce.
+        ///
+        /// Any `min_p` at all, including Ollama's own default of `0`: unlike
+        /// OpenAI's penalties, zero is not a no-op here. `top_p` is 0.95 by
+        /// default, so the derived `min_p` is 0.05 — a client asking for 0
+        /// is asking to turn off a filter that is on, and would get it left on.
+        func unsupportedParameters() -> [String] {
+            min_p == nil ? [] : ["min_p"]
+        }
 
         func generationOptions() -> GenerationOptions {
             GenerationOptions(

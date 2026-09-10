@@ -59,6 +59,22 @@ extension InferenceServer {
             return errorResponse(status: .badRequest, message: "Malformed request body: \(error)", style: .openAI, headers: cors)
         }
 
+        // Refused rather than dropped. A client that asks for a sampler this
+        // backend cannot build and gets a 200 has no way to discover that its
+        // output was sampled some other way; the same client handed a 400 knows
+        // in one request. Sitting before the log and the admission checks
+        // because nothing about the device's temperature changes the answer.
+        let refused = payload.unsupportedParameters()
+        if !refused.isEmpty {
+            return errorResponse(
+                status: .badRequest,
+                message: "This server's llama.cpp backend cannot honour \(refused.joined(separator: ", ")). Remove the parameter rather than relying on it being applied.",
+                type: "unsupported_parameter",
+                style: .openAI,
+                headers: cors
+            )
+        }
+
         let wantsStream = payload.stream ?? false
         let logID = await beginLog(request, streamed: wantsStream)
 
@@ -290,7 +306,15 @@ extension InferenceServer {
             top_p: payload.top_p,
             max_tokens: payload.max_tokens,
             stop: payload.stop,
-            seed: payload.seed
+            seed: payload.seed,
+            top_k: payload.top_k,
+            repeat_penalty: payload.repeat_penalty,
+            // Forwarded so the chat handler can refuse them. Dropping them here
+            // would turn a 400 into exactly the silent substitution this route
+            // is meant to stop.
+            frequency_penalty: payload.frequency_penalty,
+            presence_penalty: payload.presence_penalty,
+            min_p: payload.min_p
         )
         guard let body = try? JSONEncoder().encode(chat) else {
             return errorResponse(status: .internalServerError, message: "Failed to adapt request.", style: .openAI, headers: cors)
