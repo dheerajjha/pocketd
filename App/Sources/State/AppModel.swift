@@ -88,6 +88,7 @@ final class AppModel {
         static let autoOffloadInBackground = "pocketd.autoOffloadInBackground"
         static let idleOffloadSeconds = "pocketd.idleOffloadSeconds"
         static let personalDataTools = "pocketd.personalDataTools"
+        static let completedOnboarding = "pocketd.completedOnboarding"
     }
 
     init() {
@@ -176,6 +177,7 @@ final class AppModel {
         await store.load()
         await engine.updateDefaultSampling(configuration.sampling)
         installed = await store.installed()
+        settleOnboardingForExistingInstall()
 
         // Reopen what was on screen last time. Coming back to a blank Chat tab
         // after a force-quit reads as data loss even when the transcript is
@@ -402,11 +404,20 @@ final class AppModel {
                     }
                 }
                 let list = await store.installed()
-                await MainActor.run {
+                let shouldLoad = await MainActor.run {
                     self.installed = list
                     self.downloads[model.id] = nil
                     self.downloadTasks[model.id] = nil
                     self.clearSamples(model.id)
+                    // Nothing resident means the app cannot answer anything, so
+                    // a download that just finished is unambiguously the model
+                    // that was wanted. Without this the intro ends on a screen
+                    // telling you to go and press Load — one more step, for a
+                    // decision with exactly one option.
+                    return self.loadedModelID == nil && !self.isLoadingModel
+                }
+                if shouldLoad {
+                    await self.loadModel(model, remember: true)
                 }
             } catch is CancellationError {
                 await MainActor.run {
@@ -855,6 +866,81 @@ final class AppModel {
         await recalibrateAfterUnload()
         syncLoadedModel(nil, userInitiated: false)
         autoReleased = (resident, .idle)
+    }
+
+    // MARK: - First run
+
+    /// Whether the intro has been seen.
+    ///
+    /// Read once at launch rather than observed: flipping it mid-session is
+    /// what dismisses the intro, and a stored value that changed underneath
+    /// would put it back.
+    private(set) var hasCompletedOnboarding = UserDefaults.standard.bool(forKey: Keys.completedOnboarding)
+
+    var needsOnboarding: Bool { !hasCompletedOnboarding }
+
+    /// Settles the flag for an install that predates the intro existing.
+    ///
+    /// Called once at launch. Someone updating into this build already knows
+    /// what the app is, so they are marked done rather than shown it — but the
+    /// test has to be *here*, not folded into `needsOnboarding`, because
+    /// otherwise "Show the introduction again" would be dead for exactly the
+    /// people who have used the app enough to want it. That is the shape of
+    /// bug where a button exists, does nothing, and nobody notices for months.
+    private func settleOnboardingForExistingInstall() {
+        guard !hasCompletedOnboarding, !installed.isEmpty else { return }
+        completeOnboarding()
+    }
+
+    func completeOnboarding() {
+        hasCompletedOnboarding = true
+        UserDefaults.standard.set(true, forKey: Keys.completedOnboarding)
+    }
+
+    /// Replays the intro from Settings. Deliberately does not undo anything
+    /// else — this is "show me that again", not "reset the app".
+    func replayOnboarding() {
+        hasCompletedOnboarding = false
+        UserDefaults.standard.set(false, forKey: Keys.completedOnboarding)
+    }
+
+    /// What the intro should have selected when it opens.
+    ///
+    /// The middle tier, not the smallest. A 360M model downloads in seconds and
+    /// is barely coherent, so defaulting to it makes the first answer someone
+    /// ever sees the worst one this app can produce — a fast route to deciding
+    /// the whole idea does not work. The bigger download is the better trade,
+    /// and the smaller option is still right there for anyone on a slow
+    /// connection.
+    var recommendedStarter: ModelRecord? {
+        let starters = starterModels
+        guard !starters.isEmpty else { return nil }
+        return starters[starters.count / 2]
+    }
+
+    /// Up to three models spanning what this phone can actually hold.
+    ///
+    /// Built from the same fit estimate the Models tab uses, so the intro can
+    /// never offer something that will be killed on load. Comfortable entries
+    /// only, unless nothing is comfortable — on a small device an honest
+    /// "tight" beats an empty screen with nothing to choose.
+    var starterModels: [ModelRecord] {
+        // Already-downloaded models are excluded: on a replay from Settings the
+        // list would otherwise offer to fetch things this phone has had for
+        // weeks.
+        let installable = ModelCatalog.all.filter {
+            !$0.declaredCapabilities.vision.isYes && !isInstalled($0)
+        }
+        var usable = installable.filter { fit(for: $0) == .comfortable }
+        if usable.isEmpty {
+            usable = installable.filter { fit(for: $0) != .willNotFit }
+        }
+        let ordered = usable.sorted { $0.totalDownloadBytes < $1.totalDownloadBytes }
+        guard ordered.count > 3 else { return ordered }
+        // Smallest, middle and largest: the choice being offered is "how much
+        // of this phone do you want to spend", and three points make that
+        // legible where eight would not.
+        return [ordered[0], ordered[ordered.count / 2], ordered[ordered.count - 1]]
     }
 
     // MARK: - Residency

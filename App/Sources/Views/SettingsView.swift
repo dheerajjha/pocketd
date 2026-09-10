@@ -158,6 +158,14 @@ struct SettingsView: View {
                     Text("A loaded model holds its weights in memory the whole time. Backgrounding closes the socket anyway, so releasing it there costs nothing and stops iOS killing the app while it is away. Idle offload is this phone's keep_alive: the next request loads the model again, which takes a few seconds.")
                 }
 
+                Section {
+                    Button("Show the introduction again") {
+                        model.replayOnboarding()
+                    }
+                } footer: {
+                    Text("Replays the introduction a new install sees. Nothing is reset — your models, conversations and settings stay exactly as they are.")
+                }
+
                 Section("Assistant") {
                     TextField("System prompt", text: $model.systemPrompt, axis: .vertical)
                         .lineLimit(2...6)

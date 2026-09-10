@@ -12,7 +12,13 @@ struct RootView: View {
     @State private var tab: AppTab = .server
 
     var body: some View {
-        if model.deskMode {
+        if model.needsOnboarding {
+            // Ahead of desk mode and the tabs both: there is nothing useful
+            // behind this yet, and a tab bar under an intro invites someone to
+            // tap into a screen the intro is about to explain.
+            OnboardingView(finish: { tab = $0 })
+                .transition(.opacity)
+        } else if model.deskMode {
             DeskModeView()
                 .transition(.opacity)
         } else {
