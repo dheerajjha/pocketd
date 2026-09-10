@@ -109,3 +109,68 @@ struct CataloguePromiseTests {
         #expect(ModelCatalog.all.contains { $0.toolSupport == .yes })
     }
 }
+
+@Suite("Hugging Face search")
+struct HuggingFaceSearchTests {
+
+    @Test("reads the quantisation out of the conventional filename")
+    func quantisationFromName() {
+        let cases: [(String, String)] = [
+            ("Qwen3-1.7B-Q4_K_M.gguf", "Q4_K_M"),
+            ("gemma-4-E2B-it-Q8_0.gguf", "Q8_0"),
+            ("Qwen3-1.7B-IQ4_XS.gguf", "IQ4_XS"),
+            ("Qwen3-1.7B-BF16.gguf", "BF16"),
+        ]
+        for (name, expected) in cases {
+            #expect(HuggingFaceSearch.File(path: name, sizeBytes: 1).quantization == expected)
+        }
+        // Nothing recognisable is "unknown", not a wrong guess.
+        #expect(HuggingFaceSearch.File(path: "model.gguf", sizeBytes: 1).quantization == "unknown")
+    }
+
+    @Test("identifiers are safe to use as a filename and a model name on the wire")
+    func identifiersAreSafe() {
+        let id = HuggingFaceSearch.identifier(repository: "unsloth/Qwen3-1.7B-GGUF",
+                                              filename: "Qwen3-1.7B-Q4_K_M.gguf")
+        #expect(id == "unsloth-qwen3-1.7b-q4-k-m")
+        #expect(id.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "." })
+        #expect(id.contains("/") == false, "the id becomes a path component on disk")
+    }
+
+    @Test("a searched model carries the real byte size, not a guess")
+    func recordUsesRealSize() {
+        let file = HuggingFaceSearch.File(path: "Qwen3-1.7B-Q4_K_M.gguf", sizeBytes: 1_107_409_472)
+        let record = HuggingFaceSearch.record(repository: "unsloth/Qwen3-1.7B-GGUF", file: file)
+
+        // The fit badge is computed from this, and a size inferred from the
+        // parameter count was wrong by 1.3 GB for Gemma 4 in our own catalogue.
+        #expect(record.sizeBytes == 1_107_409_472)
+        #expect(record.quantization == "Q4_K_M")
+        #expect(record.downloadURL.absoluteString.contains("unsloth/Qwen3-1.7B-GGUF"))
+    }
+
+    @Test("a vision model is paired with its projector")
+    func pairsProjector() {
+        let weights = HuggingFaceSearch.File(path: "SmolVLM-500M-Instruct-Q8_0.gguf", sizeBytes: 436_806_912)
+        let projector = HuggingFaceSearch.File(path: "mmproj-SmolVLM-500M-Instruct-Q8_0.gguf", sizeBytes: 108_783_360)
+        #expect(projector.isProjector)
+        #expect(weights.isProjector == false)
+
+        let record = HuggingFaceSearch.record(
+            repository: "ggml-org/SmolVLM-500M-Instruct-GGUF", file: weights, projector: projector
+        )
+        #expect(record.declaredCapabilities.vision == .yes)
+        // Both files are resident, so both count toward the budget.
+        #expect(record.totalDownloadBytes == 436_806_912 + 108_783_360)
+    }
+
+    @Test("a searched model does not claim tool support nobody checked")
+    func toolSupportIsUnknown() {
+        let record = HuggingFaceSearch.record(
+            repository: "someone/whatever-GGUF",
+            file: .init(path: "whatever-Q4_K_M.gguf", sizeBytes: 1)
+        )
+        #expect(record.toolSupport == .unknown)
+        #expect(record.declaredCapabilities.ollamaCapabilities.contains("tools") == false)
+    }
+}

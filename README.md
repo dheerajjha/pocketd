@@ -98,8 +98,11 @@ you re-sign.
 | `POST /api/generate` | Ollama | |
 | `POST /api/show` | Ollama | |
 | `GET /api/version` | Ollama | Clients version-gate on this |
-| `GET /api/pull` | Ollama | Pull a catalogue model onto the phone, streaming progress |
+| `POST /api/pull` | Ollama | Pull a catalogue model onto the phone, streaming progress |
 | `GET /api/catalogue` | — | What could be pulled, versus what is installed |
+| `GET /api/search?q=` | — | Search Hugging Face for GGUF repositories |
+| `GET /api/search/files?repo=` | — | Files in a repository, with real sizes and a fit verdict |
+| `POST /api/models/add` | — | Pull any Hugging Face GGUF, not just a catalogue entry |
 | `GET /health` | — | Unauthenticated, so a client can probe reachability |
 
 Requests are authenticated with `Authorization: Bearer <key>` or `X-API-Key`.
@@ -118,6 +121,32 @@ display draws from the same thermal budget as the GPU, a dark screen is worth
 real tokens per second on a device already close to throttling.
 
 ![Desk mode: a dim screen showing the address, port, model and request count](docs/screenshot-desk.png)
+
+## Any model, searched from your laptop
+
+The catalogue is eight models known to load on a phone. It is the right default
+and the wrong ceiling, so there is a `+`: search Hugging Face, see every GGUF in
+a repository with its real byte size and whether it fits *this* device, and pull
+it.
+
+The searching happens over HTTP as well as in the app, which no other local-LLM
+iOS app can offer because none of them is a server. Choosing a model means
+typing a repository name and comparing quantisations — that is laptop work, and
+doing it on a phone keyboard is the reason nobody does it twice.
+
+```bash
+curl "http://192.168.1.31:11434/api/search?q=smollm" -H "Authorization: Bearer pk-…"
+curl "http://192.168.1.31:11434/api/search/files?repo=ggml-org/SmolVLM-500M-Instruct-GGUF" -H …
+#   SmolVLM-500M-Instruct-Q8_0.gguf   436.8 MB  Q8_0  comfortable
+#   mmproj-SmolVLM-500M-Instruct-Q8_0.gguf  108.8 MB  projector
+
+curl -X POST http://192.168.1.31:11434/api/models/add -H … \
+  -d '{"repo":"unsloth/SmolLM2-135M-Instruct-GGUF","filename":"SmolLM2-135M-Instruct-Q4_K_M.gguf"}'
+```
+
+A vision model's projector is paired automatically, because one downloaded
+without it loads and then cannot see — which is the confusing failure rather
+than the obvious one.
 
 ## Which models actually fit
 

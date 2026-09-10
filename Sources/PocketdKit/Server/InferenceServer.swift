@@ -32,6 +32,9 @@ public actor InferenceServer {
     /// Supplied by the app so the server can fetch a model on request. Nil in
     /// tests and in any build without downloading, where /api/pull answers 501.
     let puller: (@Sendable (ModelRecord) -> AsyncThrowingStream<DownloadProgress, any Error>)?
+    /// Used to tell a searcher whether a file will fit before they spend
+    /// gigabytes finding out.
+    let deviceBudget: DeviceBudget
 
     private var server: HTTPServer?
     private var runTask: Task<Void, Never>?
@@ -50,12 +53,14 @@ public actor InferenceServer {
         engine: any InferenceEngine,
         models: @escaping @Sendable () async -> [ModelRecord],
         puller: (@Sendable (ModelRecord) -> AsyncThrowingStream<DownloadProgress, any Error>)? = nil,
+        deviceBudget: DeviceBudget = .current(hasIncreasedMemoryLimit: false),
         log: RequestLog = RequestLog()
     ) {
         self.configuration = configuration
         self.engine = engine
         self.modelsProvider = models
         self.puller = puller
+        self.deviceBudget = deviceBudget
         self.log = log
     }
 

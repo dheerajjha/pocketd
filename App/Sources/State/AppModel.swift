@@ -118,7 +118,8 @@ final class AppModel {
                     }
                     continuation.onTermination = { _ in task.cancel() }
                 }
-            }
+            },
+            deviceBudget: budget
         )
 
         systemPrompt = UserDefaults.standard.string(forKey: Keys.systemPrompt) ?? systemPrompt

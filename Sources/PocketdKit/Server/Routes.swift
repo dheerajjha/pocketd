@@ -80,6 +80,15 @@ extension InferenceServer {
         await server.appendRoute("GET /api/catalogue") { [self] request in
             await handleCatalogue(request)
         }
+        await server.appendRoute("GET /api/search") { [self] request in
+            await handleSearch(request)
+        }
+        await server.appendRoute("GET /api/search/files") { [self] request in
+            await handleSearchFiles(request)
+        }
+        await server.appendRoute("POST /api/models/add") { [self] request in
+            await handleAddModel(request)
+        }
         await server.appendRoute("GET /api/version") { [self] _ in
             jsonResponse(Ollama.VersionResponse(version: PocketdKit.version), headers: await corsHeaders())
         }
