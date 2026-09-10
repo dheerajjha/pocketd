@@ -4,7 +4,7 @@ import FlyingFox
 extension InferenceServer {
     func handleOllamaTags(_ request: HTTPRequest) async -> HTTPResponse {
         let cors = corsHeaders()
-        if let rejection = authorize(request) { return rejection }
+        if let rejection = await authorizeAndLog(request) { return rejection }
         let resident = await currentEngine().loadedModel()
         return jsonResponse(
             Ollama.TagsResponse(models: await models().map { model in
@@ -16,7 +16,7 @@ extension InferenceServer {
 
     func handleOllamaShow(_ request: HTTPRequest) async -> HTTPResponse {
         let cors = corsHeaders()
-        if let rejection = authorize(request) { return rejection }
+        if let rejection = await authorizeAndLog(request) { return rejection }
         let payload = (try? JSONDecoder().decode(Ollama.ShowRequest.self, from: await request.bodyData))
             ?? Ollama.ShowRequest(name: nil, model: nil)
         guard let model = await models().first(where: { $0.id == payload.resolved }) else {
@@ -34,7 +34,7 @@ extension InferenceServer {
 
     func handleOllamaPs(_ request: HTTPRequest) async -> HTTPResponse {
         let cors = corsHeaders()
-        if let rejection = authorize(request) { return rejection }
+        if let rejection = await authorizeAndLog(request) { return rejection }
         guard let model = await currentEngine().loadedModel() else {
             return jsonResponse(Ollama.ProcessResponse(models: []), headers: cors)
         }
@@ -60,7 +60,7 @@ extension InferenceServer {
 
     func handleOllamaChat(_ request: HTTPRequest) async -> HTTPResponse {
         let cors = corsHeaders()
-        if let rejection = authorize(request) { return rejection }
+        if let rejection = await authorizeAndLog(request) { return rejection }
 
         let payload: Ollama.ChatRequest
         do {
@@ -90,7 +90,7 @@ extension InferenceServer {
 
     func handleOllamaGenerate(_ request: HTTPRequest) async -> HTTPResponse {
         let cors = corsHeaders()
-        if let rejection = authorize(request) { return rejection }
+        if let rejection = await authorizeAndLog(request) { return rejection }
 
         let payload: Ollama.GenerateRequest
         do {

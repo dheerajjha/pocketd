@@ -218,6 +218,15 @@ public actor InferenceServer {
     func currentEngine() -> any InferenceEngine { engine }
 
     /// Returns nil when the request may proceed, or the rejection to send back.
+    /// Wraps `authorize` and records the refusal. A rejected request is the one
+    /// a user most wants to see in the log, and it was the only kind that never
+    /// appeared there.
+    func authorizeAndLog(_ request: HTTPRequest) async -> HTTPResponse? {
+        guard let rejection = authorize(request) else { return nil }
+        await logImmediate(request, status: rejection.statusCode.code)
+        return rejection
+    }
+
     func authorize(_ request: HTTPRequest) -> HTTPResponse? {
         guard configuration.requiresAuth else { return nil }
         let presented = request.headers[.authorization]?

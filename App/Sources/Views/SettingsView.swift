@@ -22,11 +22,15 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section {
+                    // .menu keeps the selected value on its own line instead
+                    // of squeezing it beside the label, where it truncated to
+                    // "Local…twork" and the user could not read their own setting.
                     Picker("Reachable from", selection: $draft.binding) {
                         ForEach(ServerConfiguration.Binding.allCases) { binding in
                             Text(binding.title).tag(binding)
                         }
                     }
+                    .pickerStyle(.menu)
                     LabeledContent("Port") {
                         TextField("11434", text: $portText)
                             .keyboardType(.numberPad)
@@ -78,8 +82,24 @@ struct SettingsView: View {
                     Text("The KV cache grows with the context limit and competes with the weights for the same memory. More than one concurrent request makes every request slower on a single GPU.")
                 }
 
-                Section("Device") {
+                Section {
                     Toggle("Keep screen awake while serving", isOn: $draft.keepAwakeWhileServing)
+                    // ServeCondition.battery tells the user to "lower the floor
+                    // in Settings". Until now there was no such control
+                    // anywhere, so the one remedy the app offered below 15%
+                    // battery was unreachable.
+                    Stepper(
+                        draft.pauseBelowBatteryLevel <= 0
+                            ? "Stop serving below: never"
+                            : "Stop serving below: \(Int(draft.pauseBelowBatteryLevel * 100))% battery",
+                        value: $draft.pauseBelowBatteryLevel,
+                        in: 0...0.5,
+                        step: 0.05
+                    )
+                } header: {
+                    Text("Device")
+                } footer: {
+                    Text("Generating drains the battery fast. Below this level the server keeps listening but answers 503 with a reason, so a client can wait rather than assume the phone has gone. Charging exempts it.")
                 }
 
                 Section("Assistant") {

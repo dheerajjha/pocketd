@@ -8,6 +8,7 @@ struct ServerView: View {
     @State private var copyTick = 0
     @State private var snippetIndex = 0
     @State private var showKey = false
+    @State private var confirmStop = false
 
     var body: some View {
         NavigationStack {
@@ -39,6 +40,18 @@ struct ServerView: View {
                 }
             }
             .sensoryFeedback(.success, trigger: copyTick)
+            .confirmationDialog(
+                "Stop serving?",
+                isPresented: $confirmStop,
+                titleVisibility: .visible
+            ) {
+                Button("Stop", role: .destructive) { Task { await model.stopServer() } }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(model.log.isEmpty
+                     ? "Anything pointed at this phone will stop working until you start it again."
+                     : "\(model.log.count) requests have been served. Anything pointed at this phone will stop working until you start it again.")
+            }
         }
     }
 
@@ -60,6 +73,7 @@ struct ServerView: View {
                             .foregroundStyle(copied == "address" ? Color.green : .secondary)
                         Text(host)
                             .font(.system(size: 34, weight: .semibold, design: .monospaced))
+                            .dynamicTypeSize(...DynamicTypeSize.accessibility1)
                             .minimumScaleFactor(0.5)
                             .lineLimit(1)
                         Text(":\(String(port))")
@@ -81,34 +95,13 @@ struct ServerView: View {
                 }
             }
 
-            HStack {
-                Text(model.serverState.isRunning
-                     ? "Anyone on this network can reach it."
-                     : "Start it to serve this model to other devices.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if model.serverState.isRunning {
-                    Button {
-                        model.deskMode = true
-                    } label: {
-                        Label("Desk", systemImage: "moon.stars")
-                            .labelStyle(.iconOnly)
-                    }
-                    .buttonStyle(.bordered)
-                    .accessibilityLabel("Desk mode — dim the screen while serving")
-                }
-                Button(model.serverState.isRunning ? "Stop" : "Start") {
-                    Task {
-                        if model.serverState.isRunning {
-                            await model.stopServer()
-                        } else {
-                            await model.startServer()
-                        }
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(startStopDisabled)
+            // At the larger accessibility sizes this row fell apart: the Stop
+            // button wrapped to "St / op" and the sentence beside it broke one
+            // word per line, pushing the pairing card off screen. ViewThatFits
+            // drops to a stacked layout before that happens.
+            ViewThatFits(in: .horizontal) {
+                controlRow(stacked: false)
+                controlRow(stacked: true)
             }
 
             if model.loadedModelID == nil {
@@ -140,6 +133,50 @@ struct ServerView: View {
         }
     }
 
+    @ViewBuilder
+    private func controlRow(stacked: Bool) -> some View {
+        let caption = Text(model.serverState.isRunning
+                           ? "Anyone on this network can reach it."
+                           : "Start it to serve this model to other devices.")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+
+        let buttons = HStack(spacing: 10) {
+            if model.serverState.isRunning {
+                Button {
+                    model.deskMode = true
+                } label: {
+                    Label("Desk", systemImage: "moon.stars").labelStyle(.iconOnly)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel("Desk mode — dim the screen while serving")
+            }
+            Button(model.serverState.isRunning ? "Stop" : "Start") {
+                if model.serverState.isRunning {
+                    confirmStop = true
+                } else {
+                    Task { await model.startServer() }
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .lineLimit(1)
+            .disabled(startStopDisabled)
+        }
+
+        if stacked {
+            VStack(alignment: .leading, spacing: 10) {
+                caption
+                buttons
+            }
+        } else {
+            HStack {
+                caption
+                Spacer()
+                buttons
+            }
+        }
+    }
+
     private var startStopDisabled: Bool {
         if case .starting = model.serverState { return true }
         return model.loadedModelID == nil && !model.serverState.isRunning
@@ -163,6 +200,7 @@ struct ServerView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(code)
                         .font(.system(size: 40, weight: .semibold, design: .monospaced))
+                        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
                         .kerning(6)
                         .accessibilityLabel("Pairing code \(code.map(String.init).joined(separator: " "))")
                     if let expires = model.pairing.expires {

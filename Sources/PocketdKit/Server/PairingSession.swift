@@ -51,8 +51,32 @@ public actor PairingSession {
     private var observers: [UUID: AsyncStream<Snapshot>.Continuation] = [:]
     private let now: @Sendable () -> Date
 
-    public init(now: @escaping @Sendable () -> Date = { Date() }) {
+    /// UserDefaults is thread-safe but not marked Sendable, so it cannot cross
+    /// into an actor without this. Same wrapper as ServerConfigurationStore.
+    public struct PairedAtStore: @unchecked Sendable {
+        let defaults: UserDefaults?
+        static let key = "pocketd.pairedAt"
+
+        public init(defaults: UserDefaults? = .standard) { self.defaults = defaults }
+
+        func read() -> Date? { defaults?.object(forKey: Self.key) as? Date }
+        func write(_ date: Date) { defaults?.set(date, forKey: Self.key) }
+    }
+
+    private let store: PairedAtStore
+
+    /// `defaults` persists only the fact that pairing has happened at least
+    /// once — never the code, which is short-lived and guessable by design.
+    /// Without it the Connected section, with the key and every client snippet,
+    /// disappeared on relaunch and could only be recovered by pairing a device
+    /// again.
+    public init(
+        now: @escaping @Sendable () -> Date = { Date() },
+        store: PairedAtStore = PairedAtStore()
+    ) {
         self.now = now
+        self.store = store
+        if let stamp = store.read() { state.pairedAt = stamp }
     }
 
     @discardableResult
@@ -96,6 +120,7 @@ public actor PairingSession {
         let when = now()
         close()
         state.pairedAt = when
+        store.write(when)
         broadcast()
         return .paired
     }

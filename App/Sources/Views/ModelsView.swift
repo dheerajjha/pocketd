@@ -17,8 +17,19 @@ struct ModelsView: View {
                          : "Without the increased memory limit entitlement iOS caps this app well below total RAM.")
                 }
 
-                ForEach(model.catalog) { record in
-                    row(for: record)
+                // What you have, before what you could have. With one model
+                // downloaded you had to scroll past five you did not to find it.
+                if !model.installed.isEmpty {
+                    Section("On this phone") {
+                        ForEach(model.catalog.filter { model.isInstalled($0) }) { record in
+                            row(for: record)
+                        }
+                    }
+                }
+                Section(model.installed.isEmpty ? "Models" : "Available") {
+                    ForEach(model.catalog.filter { !model.isInstalled($0) }) { record in
+                        row(for: record)
+                    }
                 }
             }
             .navigationTitle("Models")

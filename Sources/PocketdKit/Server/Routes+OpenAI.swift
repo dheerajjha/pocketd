@@ -4,7 +4,7 @@ import FlyingFox
 extension InferenceServer {
     func handleListModels(_ request: HTTPRequest) async -> HTTPResponse {
         let cors = corsHeaders()
-        if let rejection = authorize(request) { return rejection }
+        if let rejection = await authorizeAndLog(request) { return rejection }
         let created = Int(Date().timeIntervalSince1970)
         let resident = await currentEngine().loadedModel()
         let list = OpenAI.ModelList(
@@ -24,7 +24,7 @@ extension InferenceServer {
 
     func handleRetrieveModel(_ request: HTTPRequest) async -> HTTPResponse {
         let cors = corsHeaders()
-        if let rejection = authorize(request) { return rejection }
+        if let rejection = await authorizeAndLog(request) { return rejection }
         let id = request.path.split(separator: "/").last.map(String.init) ?? ""
         guard let model = await models().first(where: { $0.id == id }) else {
             return errorResponse(
@@ -50,7 +50,7 @@ extension InferenceServer {
 
     func handleChatCompletions(_ request: HTTPRequest) async -> HTTPResponse {
         let cors = corsHeaders()
-        if let rejection = authorize(request) { return rejection }
+        if let rejection = await authorizeAndLog(request) { return rejection }
 
         let payload: OpenAI.ChatCompletionRequest
         do {
@@ -270,7 +270,7 @@ extension InferenceServer {
 
     func handleCompletions(_ request: HTTPRequest) async -> HTTPResponse {
         let cors = corsHeaders()
-        if let rejection = authorize(request) { return rejection }
+        if let rejection = await authorizeAndLog(request) { return rejection }
 
         let payload: OpenAI.CompletionRequest
         do {

@@ -79,13 +79,23 @@ extension InferenceServer {
         headers[.contentType] = "application/json"
 
         guard let payload = try? JSONDecoder().decode(PairRequest.self, from: await request.bodyData) else {
-            return jsonResponse(
-                PairFailure(error: .init(message: "Send {\"code\":\"123456\"}.", type: "pairing_failed"), attemptsRemaining: 0),
-                headers: headers
+            // 400, not 200. Both served pages branch on `r.ok`, so answering a
+            // malformed body with a success status made a client render an
+            // empty "paired" card and believe it had a key.
+            await logImmediate(request, status: 400)
+            return HTTPResponse(
+                statusCode: .badRequest,
+                headers: headers,
+                body: (try? JSONEncoder().encode(PairFailure(
+                    error: .init(message: "Send {\"code\":\"123456\"}.", type: "pairing_failed"),
+                    attemptsRemaining: 0
+                ))) ?? Data()
             )
         }
 
-        switch await pairing.redeem(payload.code, from: request.peerAddress) {
+        let outcome = await pairing.redeem(payload.code, from: request.peerAddress)
+        await logImmediate(request, status: outcome == .paired ? 200 : 403)
+        switch outcome {
         case .paired:
             let host = pairedHost()
             var model = await currentEngine().loadedModel()?.id

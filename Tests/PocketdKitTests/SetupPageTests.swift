@@ -213,3 +213,39 @@ struct ChatPageTests {
         #expect(String(decoding: body, as: UTF8.self).contains(harness.apiKey) == false)
     }
 }
+
+@Suite("Pairing survives a relaunch")
+struct PairingPersistenceTests {
+
+    /// `hasPaired` was in-memory only, so the Connected section — the API key
+    /// and all seven client snippets — vanished on every relaunch. Someone who
+    /// paired yesterday and wanted to re-copy a snippet today could not, unless
+    /// they paired a device again.
+    @Test("a completed pairing is remembered across a restart")
+    func remembersPairing() async throws {
+        let suite = "pocketd.tests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let first = PairingSession(store: .init(defaults: defaults))
+        let code = await first.open()
+        #expect(await first.redeem(code, from: nil) == .paired)
+        #expect(await first.snapshot().hasPaired)
+
+        // A second session is what the next launch sees.
+        let second = PairingSession(store: .init(defaults: defaults))
+        #expect(await second.snapshot().hasPaired)
+        // ...but the code itself must NOT come back: it is short-lived and
+        // guessable by design.
+        #expect(await second.snapshot().code == nil)
+    }
+
+    @Test("a session that never paired reports so")
+    func freshSessionIsUnpaired() async throws {
+        let suite = "pocketd.tests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        #expect(await PairingSession(store: .init(defaults: defaults)).snapshot().hasPaired == false)
+    }
+}

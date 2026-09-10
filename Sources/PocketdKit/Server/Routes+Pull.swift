@@ -27,7 +27,7 @@ extension InferenceServer {
     /// have to walk over to and touch is a worse server.
     func handlePull(_ request: HTTPRequest) async -> HTTPResponse {
         let cors = corsHeaders()
-        if let rejection = authorize(request) { return rejection }
+        if let rejection = await authorizeAndLog(request) { return rejection }
 
         guard let payload = try? JSONDecoder().decode(PullRequest.self, from: await request.bodyData),
               !payload.resolved.isEmpty
@@ -87,7 +87,7 @@ extension InferenceServer {
     /// list — that endpoint answers "what can I use right now".
     func handleCatalogue(_ request: HTTPRequest) async -> HTTPResponse {
         let cors = corsHeaders()
-        if let rejection = authorize(request) { return rejection }
+        if let rejection = await authorizeAndLog(request) { return rejection }
 
         struct Entry: Encodable {
             var id: String

@@ -219,6 +219,21 @@ extension InferenceServer {
         return caps
     }
 
+    /// Records a request that is answered immediately.
+    ///
+    /// Only the two completion routes used to log, so the section headed
+    /// "Requests" could read "No requests yet" after five failed pairing
+    /// attempts from an unknown address — which is precisely the thing a
+    /// security-facing log exists to show.
+    func logImmediate(_ request: HTTPRequest, status: Int) async {
+        await log.record(RequestLogEntry(
+            method: request.method.rawValue,
+            path: request.path,
+            clientAddress: request.peerAddress,
+            statusCode: status
+        ))
+    }
+
     func beginLog(_ request: HTTPRequest, streamed: Bool) async -> UUID {
         let entry = RequestLogEntry(
             method: request.method.rawValue,
