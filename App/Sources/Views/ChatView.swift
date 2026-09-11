@@ -3,6 +3,7 @@ import PocketdKit
 
 struct ChatView: View {
     @State private var isShowingHistory = false
+    @FocusState private var isComposerFocused: Bool
     @Environment(AppModel.self) private var model
     var goTo: (AppTab) -> Void = { _ in }
     private let topAnchor = "pocketd.chat.top"
@@ -70,6 +71,8 @@ struct ChatView: View {
                             .padding()
                         }
                         .scrollDismissesKeyboard(.interactively)
+                        .contentShape(.rect)
+                        .onTapGesture { isComposerFocused = false }
                         .onScrollGeometryChange(for: Bool.self) { geometry in
                             geometry.visibleRect.maxY >= geometry.contentSize.height - 80
                         } action: { _, isNearBottom in
@@ -132,6 +135,12 @@ struct ChatView: View {
                 }
             }
             .sheet(isPresented: $isShowingHistory) { ConversationHistoryView() }
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { isComposerFocused = false }
+                }
+            }
         }
     }
 
@@ -254,6 +263,8 @@ struct ChatView: View {
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...5)
                 .disabled(model.loadedModelID == nil)
+                .focused($isComposerFocused)
+                .submitLabel(.send)
 
             if model.isGenerating {
                 Button("Stop", systemImage: "stop.circle.fill") { model.stopGenerating() }

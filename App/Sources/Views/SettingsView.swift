@@ -8,6 +8,8 @@ struct SettingsView: View {
     @FocusState private var isPortFocused: Bool
     @State private var showKeyWarning = false
     @State private var showingDataInspector = false
+    @State private var copiedKey = false
+    @State private var copyTick = 0
     @Environment(\.openURL) private var openURL
 
     /// nil when the field is a usable port.
@@ -63,7 +65,28 @@ struct SettingsView: View {
                                 .textSelection(.enabled)
                                 .foregroundStyle(draft.apiKey == model.configuration.apiKey ? Color.primary : Color.orange)
                         }
-                        Button("Copy key") { UIPasteboard.general.string = model.configuration.apiKey }
+                        // A row that changes nothing on screen is a row the
+                        // user taps twice and then checks the clipboard to see
+                        // whether anything happened. `ServerView` has said so
+                        // since V1; this one was writing to the pasteboard in
+                        // total silence.
+                        Button {
+                            UIPasteboard.general.string = model.configuration.apiKey
+                            copiedKey = true
+                            copyTick += 1
+                            Task {
+                                try? await Task.sleep(for: .seconds(1.4))
+                                copiedKey = false
+                            }
+                        } label: {
+                            Label(
+                                copiedKey ? "Copied" : "Copy key",
+                                systemImage: copiedKey ? "checkmark" : "doc.on.doc"
+                            )
+                            .foregroundStyle(copiedKey ? Color.green : Color.accentColor)
+                            .contentTransition(.symbolEffect(.replace))
+                        }
+                        .accessibilityLabel(copiedKey ? "Key copied" : "Copy key")
                         Button("Generate a new key") { showKeyWarning = true }
                     }
                     Toggle("Allow browser requests (CORS)", isOn: $draft.allowCORS)
@@ -270,6 +293,7 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+            .sensoryFeedback(.success, trigger: copyTick)
             .sheet(isPresented: $showingDataInspector) { DataInspectorView() }
             .onAppear {
                 draft = model.configuration
