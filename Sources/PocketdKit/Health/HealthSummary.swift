@@ -429,7 +429,11 @@ public enum HealthSummary {
     static func streakThreshold(for metric: HealthMetric) -> (value: Double, dayNoun: String, clause: String)? {
         switch metric {
         case .sleep: (8 * 3600, "night", "over 8 hours")
-        case .steps: (10_000, "day", "over 10,000 steps")
+        // Ungrouped for the same reason `HealthFormat.number` is: this string
+        // goes into the model's prompt beside figures it renders, and one
+        // sentence carrying "10,000" next to "12000" invites exactly the misread
+        // the formatter was changed to prevent.
+        case .steps: (10_000, "day", "over 10000 steps")
         case .exercise_minutes: (30, "day", "with 30 minutes or more of exercise")
         case .active_energy, .resting_heart_rate, .heart_rate_variability,
              .walking_heart_rate, .respiratory_rate: nil

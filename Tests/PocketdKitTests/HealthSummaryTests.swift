@@ -301,7 +301,7 @@ struct HealthSummaryPayloadTests {
 
         // The value is still reported — the user did walk — but nothing is
         // claimed about whether it was normal for them.
-        #expect(line.contains("Steps 8,000 on"))
+        #expect(line.contains("Steps 8000 on"))
         #expect(line.contains("a usual range needs 14"))
         #expect(!line.contains("%"))
         #expect(!line.contains("average"))
@@ -403,7 +403,7 @@ struct HealthSummaryPayloadTests {
         // what makes a smaller cap fail as loudly as a larger one.
         #expect(notable == [
             "Highest steps in all 200 days of step data on this iPhone, which reach back 199 days.",
-            "3 days in a row over 10,000 steps.",
+            "3 days in a row over 10000 steps.",
             "Highest active energy in all 200 days of active energy data on this iPhone, which reach back 199 days."
         ])
         // The two that were dropped were real lines, not absent ones.
@@ -671,11 +671,11 @@ struct HealthSummaryRecencyTests {
 
         let payload = await Health.payload(.activity, readout: HealthReadout(samples: [.steps: series]))
         let notable = payload["notable"] as? [String] ?? []
-        #expect(notable.contains { $0 == "40 days in a row over 10,000 steps." })
+        #expect(notable.contains { $0 == "40 days in a row over 10000 steps." })
 
         // And the figure beside it is still the last finished day, not today's.
         let readings = payload["readings"] as? [String] ?? []
-        #expect(readings.contains { $0.hasPrefix("Steps 12,000 on") })
+        #expect(readings.contains { $0.hasPrefix("Steps 12000 on") })
         #expect(!readings.contains { $0.contains("1,200") })
     }
 

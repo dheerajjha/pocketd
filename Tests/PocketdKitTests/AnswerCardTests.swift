@@ -743,7 +743,7 @@ struct AnswerCardHealthTests {
             return
         }
         #expect(strip.tiles == [
-            AnswerCard.Tile(value: "11,200", caption: "Steps"),
+            AnswerCard.Tile(value: "11200", caption: "Steps"),
             AnswerCard.Tile(value: "520 kcal", caption: "Active energy"),
             AnswerCard.Tile(value: "42 min", caption: "Exercise")
         ])
@@ -753,15 +753,15 @@ struct AnswerCardHealthTests {
             return
         }
         #expect(facts.rows.map(\.label) == ["Steps", "Active energy", "Exercise"])
-        // The comparison, and not the figure a second time: 11,200 is in the
+        // The comparison, and not the figure a second time: 11200 is in the
         // tile above, and a card that prints its own headline number twice reads
         // as a rendering fault rather than as an answer.
-        #expect(facts.rows[0].value?.hasPrefix("on Wed, Sep 10 — 58% above your 28-day average of 7,100") == true)
-        #expect(facts.rows[0].value?.contains("11,200") == false)
+        #expect(facts.rows[0].value?.hasPrefix("on Wed, Sep 10 — 58% above your 28-day average of 7100") == true)
+        #expect(facts.rows[0].value?.contains("11200") == false)
 
         // Arithmetic the card never does: 58% is `HealthSummary`'s, computed
         // once, and drawn here exactly as the model was handed it.
-        #expect(card.transcript.contains("58% above your 28-day average of 7,100"))
+        #expect(card.transcript.contains("58% above your 28-day average of 7100"))
     }
 
     /// Registering a card must not move a byte of what the model reads, and the
@@ -796,7 +796,7 @@ struct AnswerCardHealthTests {
         }
         #expect(facts.rows.count == 1)
         #expect(facts.rows[0].label == "Steps")
-        #expect(facts.rows[0].value?.hasPrefix("7,100 on Wed, Sep 10") == true)
+        #expect(facts.rows[0].value?.hasPrefix("7100 on Wed, Sep 10") == true)
     }
 
     /// Constraint three, drawn.
@@ -884,7 +884,7 @@ struct AnswerCardHealthTests {
             return nil
         }
         let notable = try #require(lists.first { $0.eyebrow == "Worth noting" })
-        #expect(notable.items.contains { $0.text.contains("in a row over 10,000 steps") })
+        #expect(notable.items.contains { $0.text.contains("in a row over 10000 steps") })
     }
 
     @Test("workouts are a list, counted from the rows rather than from the model")
