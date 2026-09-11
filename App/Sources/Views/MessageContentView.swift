@@ -70,9 +70,7 @@ struct MessageContentView: View {
             // reasoning block is still open, where "Thinking…" above already
             // says it and a second placeholder is just noise.
             if !hadReasoning || isComplete {
-                Text("…")
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Replying")
+                WaitingIndicator()
             }
         } else {
             VStack(alignment: .leading, spacing: 10) {
@@ -287,4 +285,50 @@ struct CodeBlockView: View {
         .padding()
     }
     .dynamicTypeSize(.accessibility3)
+}
+
+
+/// What the reader looks at while a phone thinks.
+///
+/// It was a static "…" with two modifiers and no animation, on a screen where
+/// nothing else moves for sixty to ninety seconds. That is indistinguishable
+/// from a hang — and one of the testers who stared at it for forty-eight
+/// seconds reported it as "the animated typing indicator" and concluded the app
+/// was slow rather than frozen. Reading motion into a still glyph is exactly
+/// what a person does when they need reassurance the thing is alive, and it is
+/// not the app's job to make them.
+///
+/// So: dots that actually move, and after five seconds the elapsed count, which
+/// is the difference between "this is taking a while" and "this is broken".
+private struct WaitingIndicator: View {
+    @State private var lit = 0
+    @State private var elapsed = 0
+    private let tick = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        HStack(spacing: 6) {
+            HStack(spacing: 3) {
+                ForEach(0..<3, id: \.self) { index in
+                    Circle()
+                        .frame(width: 5, height: 5)
+                        .opacity(lit == index ? 1 : 0.3)
+                }
+            }
+            if elapsed >= 5 {
+                Text("\(elapsed)s")
+                    .font(.caption2)
+                    .monospacedDigit()
+                    .transition(.opacity)
+            }
+        }
+        .foregroundStyle(.secondary)
+        .onReceive(tick) { _ in
+            lit = (lit + 1) % 3
+            // 0.4s a tick, so every third is a second. Counting ticks rather
+            // than holding a start Date keeps this correct if the view is
+            // rebuilt mid-reply, which it is, often.
+            if lit == 0 { withAnimation { elapsed += 1 } }
+        }
+        .accessibilityLabel(elapsed >= 5 ? "Replying, \(elapsed) seconds" : "Replying")
+    }
 }

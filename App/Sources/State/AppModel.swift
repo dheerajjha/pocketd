@@ -602,6 +602,23 @@ final class AppModel {
         )
     }
 
+    private var lastCheckpoint = Date.distantPast
+
+    /// Writes the transcript mid-generation, at most every few seconds.
+    ///
+    /// Deliberately not `scheduleConversationSave`: that is a debounce, so
+    /// calling it per token restarts its timer per token and it never fires at
+    /// all for the whole of a continuous stream — the exact case it would be
+    /// called for. This is the other shape, a throttle with a floor, and the
+    /// floor is what keeps a long reply from rewriting the file sixty times a
+    /// second.
+    func checkpointConversation() {
+        guard Date().timeIntervalSince(lastCheckpoint) >= 3 else { return }
+        lastCheckpoint = Date()
+        let snapshot = snapshotConversation()
+        Task { [conversations] in try? await conversations.save(snapshot) }
+    }
+
     /// Persists the current transcript shortly after it stops changing.
     func scheduleConversationSave() {
         saveTask?.cancel()
@@ -1275,6 +1292,17 @@ final class AppModel {
         conversation.append(ChatMessage(role: .user, content: text, images: images))
         conversation.append(.assistant(""))
         isGenerating = true
+        // Both written weeks ago and never called. A generation is exactly the
+        // case they exist for: the idle timer was driven only by the server, so
+        // a phone answering a question in Chat locked its screen mid-reply, and
+        // the lock backgrounds the app, and backgrounding unloads the model.
+        UIApplication.shared.isIdleTimerDisabled = true
+        suppressAutoRelease("generating")
+        // Before a single token exists. Until now the only saves were after a
+        // generation ended, so a force-quit or a memory kill during the 60-90
+        // seconds a phone takes to answer lost the question as well as the
+        // reply — and the app's own recovery from a hang is a force-quit.
+        scheduleConversationSave()
 
         // What this reply is being written into, stamped before a single token
         // exists, because from here on every event arrives across an actor hop
@@ -1326,6 +1354,7 @@ final class AppModel {
                     switch event {
                     case .token(let chunk):
                         await MainActor.run {
+                            self.checkpointConversation()
                             guard target.canWrite(to: self.currentConversationID, messages: self.conversation) else { return }
                             self.conversation[target.slot].content += chunk
                         }
@@ -1349,12 +1378,15 @@ final class AppModel {
                     // would then explain its own transport failure back to
                     // the user as though it were a reply.
                     guard self.currentConversationID == target.conversation else { return }
+                    self.discardEmptyReply()
                     self.generationError = (error as? LocalizedError)?.errorDescription
                         ?? "The reply could not be completed."
                 }
             }
             await MainActor.run {
                 self.isGenerating = false
+                self.resumeAutoRelease("generating")
+                self.applyIdleTimer(running: self.serverShouldRun)
                 // The transcript this reply belongs to, or nothing at all.
                 // Whatever is on screen instead was saved on the way out of
                 // the one being left, and writing it again here is how a
@@ -1364,10 +1396,33 @@ final class AppModel {
         }
     }
 
+    /// Removes an assistant turn that never said anything.
+    ///
+    /// `send()` appends `.assistant("")` before a token exists so there is a
+    /// slot to stream into. If the generation then fails or is stopped before
+    /// the first token, nothing removed it: the transcript kept a permanent
+    /// "…" bubble, the save wrote it to disk, and the next send replayed it to
+    /// the model as a turn in which the assistant had said nothing — which a
+    /// small model reads as an example of how to answer.
+    ///
+    /// Cards count as having said something: a tool can return a card and the
+    /// narration fail afterwards, and the card is the part worth keeping.
+    private func discardEmptyReply() {
+        guard let last = conversation.indices.last,
+              conversation[last].role == .assistant,
+              conversation[last].content.isEmpty,
+              conversation[last].cards.isEmpty
+        else { return }
+        conversation.remove(at: last)
+    }
+
     func stopGenerating() {
         // A stopped reply is still a reply: the partial text is on screen and
         // has to survive the same way a finished one does.
         defer { scheduleConversationSave() }
+        resumeAutoRelease("generating")
+        applyIdleTimer(running: serverShouldRun)
+        discardEmptyReply()
         generationTask?.cancel()
         generationTask = nil
         isGenerating = false

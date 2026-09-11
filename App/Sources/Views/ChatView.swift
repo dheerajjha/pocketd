@@ -120,7 +120,7 @@ struct ChatView: View {
                     .padding(.vertical, 6)
                 }
 
-                composer
+                ChatComposer(isFocused: $isComposerFocused)
             }
             .sensoryFeedback(.success, trigger: copyTick)
             .navigationTitle(model.loadedModelID ?? "Chat")
@@ -146,53 +146,7 @@ struct ChatView: View {
         }
     }
 
-    /// Extracted purely so the body type-checks.
-    ///
-    /// SwiftUI builds one expression per view body, and this one grew past
-    /// what the solver will attempt — the failure is a build timeout on the
-    /// enclosing `ScrollViewReader`, which points nowhere near the code that
-    /// caused it.
-    @ViewBuilder
-    private func thumbnail(_ data: Data, at index: Int) -> some View {
-        if let image = UIImage(data: data) {
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFill()
-                .frame(width: 56, height: 56)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay(alignment: .topTrailing) {
-                    Button {
-                        model.removeAttachment(at: index)
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.caption)
-                            .symbolRenderingMode(.palette)
-                            .foregroundStyle(.white, .black.opacity(0.6))
-                    }
-                    .padding(2)
-                    .accessibilityLabel("Remove photo \(index + 1)")
-                }
-        }
-    }
 
-    /// Reads the picked items into memory and hands them to the model.
-    ///
-    /// Downscaled first: a modern iPhone photo is several thousand pixels wide
-    /// and the projector sees a few hundred, so sending the original spends
-    /// memory and encode time to produce the same tokens. It also has to be
-    /// data rather than a file URL — the wire format carries base64, and a
-    /// paired laptop cannot open a path on this phone.
-    private func loadPicked() async {
-        guard !picked.isEmpty else { return }
-        for item in picked {
-            guard let raw = try? await item.loadTransferable(type: Data.self),
-                  let image = UIImage(data: raw),
-                  let shrunk = image.downscaled(to: 896)?.jpegData(compressionQuality: 0.8)
-            else { continue }
-            model.attach(shrunk)
-        }
-        picked = []
-    }
 
     @ViewBuilder
     private var modelSwitchBanner: some View {
@@ -323,63 +277,6 @@ struct ChatView: View {
         return message.content.isEmpty ? "Assistant is replying" : "Assistant said"
     }
 
-    private var composer: some View {
-        @Bindable var model = model
-
-        return VStack(spacing: 8) {
-            if !model.attachments.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(Array(model.attachments.enumerated()), id: \.offset) { index, data in
-                            thumbnail(data, at: index)
-                        }
-                    }
-                    .padding(.horizontal, 2)
-                }
-                .frame(height: 62)
-            }
-
-            HStack(spacing: 8) {
-            // Offered only when the resident model can actually see. A camera
-            // button on a text model is a promise the next screen breaks.
-            if model.loadedModelSeesImages {
-                PhotosPicker(
-                    selection: $picked,
-                    maxSelectionCount: 4,
-                    matching: .images,
-                    photoLibrary: .shared()
-                ) {
-                    Image(systemName: "photo.on.rectangle")
-                }
-                .disabled(model.isGenerating)
-                .accessibilityLabel("Attach a photo")
-            }
-
-            TextField("Message", text: $model.draft, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(1...5)
-                .disabled(model.loadedModelID == nil)
-                .focused($isComposerFocused)
-                .submitLabel(.send)
-
-            if model.isGenerating {
-                Button("Stop", systemImage: "stop.circle.fill") { model.stopGenerating() }
-                    .labelStyle(.iconOnly)
-            } else {
-                Button("Send", systemImage: "arrow.up.circle.fill") { model.send() }
-                    .labelStyle(.iconOnly)
-                    .disabled(
-                        model.draft.trimmingCharacters(in: .whitespaces).isEmpty
-                            && model.attachments.isEmpty
-                    )
-            }
-            }
-        }
-        .font(.title2)
-        .padding()
-        .task(id: picked) { await loadPicked() }
-        .background(.bar)
-    }
 
     // MARK: - Timestamps
 
@@ -423,6 +320,133 @@ struct ChatView: View {
     }
 }
 
+
+
+/// The input bar, as its own view.
+///
+/// It is a separate `View` for one specific reason, and it is the difference
+/// between a chat that types smoothly and one that locks up. SwiftUI registers
+/// an observable read against whichever body performed it. While this was a
+/// computed property of `ChatView`, reading `model.draft` registered against
+/// `ChatView.body` — so every keystroke invalidated the whole screen and
+/// re-applied the `ForEach` over the entire conversation. A sampled hang
+/// showed 1371 of 1371 main-thread frames inside one `CATransaction.commit`,
+/// recursing through `LazyStack.sizeThatFits`, with no inference on the stack
+/// at all: the model was not slow, the layout was rebuilding itself per letter.
+///
+/// Keeping the draft in here means a keystroke invalidates a bar, not a
+/// transcript.
+private struct ChatComposer: View {
+    @Environment(AppModel.self) private var model
+    @FocusState.Binding var isFocused: Bool
+    @State private var picked: [PhotosPickerItem] = []
+
+    var body: some View {
+        @Bindable var model = model
+
+        return VStack(spacing: 8) {
+            if !model.attachments.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(Array(model.attachments.enumerated()), id: \.offset) { index, data in
+                            thumbnail(data, at: index)
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                }
+                .frame(height: 62)
+            }
+
+            HStack(spacing: 8) {
+            // Offered only when the resident model can actually see. A camera
+            // button on a text model is a promise the next screen breaks.
+            if model.loadedModelSeesImages {
+                PhotosPicker(
+                    selection: $picked,
+                    maxSelectionCount: 4,
+                    matching: .images,
+                    photoLibrary: .shared()
+                ) {
+                    Image(systemName: "photo.on.rectangle")
+                }
+                .disabled(model.isGenerating)
+                .accessibilityLabel("Attach a photo")
+            }
+
+            TextField("Message", text: $model.draft, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(1...5)
+                .disabled(model.loadedModelID == nil)
+                .focused($isFocused)
+                .submitLabel(.send)
+
+            if model.isGenerating {
+                Button("Stop", systemImage: "stop.circle.fill") { model.stopGenerating() }
+                    .labelStyle(.iconOnly)
+            } else {
+                Button("Send", systemImage: "arrow.up.circle.fill") { model.send() }
+                    .labelStyle(.iconOnly)
+                    .disabled(
+                        model.draft.trimmingCharacters(in: .whitespaces).isEmpty
+                            && model.attachments.isEmpty
+                    )
+            }
+            }
+        }
+        .font(.title2)
+        .padding()
+        .task(id: picked) { await loadPicked() }
+        .background(.bar)
+    }
+
+    /// Extracted purely so the body type-checks.
+    ///
+    /// SwiftUI builds one expression per view body, and this one grew past
+    /// what the solver will attempt — the failure is a build timeout on the
+    /// enclosing `ScrollViewReader`, which points nowhere near the code that
+    /// caused it.
+    @ViewBuilder
+    private func thumbnail(_ data: Data, at index: Int) -> some View {
+        if let image = UIImage(data: data) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(alignment: .topTrailing) {
+                    Button {
+                        model.removeAttachment(at: index)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.caption)
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, .black.opacity(0.6))
+                    }
+                    .padding(2)
+                    .accessibilityLabel("Remove photo \(index + 1)")
+                }
+        }
+    }
+
+    /// Reads the picked items into memory and hands them to the model.
+    ///
+    /// Downscaled first: a modern iPhone photo is several thousand pixels wide
+    /// and the projector sees a few hundred, so sending the original spends
+    /// memory and encode time to produce the same tokens. It also has to be
+    /// data rather than a file URL — the wire format carries base64, and a
+    /// paired laptop cannot open a path on this phone.
+    private func loadPicked() async {
+        guard !picked.isEmpty else { return }
+        for item in picked {
+            guard let raw = try? await item.loadTransferable(type: Data.self),
+                  let image = UIImage(data: raw),
+                  let shrunk = image.downscaled(to: 896)?.jpegData(compressionQuality: 0.8)
+            else { continue }
+            model.attach(shrunk)
+        }
+        picked = []
+    }
+}
 
 private extension UIImage {
     /// Longest edge capped, aspect preserved. Vision projectors work from a
