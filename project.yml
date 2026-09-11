@@ -128,10 +128,20 @@ targets:
       base:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PRODUCT_BUNDLE_IDENTIFIER: dev.pocketd.app
-        MARKETING_VERSION: "0.1.0"
+        MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "6.0"
-        TARGETED_DEVICE_FAMILY: "1,2"
+        # iPhone only for 1.0, and that is a retreat from a claim the app was
+        # making without evidence. "1,2" shipped iPad support that nobody has
+        # ever run on an iPad: every memory assumption here is calibrated
+        # against phone hardware, and the fit estimate that decides whether a
+        # model is downloadable at all has never seen an iPad's jetsam limit.
+        # A universal binary also makes iPad screenshots mandatory and invites
+        # a reviewer to open it on hardware we have not tested, next to two
+        # questions (arbitrary GGUF, local server) we would rather have their
+        # full attention on. iPad is a later release with real testing behind
+        # it, not a build setting.
+        TARGETED_DEVICE_FAMILY: "1"
         DEVELOPMENT_TEAM: 83C822A4J3
         CODE_SIGN_STYLE: Automatic
         # Indirection so a device build can drop the entitlement without

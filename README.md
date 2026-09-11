@@ -337,8 +337,10 @@ third-party clients depend on.
 
 ## Privacy
 
-[**docs/PRIVACY.md**](docs/PRIVACY.md) — short, and checkable against this
-source tree rather than taken on trust.
+[**dheerajjha.github.io/pocketd**](https://dheerajjha.github.io/pocketd/) — the
+published policy, and the URL App Store Connect points at. It is
+[`docs/index.html`](docs/index.html) in this repository: short, and checkable
+against this source tree rather than taken on trust.
 
 No account, no analytics, no crash reporting, no telemetry. One host is ever
 contacted, `huggingface.co`, and only to search for or download a model.
