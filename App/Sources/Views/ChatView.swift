@@ -1,9 +1,11 @@
 import SwiftUI
+import PhotosUI
 import PocketdKit
 
 struct ChatView: View {
     @State private var isShowingHistory = false
     @FocusState private var isComposerFocused: Bool
+    @State private var picked: [PhotosPickerItem] = []
     @Environment(AppModel.self) private var model
     var goTo: (AppTab) -> Void = { _ in }
     private let topAnchor = "pocketd.chat.top"
@@ -151,6 +153,48 @@ struct ChatView: View {
     /// enclosing `ScrollViewReader`, which points nowhere near the code that
     /// caused it.
     @ViewBuilder
+    private func thumbnail(_ data: Data, at index: Int) -> some View {
+        if let image = UIImage(data: data) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(alignment: .topTrailing) {
+                    Button {
+                        model.removeAttachment(at: index)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.caption)
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, .black.opacity(0.6))
+                    }
+                    .padding(2)
+                    .accessibilityLabel("Remove photo \(index + 1)")
+                }
+        }
+    }
+
+    /// Reads the picked items into memory and hands them to the model.
+    ///
+    /// Downscaled first: a modern iPhone photo is several thousand pixels wide
+    /// and the projector sees a few hundred, so sending the original spends
+    /// memory and encode time to produce the same tokens. It also has to be
+    /// data rather than a file URL — the wire format carries base64, and a
+    /// paired laptop cannot open a path on this phone.
+    private func loadPicked() async {
+        guard !picked.isEmpty else { return }
+        for item in picked {
+            guard let raw = try? await item.loadTransferable(type: Data.self),
+                  let image = UIImage(data: raw),
+                  let shrunk = image.downscaled(to: 896)?.jpegData(compressionQuality: 0.8)
+            else { continue }
+            model.attach(shrunk)
+        }
+        picked = []
+    }
+
+    @ViewBuilder
     private var modelSwitchBanner: some View {
         if let notice = model.modelSwitchNotice {
             HStack(alignment: .top, spacing: 8) {
@@ -173,14 +217,38 @@ struct ChatView: View {
 
         HStack(spacing: 0) {
             if isUser { Spacer(minLength: 40) }
-            Group {
-                if isUser {
-                    // Left exactly as typed. People write literal asterisks and
-                    // mean them, and a message that italicises what someone
-                    // wrote is not the message they sent.
-                    Text(message.content)
-                } else {
-                    MessageContentView(text: message.content)
+            VStack(alignment: isUser ? .trailing : .leading, spacing: 8) {
+                // Shown in the transcript, not just carried to the model. A
+                // question about a picture is unreadable later without the
+                // picture, and the conversation persists.
+                if !message.images.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(Array(message.images.enumerated()), id: \.offset) { _, data in
+                            if let image = UIImage(data: data) {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 104, height: 104)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                            }
+                        }
+                    }
+                    .accessibilityLabel(
+                        message.images.count == 1
+                            ? "One attached photo"
+                            : "\(message.images.count) attached photos"
+                    )
+                }
+
+                if !message.content.isEmpty {
+                    if isUser {
+                        // Left exactly as typed. People write literal asterisks
+                        // and mean them, and a message that italicises what
+                        // someone wrote is not the message they sent.
+                        Text(message.content)
+                    } else {
+                        MessageContentView(text: message.content)
+                    }
                 }
             }
             .textSelection(.enabled)
@@ -258,7 +326,35 @@ struct ChatView: View {
     private var composer: some View {
         @Bindable var model = model
 
-        return HStack(spacing: 8) {
+        return VStack(spacing: 8) {
+            if !model.attachments.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(Array(model.attachments.enumerated()), id: \.offset) { index, data in
+                            thumbnail(data, at: index)
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                }
+                .frame(height: 62)
+            }
+
+            HStack(spacing: 8) {
+            // Offered only when the resident model can actually see. A camera
+            // button on a text model is a promise the next screen breaks.
+            if model.loadedModelSeesImages {
+                PhotosPicker(
+                    selection: $picked,
+                    maxSelectionCount: 4,
+                    matching: .images,
+                    photoLibrary: .shared()
+                ) {
+                    Image(systemName: "photo.on.rectangle")
+                }
+                .disabled(model.isGenerating)
+                .accessibilityLabel("Attach a photo")
+            }
+
             TextField("Message", text: $model.draft, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...5)
@@ -272,11 +368,16 @@ struct ChatView: View {
             } else {
                 Button("Send", systemImage: "arrow.up.circle.fill") { model.send() }
                     .labelStyle(.iconOnly)
-                    .disabled(model.draft.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(
+                        model.draft.trimmingCharacters(in: .whitespaces).isEmpty
+                            && model.attachments.isEmpty
+                    )
+            }
             }
         }
         .font(.title2)
         .padding()
+        .task(id: picked) { await loadPicked() }
         .background(.bar)
     }
 
@@ -318,6 +419,21 @@ struct ChatView: View {
         Task {
             try? await Task.sleep(for: .seconds(1.2))
             if copiedMessage == index { copiedMessage = nil }
+        }
+    }
+}
+
+
+private extension UIImage {
+    /// Longest edge capped, aspect preserved. Vision projectors work from a
+    /// fixed small grid, so anything larger is bytes the model never reads.
+    func downscaled(to longestEdge: CGFloat) -> UIImage? {
+        let longest = max(size.width, size.height)
+        guard longest > longestEdge else { return self }
+        let scale = longestEdge / longest
+        let target = CGSize(width: size.width * scale, height: size.height * scale)
+        return UIGraphicsImageRenderer(size: target).image { _ in
+            draw(in: CGRect(origin: .zero, size: target))
         }
     }
 }

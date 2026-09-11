@@ -1229,13 +1229,50 @@ final class AppModel {
 
     // MARK: - Chat
 
+    /// Images waiting to go with the next message.
+    ///
+    /// Held here rather than in the view so that switching tabs mid-compose
+    /// does not silently drop a photo someone has already chosen — the same
+    /// reason the text draft lives here.
+    private(set) var attachments: [Data] = []
+
+    /// Whether the resident model can see, which is the only honest basis for
+    /// offering the camera button.
+    ///
+    /// A vision model whose projector never downloaded loads and cannot see:
+    /// `ModelStore` refuses to mark such a model installed for exactly that
+    /// reason, so `declaredCapabilities` is trustworthy by the time a model is
+    /// loadable at all.
+    var loadedModelSeesImages: Bool {
+        guard let id = loadedModelID else { return false }
+        return catalog.first { $0.id == id }?.declaredCapabilities.vision.isYes ?? false
+    }
+
+    func attach(_ image: Data) {
+        // Four is what the context can carry: each image is hundreds of tokens
+        // of projector output before a word of the question is read.
+        guard attachments.count < 4 else { return }
+        attachments.append(image)
+    }
+
+    func removeAttachment(at index: Int) {
+        guard attachments.indices.contains(index) else { return }
+        attachments.remove(at: index)
+    }
+
+    func clearAttachments() { attachments.removeAll() }
+
     func send() {
         noteActivity()
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !isGenerating, loadedModelID != nil else { return }
+        // A picture with no words is a question — "what is this" is implied —
+        // so an empty draft is allowed once something is attached.
+        guard !text.isEmpty || !attachments.isEmpty, !isGenerating, loadedModelID != nil else { return }
+        let images = attachments
         draft = ""
+        attachments = []
         generationError = nil
-        conversation.append(.user(text))
+        conversation.append(ChatMessage(role: .user, content: text, images: images))
         conversation.append(.assistant(""))
         isGenerating = true
 
@@ -1247,6 +1284,15 @@ final class AppModel {
         var messages: [ChatMessage] = []
         if !systemPrompt.isEmpty { messages.append(.system(systemPrompt)) }
         messages.append(contentsOf: conversation.dropLast())
+        // On the last user turn only, because Qwen documents the switch as
+        // per-turn and says the model follows the most recent instruction —
+        // repeating it on every historical turn would spend tokens restating
+        // something already obeyed. Appended to the copy the model reads and
+        // never to the transcript: the user did not type it, and a conversation
+        // reopened later must not show it.
+        if !configuration.reasoningEnabled, let last = messages.indices.last, messages[last].role == .user {
+            messages[last].content += "\n/no_think"
+        }
         // Unconditional, unlike the tools, because it is nearly free and
         // because without it the assistant is wrong rather than merely
         // unhelpful: a model that does not know the date answers "what's on

@@ -101,10 +101,11 @@ struct SettingsView: View {
                             value: $draft.maxContextTokens, in: 512...32_768, step: 512)
                     Stepper("Concurrent requests: \(draft.maxConcurrentRequests)",
                             value: $draft.maxConcurrentRequests, in: 1...4)
+                    Toggle("Let the model think first", isOn: $draft.reasoningEnabled)
                 } header: {
                     Text("Generation")
                 } footer: {
-                    Text("The KV cache grows with the context limit and competes with the weights for the same memory. More than one concurrent request makes every request slower on a single GPU.")
+                    Text("The KV cache grows with the context limit and competes with the weights for the same memory. More than one concurrent request makes every request slower on a single GPU.\n\nReasoning models write out their working before answering. It helps on hard questions and costs tens of seconds on a phone for easy ones. Turning it off asks the model to skip it; models that do not reason are unaffected either way.")
                 }
 
                 Section {
