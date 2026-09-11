@@ -64,7 +64,7 @@ public struct ModelRecord: Sendable, Codable, Equatable, Identifiable, Hashable 
         self.parameters = parameters
         self.quantization = quantization
         self.sizeBytes = sizeBytes
-        self.contextLength = contextLength
+        self.contextLength = Self.usableContext(contextLength)
         self.license = license
         self.sourceURL = sourceURL
         self.projectorFilename = projectorFilename
@@ -86,7 +86,7 @@ public struct ModelRecord: Sendable, Codable, Equatable, Identifiable, Hashable 
         parameters = try c.decode(String.self, forKey: .parameters)
         quantization = try c.decode(String.self, forKey: .quantization)
         sizeBytes = try c.decode(Int64.self, forKey: .sizeBytes)
-        contextLength = try c.decode(Int.self, forKey: .contextLength)
+        contextLength = Self.usableContext(try c.decode(Int.self, forKey: .contextLength))
         license = try c.decode(String.self, forKey: .license)
         sourceURL = try c.decodeIfPresent(URL.self, forKey: .sourceURL)
         projectorFilename = try c.decodeIfPresent(String.self, forKey: .projectorFilename)
@@ -127,6 +127,27 @@ public struct ModelRecord: Sendable, Codable, Equatable, Identifiable, Hashable 
     /// `memoryEstimate(atContext:)` with it.
     public var estimatedResidentBytes: Int64 {
         memoryEstimate(atContext: contextLength).totalBytes
+    }
+
+    /// A context length llama.cpp can actually be given.
+    ///
+    /// `contextLength` is not ours: `POST /api/models/add` takes it from the
+    /// request body, and the route validates the repository and the filename
+    /// and nothing else. It then goes into the manifest and is read back on
+    /// every launch, so one bad value is permanent.
+    ///
+    /// Unclamped it reaches `UInt32(parameter.context)` inside the library's
+    /// context initialiser, and a negative number traps there — killing the
+    /// process, and with it every other client's in-flight request. Small
+    /// positive values are almost as bad in a quieter way: below roughly a
+    /// thousand tokens the capability budget refuses every tool while the
+    /// Settings screen still reports them registered, and `ContextGuard`
+    /// refuses every prompt.
+    ///
+    /// The ceiling is llama.cpp's own limit on a single sequence. The floor is
+    /// the smallest window this app has ever asked a model to work in.
+    static func usableContext(_ requested: Int) -> Int {
+        min(max(requested, 512), 1_048_576)
     }
 
     public static let echo = ModelRecord(

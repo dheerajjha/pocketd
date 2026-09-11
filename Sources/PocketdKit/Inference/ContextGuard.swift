@@ -9,14 +9,24 @@ import Foundation
 /// So a single large request from any client kills the whole server, taking
 /// every other client's connection with it.
 ///
-/// The estimate is deliberately pessimistic. Four characters per token is the
-/// usual English average; three is closer to the worst case for code, JSON and
-/// non-Latin scripts. Refusing a borderline-valid prompt with a clear 413 is a
-/// far better outcome than a process that dies, so the guard errs toward
-/// refusing.
+/// The estimate is deliberately pessimistic, and it is measured in UTF-8 bytes.
+/// Four bytes per token is the usual English average; three is closer to the
+/// worst case for code, JSON and non-Latin scripts.
+///
+/// Bytes rather than `String.count`, which counts extended grapheme clusters
+/// and would make the same three-per-token promise about a unit nothing bounds.
+/// A Japanese character is three bytes and usually a token of its own, so
+/// clusters divided by three price it at a third of what it costs; a ZWJ family
+/// emoji is one cluster and twenty-five bytes, so it is priced at a twenty-fifth
+/// of them. Both are under-reservations, and an under-reservation is the crash
+/// above rather than a refusal. ASCII has one byte per character, so every
+/// prose, code and JSON prompt is priced at exactly the number it was.
+///
+/// Refusing a borderline-valid prompt with a clear 413 is a far better outcome
+/// than a process that dies, so the guard errs toward refusing.
 public struct ContextGuard: Sendable, Equatable {
-    /// Characters per token, worst case. Lower means more pessimistic.
-    public static let charactersPerToken = 3
+    /// UTF-8 bytes per token, worst case. Lower means more pessimistic.
+    public static let bytesPerToken = 3
 
     public var contextTokens: Int
     /// Tokens held back for the answer, so a prompt cannot fill the window and
@@ -40,7 +50,7 @@ public struct ContextGuard: Sendable, Equatable {
     }
 
     public static func estimateTokens(_ text: String) -> Int {
-        (text.count + charactersPerToken - 1) / charactersPerToken
+        (text.utf8.count + bytesPerToken - 1) / bytesPerToken
     }
 
     public static func estimateTokens(_ messages: [ChatMessage]) -> Int {
@@ -60,6 +70,8 @@ public struct ContextGuard: Sendable, Equatable {
     /// empty tools array. The test spells that literal out again so a careless
     /// edit to this number fails — though only re-reading the dependency can
     /// catch the dependency itself changing, which no test can do for us.
+    ///
+    /// Characters and bytes alike: the literal is ASCII.
     public static let toolPreambleCharacters = 265
 
     /// What registering `toolsJSON` will cost, in guard tokens.
@@ -81,7 +93,7 @@ public struct ContextGuard: Sendable, Equatable {
 
     public static func toolOverhead(toolsJSON: String, templateIsToolNative: Bool) -> Int {
         guard !toolsJSON.isEmpty else { return 0 }
-        return toolOverhead(schemaCharacters: toolsJSON.count, templateIsToolNative: templateIsToolNative)
+        return toolOverhead(schemaCharacters: toolsJSON.utf8.count, templateIsToolNative: templateIsToolNative)
     }
 
     /// The same price, quoted before there is a string to measure.
@@ -92,11 +104,18 @@ public struct ContextGuard: Sendable, Equatable {
     /// and the guard's reservation could drift apart, the budget would admit a
     /// tool the guard then charges more for, under-reserve by the difference,
     /// and hand llama.cpp the oversized batch this whole file exists to prevent.
+    ///
+    /// The label still says characters because `CapabilityBudget` measures its
+    /// schemas with `String.count` and the two have to remain one number. Every
+    /// schema this app generates is ASCII — an identifier, an English sentence
+    /// and snake_case enum values — so they are the same count today, and if one
+    /// ever stops being, the budget quotes less than the guard reserves, which
+    /// costs a prompt rather than the process.
     public static func toolOverhead(schemaCharacters: Int, templateIsToolNative: Bool) -> Int {
         guard schemaCharacters > 0 else { return 0 }
-        let schema = ((schemaCharacters + charactersPerToken - 1) / charactersPerToken)
+        let schema = ((schemaCharacters + bytesPerToken - 1) / bytesPerToken)
             * (templateIsToolNative ? 2 : 1)
-        return schema + (toolPreambleCharacters + charactersPerToken - 1) / charactersPerToken
+        return schema + (toolPreambleCharacters + bytesPerToken - 1) / bytesPerToken
     }
 
     public func fits(_ messages: [ChatMessage]) -> Bool {

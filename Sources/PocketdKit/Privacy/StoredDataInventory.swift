@@ -86,7 +86,7 @@ public enum StoredDataKind: String, Sendable, CaseIterable, Codable {
         case .conversations:
             "Everything typed in the Chat tab and everything the model replied, one file per conversation, as plain text."
         case .partialDownloads:
-            "Bytes of a model that never finished arriving. iOS keeps the partial file outside this app's own folders and reclaims it only when the disk fills."
+            "Bytes of a model that never finished arriving: the resume blob beside the weights, and the part-file URLSession parks in this app's own tmp folder. iOS empties tmp only when the disk comes under pressure, which is why there is a button for it here."
         case .preferences:
             "This app's own settings, including the API key other devices use to reach it."
         case .networkCache:
@@ -107,7 +107,7 @@ public enum StoredDataKind: String, Sendable, CaseIterable, Codable {
         case .networkCache:
             .here
         case .preferences:
-            .onlyByDeletingTheApp("Individual settings can be changed and the API key can be replaced, but the file itself belongs to iOS and goes when the app does.")
+            .onlyByDeletingTheApp("Every setting in it can be changed from this app and the API key replaced above. The file itself is written by iOS on the app's behalf and goes when the app does.")
         case .shaderCache:
             .systemManaged("iOS rebuilds it the next time a model loads, so deleting it would cost a slower load and free nothing for long.")
         case .systemState:

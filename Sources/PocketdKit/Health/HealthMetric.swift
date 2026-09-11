@@ -121,6 +121,22 @@ public enum HealthMetric: String, Sendable, Codable, CaseIterable {
         }
     }
 
+    /// The same noun standing on its own, as the thing a clause is about.
+    ///
+    /// `noun` is attributive — "step data", "a day of step data" — and reads
+    /// wrong the moment it carries a sentence by itself: "Highest step since
+    /// August 2025." Steps are the only metric where the two forms differ, and
+    /// the switch is exhaustive so a metric added later has to answer the
+    /// question rather than inherit the wrong answer. The payload hands the
+    /// model finished clauses to select and connect, never ones to repair.
+    public var subjectNoun: String {
+        switch self {
+        case .steps: "steps"
+        case .active_energy, .exercise_minutes, .resting_heart_rate,
+             .heart_rate_variability, .walking_heart_rate, .respiratory_rate, .sleep: noun
+        }
+    }
+
     public var unit: HealthUnit {
         switch self {
         case .steps: .count
@@ -307,7 +323,12 @@ public struct HealthComparison: Sendable, Equatable {
 /// back four months cannot know what happened in the spring.
 public enum HealthSuperlative: Sendable, Equatable {
     case bestSince(day: Date, gapDays: Int)
-    case bestInReach(spanDays: Int)
+    /// `spanDays` is how far back the series reaches; `dayCount` is how many of
+    /// those days actually carry a reading. Both, because they are routinely
+    /// nothing like each other — a tracker worn for a week in July and again
+    /// this week spans forty days and holds twelve — and a sentence built from
+    /// the span alone asserts a history the phone does not have.
+    case bestInReach(spanDays: Int, dayCount: Int)
 }
 
 /// Consecutive days that all did something.
@@ -521,7 +542,7 @@ public enum HealthArithmetic {
         windowDays: Int = baselineWindowDays,
         calendar: Calendar
     ) -> [DailyValue] {
-        let start = calendar.date(byAdding: .day, value: -windowDays, to: day) ?? day
+        let start = startOfDay(day, offsetBy: -windowDays, calendar: calendar)
         return days.filter { $0.day >= start && $0.day < day }
     }
 
@@ -617,11 +638,37 @@ public enum HealthArithmetic {
 
         // Nothing in the series beats it, so the honest claim is bounded by how
         // far the series reaches — not "your best ever" unless the phone can see
-        // that far.
+        // that far. Bounded by how *much* it holds as well: a span says nothing
+        // about density, and the two entries a lapsed tracker leaves behind span
+        // a month with nothing in between.
         guard let first = earlier.first else { return nil }
         let span = dayGap(from: first.day, to: latest.day, calendar: calendar)
         guard span >= minimumGapDays else { return nil }
-        return .bestInReach(spanDays: span)
+        return .bestInReach(spanDays: span, dayCount: days.count)
+    }
+
+    // MARK: Days
+
+    /// The start of the day `days` away from this one.
+    ///
+    /// The re-normalisation is the whole point, and it is the one thing every
+    /// day calculation in this file has to do. `date(byAdding: .day,)` keeps the
+    /// time of day it was given, and in a zone whose clocks go forward *at
+    /// midnight* — Santiago, Havana, Beirut, São Paulo, Tehran, some 35 million
+    /// people between them — the start of that day is 01:00, because 00:00 never
+    /// happened. Step back from it and you land on 01:00 of an ordinary day,
+    /// which is not that day's start and never again equals a bucket key. The
+    /// hour is then carried along by every later step, so one transition
+    /// silently truncates the rest of the walk.
+    ///
+    /// London, which every daylight-saving test in this repo used before this
+    /// one, shifts at 01:00 and therefore always has a midnight — which is
+    /// exactly why the drift was invisible there.
+    public static func startOfDay(_ date: Date, offsetBy days: Int, calendar: Calendar) -> Date {
+        guard let moved = calendar.date(byAdding: .day, value: days, to: calendar.startOfDay(for: date)) else {
+            return date
+        }
+        return calendar.startOfDay(for: moved)
     }
 
     /// Whole days between two midnights, by calendar rather than by division.
@@ -630,8 +677,27 @@ public enum HealthArithmetic {
     /// `timeIntervalSince / 86_400` rounds to the wrong integer roughly twice a
     /// year and reports a 30-day gap as 29 — which is the difference between
     /// saying something and staying quiet.
+    ///
+    /// Counted between middays rather than between the two day starts, and that
+    /// is not tidiness. `dateComponents([.day],)` counts whole days from the
+    /// *time of day* it starts at: on a day whose midnight was skipped the start
+    /// is 01:00, no whole day fits between it and the next day's 00:00, and the
+    /// count comes back one short — the staleness note, the currency gate and a
+    /// superlative's reach all quietly slip by a day. Midday exists on every
+    /// date in every zone and moves with the offset, so both ends carry the same
+    /// wall clock and the calendar is left to do the counting.
     public static func dayGap(from: Date, to: Date, calendar: Calendar) -> Int {
-        calendar.dateComponents([.day], from: calendar.startOfDay(for: from), to: calendar.startOfDay(for: to)).day ?? 0
+        calendar.dateComponents(
+            [.day], from: midday(of: from, calendar: calendar), to: midday(of: to, calendar: calendar)
+        ).day ?? 0
+    }
+
+    /// Built from components rather than searched for, so there is no matching
+    /// policy to reason about on the days this exists to survive.
+    private static func midday(of date: Date, calendar: Calendar) -> Date {
+        var components = calendar.dateComponents([.era, .year, .month, .day], from: date)
+        components.hour = 12
+        return calendar.date(from: components) ?? date
     }
 
     // MARK: Streaks
@@ -672,7 +738,11 @@ public enum HealthArithmetic {
         var length = 1
         var expected = latest.day
         for candidate in days.dropLast().reversed() {
-            guard let previous = calendar.date(byAdding: .day, value: -1, to: expected) else { break }
+            // Through `startOfDay(_:offsetBy:)` rather than a bare subtraction:
+            // a chain that keeps its time of day stops matching bucket keys at
+            // the first zone transition it crosses, and truncates the streak
+            // there and at every step after it.
+            let previous = startOfDay(expected, offsetBy: -1, calendar: calendar)
             guard candidate.day == previous, predicate(candidate.value) else { break }
             length += 1
             expected = previous
@@ -686,14 +756,24 @@ public enum HealthArithmetic {
     /// of a day being compared against a mean of whole ones. Reading the last
     /// completed day instead is the difference between "40% below your usual" every
     /// morning and an answer that means something.
+    ///
+    /// Both branches are bounded above, and the non-accumulating one has to be:
+    /// nothing validates the date a third-party app writes on a sample, the
+    /// sleep query deliberately reaches to tomorrow's midnight so that a night
+    /// ending this morning is read whole, and a record start-dated tonight is
+    /// therefore returned, survives the plausibility cap and is keyed on
+    /// tomorrow. Unbounded, it becomes *the* reading — a night that has not
+    /// happened, reported in the present tense, hiding the real last night
+    /// behind it. `streak` and `longMemory` both already refuse a negative age;
+    /// this is the one place the same invariant was missing.
     public static func mostRecentComparableDay(
         in days: [DailyValue],
         metric: HealthMetric,
         now: Date,
         calendar: Calendar
     ) -> DailyValue? {
-        guard metric.accumulatesAcrossTheDay else { return days.last }
         let today = calendar.startOfDay(for: now)
+        guard metric.accumulatesAcrossTheDay else { return days.last { $0.day <= today } }
         return days.last { $0.day < today }
     }
 }

@@ -454,31 +454,37 @@ public struct AnswerCardCatalogue: Sendable {
 
     public static let standard = AnswerCardCatalogue([
         PersonalDataToolNames.calendar: AnswerCardBuilders.calendar,
-        PersonalDataToolNames.reminders: AnswerCardBuilders.reminders
+        PersonalDataToolNames.reminders: AnswerCardBuilders.reminders,
+        PersonalDataToolNames.health: AnswerCardBuilders.health
     ])
 }
 
-/// The names the two real tools are registered under.
+/// The names the three real tools are registered under.
 ///
 /// Repeated from `@Tool("get_calendar_events")` in `App/Sources/Tools/`, which
 /// the kit cannot see and which needs a string literal because the macro reads
 /// one. Two copies of a name is a thing that drifts, so the copy that matters —
 /// the one the engine dispatches on — is the app's, and a card that stops
-/// appearing is the symptom of this file falling behind it.
+/// appearing is the symptom of this file falling behind it. `everyToolRenders`
+/// reads the app's literals back out of the source to catch exactly that.
 public enum PersonalDataToolNames {
     public static let calendar = "get_calendar_events"
     public static let reminders = "get_reminders"
+    /// Health belongs in this enum by the codebase's own test of what personal
+    /// data is: `HealthSummary.payload` opens with the same
+    /// `origin.mayReachPersonalData` gate the other two do.
+    public static let health = "get_health_summary"
 }
 
-// MARK: - The two real tools
+// MARK: - The three real tools
 
-/// Cards for the results `PersonalDataTools` produces.
+/// Cards for the results `PersonalDataTools` and `HealthSummary` produce.
 ///
 /// These read the payload dictionaries and nothing else. In particular they do
-/// not reach into EventKit, do not re-read anything, and cannot show a row the
-/// model was not also given — a card and the prose beside it are two renderings
-/// of one payload, and a card that could disagree with the prompt would be
-/// worse than no card at all.
+/// not reach into EventKit or HealthKit, do not re-read anything, and cannot
+/// show a row the model was not also given — a card and the prose beside it are
+/// two renderings of one payload, and a card that could disagree with the
+/// prompt would be worse than no card at all.
 public enum AnswerCardBuilders {
 
     public static let calendar: AnswerCardBuilder = { arguments, data in
@@ -568,7 +574,152 @@ public enum AnswerCardBuilders {
         return AnswerCard(source: source, symbol: symbol, title: title, sections: sections)
     }
 
+    /// The health tool's result, drawn.
+    ///
+    /// `HealthSummary` hands over finished clauses — every mean, delta, streak
+    /// and record already computed, precisely so that a 1.7B model never does
+    /// arithmetic about somebody's body. So this draws the clauses it was given
+    /// and lifts exactly one thing out of them: the figure each reading opens
+    /// with, which is what a reader looks for first and what a paragraph of
+    /// prose buries in its middle.
+    public static let health: AnswerCardBuilder = { arguments, data in
+        let focus = argument(HealthFocus.self, named: "focus", in: arguments)
+        let title = focus.map(name(for:)) ?? "Health"
+        let symbol = focus.map(symbol(for:)) ?? "heart.text.square"
+        let source = PersonalDataToolNames.health
+
+        if let text = data["text"] as? String {
+            return healthSentence(text, title: title, symbol: symbol, source: source)
+        }
+
+        if let workouts = data["workouts"] as? [String], !workouts.isEmpty {
+            let items = workouts.map { line -> AnswerCard.Item in
+                let parts = split(line, at: " — ")
+                return AnswerCard.Item(text: parts.head, detail: parts.tail, symbol: "figure.run")
+            }
+            var sections: [AnswerCard.Section] = [
+                .list(AnswerCard.Items(eyebrow: count(items.count, of: "workout"), items: items))
+            ]
+            if let note = data["note"] as? String {
+                sections.append(.note(AnswerCard.Note(text: note, symbol: "ellipsis", tone: .info)))
+            }
+            return AnswerCard(source: source, symbol: symbol, title: title, sections: sections)
+        }
+
+        guard let readings = data["readings"] as? [String], !readings.isEmpty else { return nil }
+        let lines = readings.map(healthReading(_:))
+
+        var sections: [AnswerCard.Section] = []
+
+        // A strip only where it is a strip: every reading carrying a figure, and
+        // at least two of them. One tile is not a glance, and a strip built from
+        // half the metrics puts the other half's numbers nowhere — the fact rows
+        // below drop the figure only because the tile above is holding it.
+        let tiles = lines.compactMap { line in
+            line.figure.map { AnswerCard.Tile(value: $0, caption: line.label) }
+        }
+        let hasStrip = tiles.count == lines.count && tiles.count >= 2
+        if hasStrip {
+            sections.append(.metrics(AnswerCard.Metrics(eyebrow: "Latest whole day", tiles: tiles)))
+        }
+
+        sections.append(.facts(AnswerCard.Facts(
+            eyebrow: "Against your own baseline",
+            rows: lines.map { line in
+                AnswerCard.Fact(label: line.label, value: hasStrip ? line.rest : line.clause)
+            }
+        )))
+
+        if let notable = data["notable"] as? [String], !notable.isEmpty {
+            sections.append(.list(AnswerCard.Items(
+                eyebrow: "Worth noting",
+                items: notable.map { AnswerCard.Item(text: $0, symbol: "sparkles") }
+            )))
+        }
+
+        if let missing = data["no_data"] as? String {
+            // One box, not two. `no_data` and `note` are written together and
+            // say one thing — these metrics produced nothing, and iOS will not
+            // say whether that is because nothing was recorded or because the
+            // read was not allowed. Splitting them reads as two problems, and
+            // the second half is the half that keeps the first one honest.
+            let text = ["Nothing came back for \(missing).", data["note"] as? String]
+                .compactMap { $0 }
+                .joined(separator: " ")
+            sections.append(.note(AnswerCard.Note(text: text, symbol: "questionmark.circle", tone: .info)))
+        } else if let note = data["note"] as? String {
+            sections.append(.note(AnswerCard.Note(text: note, symbol: "ellipsis", tone: .info)))
+        }
+
+        return AnswerCard(source: source, symbol: symbol, title: title, sections: sections)
+    }
+
     // MARK: - Pieces
+
+    /// A health payload that is one sentence and no data.
+    ///
+    /// Four things arrive on this key and only one of them is a lock.
+    /// `ToolContext.refusal` is Pocketd refusing a network client, which is a
+    /// decision this app made and can draw. The other three are not: Health
+    /// missing from the device, the authorization request itself failing, and —
+    /// the one this whole feature turns on — nothing coming back at all. iOS
+    /// reports a read the user refused and a read with nothing behind it
+    /// identically, so `HealthSummary.ambiguity` names both possibilities in one
+    /// sentence, and a padlock drawn over that sentence would pick one of them
+    /// while the words underneath said it could not be picked. It gets the empty
+    /// state, whose mark means "nothing here" and claims nothing about why.
+    static func healthSentence(
+        _ text: String,
+        title: String,
+        symbol: String,
+        source: String
+    ) -> AnswerCard {
+        if HealthFocus.allCases.contains(where: { HealthSummary.ambiguity(for: $0) == text }) {
+            return .nothing(text, title: title, symbol: symbol, source: source)
+        }
+        if text == ToolContext.refusal {
+            return AnswerCard(source: source, symbol: "lock", title: title, lede: text)
+        }
+        return AnswerCard(source: source, symbol: symbol, title: title, lede: text)
+    }
+
+    /// One reading line, taken apart only as far as it was put together.
+    ///
+    /// `HealthSummary.reading` writes the metric's label, then the formatted
+    /// figure, then `" on "` and the date. Reading those back is a lookup
+    /// against the eight labels `HealthMetric` declares and a search for one
+    /// ASCII literal — not a parse of free text. A wording change there makes
+    /// the split fail rather than succeed wrongly, and a failed split costs the
+    /// card its metric strip and nothing else, which is why the fallbacks below
+    /// keep the whole clause rather than a guess at part of it.
+    static func healthReading(_ line: String) -> (label: String, clause: String?, figure: String?, rest: String?) {
+        // Longest label first: none of the eight is a prefix of another today,
+        // and a ninth that was would otherwise steal the row.
+        let labels = HealthMetric.allCases.map(\.label).sorted { $0.count > $1.count }
+        guard let label = labels.first(where: { line.hasPrefix($0) }) else {
+            return (line, nil, nil, nil)
+        }
+        let clause = String(line.dropFirst(label.count).drop(while: { $0 == ":" || $0 == " " }))
+        guard !clause.isEmpty else { return (label, nil, nil, nil) }
+
+        let parts = split(clause, at: " on ")
+        guard let rest = parts.tail, !parts.head.isEmpty, parts.head.count <= longestFigure else {
+            // No figure to lift: the day-still-in-progress line has no number in
+            // it at all, and anything unexpectedly long is a wording change
+            // rather than a measurement.
+            return (label, clause, nil, nil)
+        }
+        return (label, clause, parts.head, "on " + rest)
+    }
+
+    /// Longer than `13.5 breaths/min`, and far shorter than a sentence.
+    static let longestFigure = 24
+
+    /// A line the tool wrote, cut at a separator the tool wrote.
+    static func split(_ line: String, at separator: String) -> (head: String, tail: String?) {
+        guard let range = line.range(of: separator) else { return (line, nil) }
+        return (String(line[..<range.lowerBound]), String(line[range.upperBound...]))
+    }
 
     /// A payload that is one sentence and no data.
     ///
@@ -662,6 +813,28 @@ public enum AnswerCardBuilders {
         case .tomorrow: "Due tomorrow"
         case .this_week: "Due this week"
         case .all_open: "Open reminders"
+        }
+    }
+
+    static func name(for focus: HealthFocus) -> String {
+        switch focus {
+        case .activity: "Activity"
+        case .heart: "Heart"
+        case .sleep: "Sleep"
+        case .workouts: "Workouts"
+        }
+    }
+
+    /// One glyph per focus rather than one for health. The header mark is the
+    /// card's only claim about what it is, and a heart drawn over a night's
+    /// sleep is the kind of near-miss that makes a reader wonder what else on a
+    /// card about their body is approximate.
+    static func symbol(for focus: HealthFocus) -> String {
+        switch focus {
+        case .activity: "figure.walk"
+        case .heart: "heart"
+        case .sleep: "bed.double"
+        case .workouts: "figure.run"
         }
     }
 }

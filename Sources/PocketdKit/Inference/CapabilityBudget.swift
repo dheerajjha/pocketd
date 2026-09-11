@@ -193,6 +193,33 @@ public struct CapabilityBudget: Sendable, Equatable {
         return tools.reduce(0) { $0 + $1.schemaCharacters } + tools.count + 1
     }
 
+    /// What a prompt must reserve while the live client and the configured set
+    /// disagree, in the same guard tokens `fixedOverheadTokens` takes.
+    ///
+    /// They disagree for as long as it takes one request to rebuild the client,
+    /// which is a window a Settings toggle can open at any time and a model load
+    /// holds open for seconds. Which of the two is the dearer decides which kind
+    /// of wrong a guard sized from one of them is, and the two kinds are not
+    /// comparable. Sized from the configured set while a client carrying more
+    /// schemas is still resident, it under-reserves by the difference and hands
+    /// llama.cpp a batch past the end of the window — an assertion inside the
+    /// library, the process gone, and every connected client's request with it.
+    /// Sized from the resident set while a larger one is configured, it refuses
+    /// a prompt that would have fitted.
+    ///
+    /// `ContextGuard` takes the second every time and says why; this is the same
+    /// choice, made where the two numbers exist.
+    public static func reservedTokens(
+        resident: String,
+        configured: String,
+        templateIsToolNative: Bool
+    ) -> Int {
+        max(
+            ContextGuard.toolOverhead(toolsJSON: resident, templateIsToolNative: templateIsToolNative),
+            ContextGuard.toolOverhead(toolsJSON: configured, templateIsToolNative: templateIsToolNative)
+        )
+    }
+
     /// Ordered worst to best, so a caller can ask for "at least tight" rather
     /// than enumerating the two verdicts that satisfy it.
     ///
@@ -517,6 +544,16 @@ public extension CapabilityBudget {
         public func isCovered(by resident: [String]) -> Bool {
             let held = Set(resident)
             return registered.allSatisfy { held.contains($0.name) }
+        }
+
+        /// One capability's refusal sentence, or `nil` when the window carried
+        /// it.
+        ///
+        /// For a screen that puts each capability behind its own switch, where
+        /// the list `explanation` summarises is split across two rows a user
+        /// reads independently.
+        public func shortfall(for group: CapabilityGroup) -> String? {
+            dropped.first { $0.group == group && $0.reason == .overBudget }?.explanation
         }
 
         /// What Settings shows under the list, or `nil` when everything asked

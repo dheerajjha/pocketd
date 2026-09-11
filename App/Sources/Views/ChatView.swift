@@ -62,16 +62,7 @@ struct ChatView: View {
                                                 .frame(maxWidth: .infinity)
                                         }
                                         bubble(for: message, at: index)
-                                        // Outside the bubble, at the full width
-                                        // of the page. A bubble is sized for a
-                                        // sentence and indented away from the
-                                        // opposite margin; a card is a table,
-                                        // and the 40 points a bubble gives up
-                                        // are 40 points a row of times cannot
-                                        // spare.
-                                        ForEach(Array(message.cards.enumerated()), id: \.offset) { _, card in
-                                            AnswerCardView(card: card)
-                                        }
+                                        cards(for: message, at: index)
                                     }
                                     .id(index)
                                 }
@@ -219,6 +210,34 @@ struct ChatView: View {
             // own gestures. The same copy has to exist in the actions rotor.
             .accessibilityAction(named: "Copy message") { copy(message, at: index) }
             if !isUser { Spacer(minLength: 40) }
+        }
+    }
+
+    /// The cards under one message, at the full width of the page.
+    ///
+    /// Outside the bubble because a bubble is sized for a sentence and indented
+    /// away from the opposite margin; a card is a table, and the 40 points a
+    /// bubble gives up are 40 points a row of times cannot spare.
+    ///
+    /// Carrying the bubble's own copy affordance, because being outside it cost
+    /// them that. The substance of an answer that ran a tool is here — the
+    /// times, the addresses, the figures — and a long press on it did nothing,
+    /// while the only long press that worked was on a visually separate object
+    /// above that says none of it. `copy(_:at:)` already puts both halves on the
+    /// pasteboard; only the gesture was out of reach.
+    @ViewBuilder
+    private func cards(for message: ChatMessage, at index: Int) -> some View {
+        ForEach(Array(message.cards.enumerated()), id: \.offset) { _, card in
+            AnswerCardView(card: card)
+                // Lets a reader lift one row rather than the whole answer,
+                // which is the same thing the bubble's own selection allows.
+                .textSelection(.enabled)
+                .contextMenu {
+                    Button("Copy", systemImage: "doc.on.doc") { copy(message, at: index) }
+                }
+                // The context menu is a long press, which VoiceOver spends on
+                // its own gestures. The same copy has to exist in the rotor.
+                .accessibilityAction(named: "Copy message") { copy(message, at: index) }
         }
     }
 

@@ -223,8 +223,8 @@ public enum HealthSummary {
         // 1096 × 86,400 seconds in any zone that observes daylight saving, and
         // the error compounds — six hours over three years, which moves the
         // first bucket onto the wrong day.
-        let start = calendar.date(byAdding: .day, value: -focus.historyDays, to: today) ?? today
-        let end = calendar.date(byAdding: .day, value: 1, to: today) ?? now
+        let start = HealthArithmetic.startOfDay(today, offsetBy: -focus.historyDays, calendar: calendar)
+        let end = HealthArithmetic.startOfDay(today, offsetBy: 1, calendar: calendar)
         return DateInterval(start: start, end: end)
     }
 
@@ -391,12 +391,17 @@ public enum HealthSummary {
             let superlativeWord = metric.direction == .lowerIsBetter ? "Lowest" : "Highest"
             switch superlative {
             case let .bestSince(day, _):
-                lines.append("\(superlativeWord) \(metric.noun) since \(HealthFormat.monthAndYear(day, locale: locale, timeZone: timeZone, calendar: calendar)).")
-            case let .bestInReach(spanDays):
+                lines.append("\(superlativeWord) \(metric.subjectNoun) since \(HealthFormat.monthAndYear(day, locale: locale, timeZone: timeZone, calendar: calendar)).")
+            case let .bestInReach(spanDays, dayCount):
                 // Not "ever". The series reaches back this far and no further,
                 // and the difference between those two claims is the difference
                 // between a true statement and a flattering one.
-                lines.append("\(superlativeWord) \(metric.noun) in the \(spanDays) days of \(metric.noun) data on this iPhone.")
+                //
+                // The count and the reach are both named because they are not
+                // the same number and the sentence used to quote the reach as
+                // though it were the count — "in the 40 days of step data on
+                // this iPhone" over two readings a month apart.
+                lines.append("\(superlativeWord) \(metric.subjectNoun) in all \(dayCount) days of \(metric.noun) data on this iPhone, which reach back \(spanDays) days.")
             }
         }
 

@@ -148,6 +148,38 @@ enum CapabilityFixture {
     /// every number the rest of this file measures.
     static let runningTimers = tool("get_running_timers", .timers, 0)
 
+    /// A tool no window this app offers can carry, and not an invented shape.
+    ///
+    /// One `enum` value per time zone is a perfectly ordinary way to write a
+    /// perfectly ordinary tool — it is how every other argument in this file is
+    /// written, with a value list the model must choose from — and at this many
+    /// zones the schema alone outweighs the largest context the Settings stepper
+    /// can reach. That is the only way to reach the branch of
+    /// `Dropped.explanation` that has no context to name, and the product's own
+    /// tools, at three hundred-odd characters each, cannot get near it.
+    ///
+    /// Outside `inventory` for the same reason `runningTimers` is: it would
+    /// move every pinned number in this file.
+    /// Ranked last, so the stop rule reaches it having already registered what
+    /// came before: a schema this size at the head of the queue refuses
+    /// everything behind it and there is nothing left to observe.
+    static let everyTimeZone = CapabilityTool(
+        name: "get_time_in_zone",
+        group: .timers,
+        priority: 99,
+        schema: schema(
+            name: "get_time_in_zone",
+            description: "Tell the user what time it is in a time zone.",
+            argument: "zone",
+            argumentDescription: "Which time zone to read the clock in.",
+            // Generated rather than `TimeZone.knownTimeZoneIdentifiers`, whose
+            // contents and therefore whose length move with whatever ICU the
+            // host happens to ship — and every number below is a character
+            // count.
+            values: (0..<4000).map { "zone_\($0)" }
+        )
+    )
+
     /// The array as the library serialises it: the tools' own objects, comma
     /// separated, in brackets, with no whitespace anywhere.
     static func serialised(_ tools: [CapabilityTool]) -> String {
@@ -427,6 +459,95 @@ struct CapabilityBudgetTests {
         let six = Array(CapabilityFixture.inventory.prefix(6))
         #expect(Self.native.shortfall(of: six) == 1349 - 1344)
         #expect(Self.native.shortfall(of: Array(CapabilityFixture.inventory.prefix(5))) == 0)
+    }
+
+    @Test("a capability nothing can carry says so instead of naming a context")
+    func noWindowIsBigEnough() throws {
+        // The third branch of `Dropped.explanation`, and the one the product's
+        // own tools cannot reach: every refusal they produce has a context tier
+        // that would fix it, so the sentence for "nothing here would" never ran
+        // and could be replaced with anything at all without a test noticing.
+        #expect(Self.native.smallestFittingContext(for: [CapabilityFixture.everyTimeZone]) == nil)
+        #expect(Self.plain.smallestFittingContext(for: [CapabilityFixture.everyTimeZone]) == nil)
+        // Not a near miss. The largest window the Settings stepper reaches
+        // allows 10,901 tokens of schema and this one tool wants half again as
+        // much, so the branch stays reachable even if the ceiling moves.
+        let largest = CapabilityBudget(contextTokens: 32_768, templateIsToolNative: true)
+        #expect(largest.ceilingTokens == 10_901)
+        #expect(largest.cost(of: [CapabilityFixture.everyTimeZone]) > largest.ceilingTokens)
+
+        let plan = Self.native.admit([CapabilityFixture.calendar, CapabilityFixture.everyTimeZone])
+        #expect(plan.registered.map(\.name) == [PersonalDataToolNames.calendar])
+
+        let refused = try #require(plan.dropped.first { $0.group == .timers })
+        #expect(refused.reason == .overBudget)
+        #expect(refused.needsABiggerContext)
+        // The claim the sentence has to make: there is no window to name.
+        // Quoting one — the two covered branches both do — would send someone
+        // to a stepper that cannot fix it.
+        #expect(refused.contextTokens == nil)
+        #expect(refused.explanation.contains("any context this app offers"))
+        #expect(refused.explanation.contains("\(refused.additionalTokens) more tokens"))
+        #expect(refused.explanation.contains("-token context") == false)
+    }
+
+    @Test("one capability's refusal can be read on its own")
+    func shortfallPerGroup() {
+        // Settings puts each capability behind its own switch, so the row under
+        // one of them must be able to ask about that one alone rather than
+        // parsing the summary sentence for its name.
+        let plan = Self.native.admit(CapabilityFixture.inventory)
+
+        #expect(plan.shortfall(for: .alarms)?.contains("Alarms") == true)
+        #expect(plan.shortfall(for: .timers)?.contains("Timers") == true)
+        #expect(plan.shortfall(for: .calendar) == nil)
+        #expect(plan.shortfall(for: .health) == nil)
+
+        // A routing exclusion is not a shortfall. Nothing refused it, the
+        // question simply did not ask, and a warning row there would report a
+        // saving as a fault.
+        let routed = Self.native.admit(CapabilityFixture.inventory, routedTo: [.health])
+        #expect(routed.dropped.contains { $0.group == .calendar })
+        #expect(routed.shortfall(for: .calendar) == nil)
+    }
+
+    @Test("a prompt is charged the dearer of the resident schemas and the next")
+    func reservationTakesTheDearer() {
+        // The two disagree for exactly as long as it takes one request to
+        // rebuild the client, and a load holds that window open for seconds.
+        let two = CapabilityFixture.serialised([CapabilityFixture.calendar, CapabilityFixture.reminders])
+        let one = CapabilityFixture.serialised([CapabilityFixture.calendar])
+
+        // A client carrying two schemas while one is configured. Charging the
+        // configured set here under-reserves by 222 tokens of schema the
+        // library will inject anyway — which is llama.cpp asserting on an
+        // oversized batch and taking every connected client down with it.
+        #expect(CapabilityBudget.reservedTokens(
+            resident: two, configured: one, templateIsToolNative: true
+        ) == 537)
+        // The same pair the other way round: a larger set configured against a
+        // client that has not been rebuilt yet. Over-reserving refuses a prompt
+        // that would have fitted, which is the survivable half of the trade.
+        #expect(CapabilityBudget.reservedTokens(
+            resident: one, configured: two, templateIsToolNative: true
+        ) == 537)
+        #expect(CapabilityBudget.reservedTokens(
+            resident: one, configured: one, templateIsToolNative: true
+        ) == 315)
+
+        // The emptied-schema case this exists for: a toggle that landed inside
+        // a load used to leave the engine believing a client carrying both
+        // schemas carried none, and reserving nothing for them.
+        #expect(CapabilityBudget.reservedTokens(
+            resident: two, configured: "", templateIsToolNative: true
+        ) == 537)
+        #expect(CapabilityBudget.reservedTokens(
+            resident: "", configured: "", templateIsToolNative: true
+        ) == 0)
+        // Whatever the template does, it does to both sides.
+        #expect(CapabilityBudget.reservedTokens(
+            resident: two, configured: "", templateIsToolNative: false
+        ) == Self.plain.cost(of: [CapabilityFixture.calendar, CapabilityFixture.reminders]))
     }
 
     @Test("a client already carrying the plan does not need rebuilding")

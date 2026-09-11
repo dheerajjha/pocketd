@@ -2,18 +2,5 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- HealthKit. The access array is deliberately empty: that is the base
-	     capability, and clinical health records are a separate, far broader
-	     grant this app has no use for. No background-delivery key either —
-	     nothing here observes, and background queries do not run in the
-	     Simulator regardless.
-
-	     This is the one entitlement that can break a device build on its own:
-	     automatic signing fails unless HealthKit is also enabled on the App ID
-	     in the developer portal. Simulator builds are unaffected. -->
-	<key>com.apple.developer.healthkit</key>
-	<true/>
-	<key>com.apple.developer.healthkit.access</key>
-	<array/>
 </dict>
 </plist>

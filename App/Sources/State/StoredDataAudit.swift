@@ -33,6 +33,15 @@ final class StoredDataAudit {
     /// racing it. See `refresh`.
     private var refreshTask: Task<Void, Never>?
 
+    /// Transfers `ModelStore` knew about at the last walk or delete.
+    ///
+    /// Cached because the footer and every row's enabled state are computed
+    /// synchronously inside `body`, and the authoritative set lives behind an
+    /// actor. It is only ever unioned with the app's own live map, never used
+    /// in place of it, so a stale entry can only make this screen refuse to
+    /// delete something — the direction that cannot destroy anything.
+    private var storeTransfers: Set<String> = []
+
     /// The app's own directory on this device. Everything below is inside it.
     let container = URL(fileURLWithPath: NSHomeDirectory())
 
@@ -159,8 +168,10 @@ final class StoredDataAudit {
     /// Every outbound connection this app makes, from a grep of the whole
     /// repository for `URLSession` and `URLRequest`. Two of them, both to
     /// Hugging Face, both about model files. Inference never calls out — the
-    /// weights are a file on this phone — and the HTTP server only ever
-    /// answers connections that came to it.
+    /// weights are a file on this phone. The HTTP server does: `GET
+    /// /api/search`, `POST /api/pull` and `POST /api/models/add` all reach
+    /// Hugging Face because a network peer asked them to, which is why both
+    /// rows below say "or when a paired device asks".
     ///
     /// Hardcoded rather than observed, and that is the weakness of this
     /// section: it is a claim about the source, checked when it was written.
@@ -182,7 +193,7 @@ final class StoredDataAudit {
     /// True of what leaves, and true of the things people assume leave.
     let assurances: [String] = [
         "Inference is local. Nothing you type in Chat, and nothing a paired device sends, is transmitted anywhere — it goes to a file of weights on this phone and comes back.",
-        "The HTTP server only answers. It accepts connections from your network and never opens one of its own.",
+        "The HTTP server never calls out on its own initiative. The only requests it makes are the two above, and only when a paired device asks it to search Hugging Face or to pull a model.",
         "There is no analytics, no crash reporting and no telemetry of any kind in this app. There is no server to receive it, because there is no account.",
     ]
 
@@ -234,17 +245,42 @@ final class StoredDataAudit {
             )
         }.value
 
+        // The manifest rather than `AppModel.installed`, and the store rather
+        // than `AppModel.downloads`. Both of those are snapshots of what this
+        // app's own UI did; a model a paired device pulled over the HTTP API is
+        // in neither, which made this screen call it a stray file, offer a live
+        // Delete for it, and — while the pull was still running — sweep the
+        // bytes URLSession was writing.
+        let installedNow = await model.manifestInstalled()
+        storeTransfers = await model.transfersInFlight()
+
         survey = walk.survey
-        models = Self.modelRows(installed: model.installed, files: walk.modelFiles, loaded: model.loadedModelID)
+        models = Self.modelRows(installed: installedNow, files: walk.modelFiles, loaded: model.loadedModelID)
         orphanedModelFiles = Self.orphans(
             files: walk.modelFiles,
-            knownIDs: Set(model.installed.map(\.id)),
-            downloadingIDs: Set(model.downloads.keys),
+            knownIDs: Set(installedNow.map(\.id)),
+            downloadingIDs: downloadingIDs(model),
             directory: modelsDirectory
         )
         conversations = Self.conversationSummary(files: walk.conversationFiles, readable: model.history)
-        defaults = Self.defaultsRows(apiKey: model.configuration.apiKey)
+        defaults = Self.defaultsRows()
         permissions = Self.permissionRows()
+    }
+
+    /// Every model id with a transfer running, from both doors.
+    ///
+    /// The app's live map is unioned in rather than replaced by the store's set
+    /// because it is written the instant a tap lands, before the store's task
+    /// has begun. Neither alone is complete.
+    func downloadingIDs(_ model: AppModel) -> Set<String> {
+        storeTransfers.union(model.downloads.keys)
+    }
+
+    /// The same question, asked of the store again, for a caller about to
+    /// delete something on the strength of the answer.
+    private func liveDownloadingIDs(_ model: AppModel) async -> Set<String> {
+        storeTransfers = await model.transfersInFlight()
+        return downloadingIDs(model)
     }
 
     private struct Walk: Sendable {
@@ -331,7 +367,7 @@ final class StoredDataAudit {
     /// `AppModel`; restating them here would mean a setting added tomorrow is
     /// stored, is real, and is invisible on the one screen that promises to
     /// show everything.
-    private static func defaultsRows(apiKey: String) -> [DefaultsRow] {
+    private static func defaultsRows() -> [DefaultsRow] {
         guard let bundleID = Bundle.main.bundleIdentifier,
               let domain = UserDefaults.standard.persistentDomain(forName: bundleID)
         else { return [] }
@@ -342,38 +378,12 @@ final class StoredDataAudit {
                 || key.hasPrefix("AK") || key.hasPrefix("WebKit") || key.hasPrefix("METAL")
             return DefaultsRow(
                 key: key,
-                summary: summarise(value, forKey: key, apiKey: apiKey),
+                summary: storedValueSummary(value, forKey: key),
                 isSystem: isSystem
             )
         }
         // This app's own settings first: they are the ones the promise is about.
         .sorted { ($0.isSystem ? 1 : 0, $0.key) < ($1.isSystem ? 1 : 0, $1.key) }
-    }
-
-    private static func summarise(_ value: Any?, forKey key: String, apiKey: String) -> String {
-        // `case let flag as Bool` cannot lead here. NSNumber's value-preserving
-        // bridge makes an integer 1 and a double 1.0 both succeed at `as? Bool`,
-        // so a future `threads: 1` would render as "On" on the one screen that
-        // promises to show every key as it is stored.
-        if let value, isStoredAsBoolean(value) {
-            return (value as? Bool) == true ? "On" : "Off"
-        }
-        // A `switch` expression, so every arm still has to produce a string and
-        // none of them can fall through to nothing.
-        return switch value {
-        case let number as NSNumber: number.stringValue
-        case let text as String: text.count > 60 ? String(text.prefix(60)) + "…" : text
-        case let data as Data:
-            // The one entry that holds a secret. Named rather than dumped: a
-            // hex blob would be honest and useless, and printing the JSON
-            // would put a working credential on screen.
-            key.hasSuffix("configuration")
-                ? "Port, binding, sampling defaults and the API key — \(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file))"
-                : "\(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)) of data"
-        case let list as [Any]: "\(list.count) items"
-        case .none: "Empty"
-        default: String(describing: type(of: value))
-        }
     }
 
     /// Every permission this app declares, taken from its own Info.plist.
@@ -474,38 +484,44 @@ final class StoredDataAudit {
         // Cancels the debounced save first. Without it a write scheduled
         // before the delete lands after it and puts one conversation back.
         await model.flushConversation()
-        for id in model.history.map(\.id) {
-            await model.deleteConversation(id)
-        }
+        // The sweep first, and the history loop after it. Every file, not only
+        // the transcripts: `ConversationStore.save` writes atomically, which
+        // stages a temp file beside the real one, and a process killed
+        // mid-write leaves that remnant behind — counted in the size this
+        // screen quotes and skipped by a loop over the readable history.
+        //
+        // Order is the whole fix. Running the history loop first removed every
+        // readable transcript, so the listing taken afterwards found only what
+        // that loop had missed and "freed" came out as zero for a delete that
+        // freed megabytes.
         var freed: Int64 = 0
         if let directory = try? ConversationStore.defaultDirectory() {
-            // Every file, not only the transcripts. `ConversationStore.save`
-            // writes atomically, which stages a temp file beside the real one,
-            // and a process killed mid-write leaves that remnant behind. It was
-            // counted in the size this screen quotes and skipped by this loop,
-            // so Conversations never fell to zero and nothing explained why.
-            for file in StoredFile.listing(of: directory) {
-                freed += file.byteCount
-                try? FileManager.default.removeItem(at: directory.appendingPathComponent(file.name))
-            }
+            freed = DirectorySweep.emptyOfFiles(at: directory)
+        }
+        // Still needed with the files already gone: this is what clears the
+        // transcript on screen and the in-memory history behind it.
+        for id in model.history.map(\.id) {
+            await model.deleteConversation(id)
         }
         await model.loadHistory()
         await finish(model, freed: freed)
     }
 
-    /// Throws away the resume blobs and the temporary files they point at.
+    /// Throws away the resume blobs and the part-files they point at.
     ///
-    /// `ModelStore.discardPartial` removes the blob and says the system
-    /// reclaims the bytes it references. It does not, promptly: a container
-    /// pulled off a simulator had a 178 MB `CFNetworkDownload` file in `tmp`
-    /// days after the download was abandoned. iOS will take it back when the
-    /// disk is under pressure, which is not the same as now, and is not
-    /// something a person can see or trigger.
+    /// `ModelStore.discardPartial` removes the blob and leaves the bytes.
+    /// `FileDownloader` uses a default session, so those bytes are a
+    /// `CFNetworkDownload` file in this app's own `tmp` — a container pulled
+    /// off a simulator still held a 178 MB one days after the download was
+    /// abandoned. iOS empties `tmp` when the disk is under pressure, which is
+    /// not the same as now and is not something a person can see or trigger.
     func deletePartialDownloads(_ model: AppModel) async {
         // A download in flight owns one of these files. Deleting it would kill
         // a transfer the user is watching, from a screen that has nothing to
-        // do with downloads.
-        guard let survey, model.downloads.isEmpty else { return }
+        // do with downloads — and the transfer need not be one this phone
+        // started, which is why the store is asked rather than the app.
+        let downloading = await liveDownloadingIDs(model)
+        guard let survey, downloading.isEmpty else { return }
         var freed: Int64 = 0
         for file in survey.area(.partialDownloads).files {
             let url = container.appendingPathComponent(file.path)
@@ -523,7 +539,8 @@ final class StoredDataAudit {
     /// this tap — at which point the "orphan" is the finished half of a
     /// multi-gigabyte transfer in progress.
     func deleteOrphan(_ orphan: OrphanRow, model: AppModel) async {
-        guard orphan.isStillAbandoned(downloadingIDs: Set(model.downloads.keys)) else {
+        let downloading = await liveDownloadingIDs(model)
+        guard orphan.isStillAbandoned(downloadingIDs: downloading) else {
             await refresh(model)
             return
         }
@@ -564,11 +581,11 @@ final class StoredDataAudit {
         // projector is still arriving, and this loop used to remove it without
         // asking — from the button labelled "free up space", with the download
         // still running.
-        let downloading = Set(model.downloads.keys)
+        let downloading = await liveDownloadingIDs(model)
         for orphan in orphanedModelFiles where orphan.isStillAbandoned(downloadingIDs: downloading) {
             try? FileManager.default.removeItem(at: orphan.url)
         }
-        if model.downloads.isEmpty, let partial = survey?.area(.partialDownloads) {
+        if downloading.isEmpty, let partial = survey?.area(.partialDownloads) {
             for file in partial.files {
                 try? FileManager.default.removeItem(at: container.appendingPathComponent(file.path))
             }
@@ -577,6 +594,25 @@ final class StoredDataAudit {
         for cookie in HTTPCookieStorage.shared.cookies ?? [] {
             HTTPCookieStorage.shared.deleteCookie(cookie)
         }
+        await refresh(model)
+        lastFreed = Self.formatted(max(0, before - (survey?.totalBytes ?? 0)))
+    }
+
+    /// Deletes one model and says what that freed.
+    ///
+    /// A wrapper rather than two lines at the call site because this was the
+    /// only delete on this screen that never wrote `lastFreed`: the green line
+    /// from whatever ran before it stayed on screen and read as the result of
+    /// this delete, directly under a total that had just dropped by a
+    /// different number.
+    ///
+    /// Measured as the container's own difference, like the two other deletes
+    /// that cannot simply sum what they removed. The row's bytes are not the
+    /// whole change: `ModelStore.delete` also takes the resume blob beside the
+    /// weights and rewrites the manifest.
+    func deleteModel(_ record: ModelRecord, model: AppModel) async {
+        let before = survey?.totalBytes ?? 0
+        await model.delete(record)
         await refresh(model)
         lastFreed = Self.formatted(max(0, before - (survey?.totalBytes ?? 0)))
     }
@@ -594,8 +630,10 @@ final class StoredDataAudit {
         lastFreed = Self.formatted(freed)
     }
 
+    /// The same formatter the sentences in `DeletionNarrative` use, so the
+    /// figure in a row and the figure in the footer beneath it cannot disagree.
     static func formatted(_ bytes: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        formattedByteCount(bytes)
     }
 
     // MARK: - Totals
@@ -606,7 +644,7 @@ final class StoredDataAudit {
     /// that is the whole point: the footer and the delete read the same value,
     /// so the dialog cannot quote bytes the button then skips.
     func deletionPlan(_ model: AppModel) -> DeletionPlan {
-        let downloading = Set(model.downloads.keys)
+        let downloading = downloadingIDs(model)
         return DeletionPlan.deleteEverything(
             // The model rows, not the models directory: the directory also
             // holds the manifest, which is rewritten rather than removed, and
@@ -619,7 +657,7 @@ final class StoredDataAudit {
             conversationBytes: conversations.byteCount,
             partialDownloadBytes: survey?.area(.partialDownloads).tally.byteCount ?? 0,
             networkCacheBytes: survey?.area(.networkCache).tally.byteCount ?? 0,
-            downloadInFlight: !model.downloads.isEmpty
+            downloadInFlight: !downloading.isEmpty
         )
     }
 

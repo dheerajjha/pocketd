@@ -393,6 +393,26 @@ final class AppModel {
         installed.contains { $0.id == model.id }
     }
 
+    /// What the manifest says is installed, read now rather than remembered.
+    ///
+    /// `installed` is a snapshot, written at launch and after this app's own
+    /// downloads and deletes. A model a paired device pulled over the HTTP API
+    /// lands in the manifest and is served by `/v1/models` without ever
+    /// touching it, so anything that decides what a file on disk *is* has to
+    /// ask the manifest or it will call that model's weights a stray.
+    func manifestInstalled() async -> [ModelRecord] {
+        await store.installed()
+    }
+
+    /// Every model with a transfer running right now, from either door.
+    ///
+    /// `downloads` holds only what this app's own UI started. `ModelStore` sees
+    /// those and the server's pulls, which is why the authoritative answer
+    /// comes from there rather than from here.
+    func transfersInFlight() async -> Set<String> {
+        await store.downloadsInFlight()
+    }
+
     func download(_ model: ModelRecord, allowingOversized: Bool = false) {
         guard downloadTasks[model.id] == nil else { return }
         downloadErrors[model.id] = nil
@@ -613,15 +633,34 @@ final class AppModel {
         guard id != currentConversationID else { return }
         await flushConversation()
         guard let found = history.first(where: { $0.id == id }) else { return }
+        // Stopped for the same reason `loadModel` and `offloadModel` stop: the
+        // transcript the reply is being written into is about to be replaced,
+        // and a generation that outlived the swap has nowhere honest to put the
+        // rest of its answer. Placed after the guard above so a conversation
+        // that could not be opened costs nobody a reply, and before the swap so
+        // the save it schedules still describes the transcript being left.
+        let interrupted = isGenerating
+        if interrupted { stopGenerating() }
         conversation = found.messages
         draft = found.draft
         currentConversationID = found.id
         conversationStartedAt = found.createdAt
-        generationError = nil
+        // Said on the screen the user ends up on, because that is the only
+        // screen there is to say it on — the partial reply is back in the
+        // conversation they left, where nothing would explain why it stops.
+        generationError = interrupted ? "The reply in the conversation you left was stopped." : nil
         modelSwitchNotice = nil
     }
 
     func deleteConversation(_ id: UUID) async {
+        // Before the file goes, so the reply cannot be writing into a
+        // transcript whose only copy is being deleted underneath it — and the
+        // pending write goes with it, or the debounced save lands 600ms after
+        // the delete and puts the whole conversation back.
+        if id == currentConversationID {
+            if isGenerating { stopGenerating() }
+            saveTask?.cancel()
+        }
         await conversations.delete(id)
         history = await conversations.all()
         // Deleting what you are looking at has to leave you somewhere, and an
@@ -723,6 +762,53 @@ final class AppModel {
     /// that is on, a calendar that is never read, and no way to find out why.
     private(set) var personalDataToolGate: ToolGate.Decision = .noModelLoaded
 
+    /// What the budget did with what the gate allowed.
+    ///
+    /// The second half of the same answer, and it was the half nobody could
+    /// see. The gate decides whether this model gets tools at all; the context
+    /// window then decides how many of them fit, and at a 1,024-token limit it
+    /// quietly keeps the calendar and refuses reminders — while the only
+    /// sentence on the screen was the gate's, which says both are registered.
+    /// The plan holds the honest version, priced, and `CapabilityNotice` is
+    /// where the two are stopped from contradicting each other.
+    private(set) var capabilityPlan: CapabilityBudget.Plan?
+
+    /// The display name of whatever is resident, for the sentences under the
+    /// capability switches. Falls back to the id: a model added through search
+    /// has no curated name, and naming it badly is better than not naming it.
+    var loadedModelName: String {
+        guard let id = loadedModelID else { return "No model" }
+        return catalog.first { $0.id == id }?.displayName ?? id
+    }
+
+    /// The one thing Settings prints under the two switches.
+    ///
+    /// One sentence and not two, because two deciders can answer this question
+    /// and only the last one to run is the reason. See `CapabilityNotice`.
+    var capabilityNotice: CapabilityNotice? {
+        CapabilityNotice.decide(
+            gate: personalDataToolGate,
+            plan: capabilityPlan,
+            modelName: loadedModelName
+        )
+    }
+
+    /// The health switch's own row, for the two things `capabilityNotice` is
+    /// not in a position to say.
+    ///
+    /// Availability comes first because it outranks everything above it: on a
+    /// device with no Health store the tool is never registered at all, so
+    /// there is no budget verdict to report and the notice would be describing
+    /// the calendar pair beside a switch about sleep. The refusal below it is
+    /// only reached when the notice is absent — with the calendar switch on it
+    /// is already printing health's line, and printing it twice reads as two
+    /// separate problems.
+    var healthCapabilityNote: String? {
+        if let unavailable = healthAvailability.explanation { return unavailable }
+        guard !personalDataToolsEnabled else { return nil }
+        return capabilityPlan?.shortfall(for: .health)
+    }
+
     /// Health is a separate switch from the calendar, deliberately.
     ///
     /// It is a separate grant, a separate iOS sheet, and its own schema cost on
@@ -739,10 +825,19 @@ final class AppModel {
     /// What iOS said when the switch was flipped — never a claim about whether
     /// a read was granted. HealthKit does not report that, and any UI implying
     /// otherwise is a lie the app cannot substantiate.
+    ///
+    /// Shown under the switch through `HealthAvailability.explanation`, because
+    /// the cases that are not `.available` are the ones where the switch is on
+    /// and nothing will ever be read: `registrations` skips the tool outright on
+    /// a device with no Health store, so without a sentence here the user is
+    /// left with a switch that is on, a heart rate that is never read, and no
+    /// way to find out why — the exact failure `personalDataToolGate` exists to
+    /// end, one switch further down.
     private(set) var healthAvailability: HealthAvailability = .available
 
     private func refreshToolGate() async {
         personalDataToolGate = await engine.toolGate
+        capabilityPlan = await engine.capabilityPlan
     }
 
     /// What iOS says about each entity right now, for Settings to show.
@@ -827,6 +922,11 @@ final class AppModel {
             Self.registrations(personalData: personalDataToolsEnabled, health: healthToolsEnabled),
             exempt: Self.selfTestTools()
         )
+        // The switch is what changed what the budget was asked to carry, so it
+        // is also the moment the answer changes. Without this the refusal only
+        // appeared after the next model load, which is to say on the screen the
+        // user was already looking at, several minutes late.
+        await refreshToolGate()
     }
 
     /// Re-reads what iOS thinks, without prompting.
@@ -839,6 +939,15 @@ final class AppModel {
         // row shows to explain an inert switch, and the trip to iOS Settings is
         // not the only thing that can have happened while this screen was away.
         Task { await refreshToolGate() }
+        // A device with no Health store at all is a fact about the device, not
+        // an answer iOS gave: it is true at launch, before anything has asked
+        // for anything, and a switch left on from a previous install would
+        // otherwise sit here explaining nothing until the user toggled it. Only
+        // ever set in the direction the read supports — `.available` here would
+        // overwrite a `.requestFailed` reason with a shrug.
+        if healthToolsEnabled, !HealthAccess.isAvailable {
+            healthAvailability = .noHealthData
+        }
         guard personalDataToolsEnabled else { return }
         for entity in PersonalDataEntity.allCases {
             personalDataAuthorization[entity] = EventAccess.authorization(for: entity)
@@ -1126,6 +1235,11 @@ final class AppModel {
         conversation.append(.assistant(""))
         isGenerating = true
 
+        // What this reply is being written into, stamped before a single token
+        // exists, because from here on every event arrives across an actor hop
+        // that a tap on History can slip between. See `GenerationTarget`.
+        let target = GenerationTarget(conversation: currentConversationID, slot: conversation.count - 1)
+
         var messages: [ChatMessage] = []
         if !systemPrompt.isEmpty { messages.append(.system(systemPrompt)) }
         messages.append(contentsOf: conversation.dropLast())
@@ -1162,18 +1276,16 @@ final class AppModel {
                     switch event {
                     case .token(let chunk):
                         await MainActor.run {
-                            if !self.conversation.isEmpty {
-                                self.conversation[self.conversation.count - 1].content += chunk
-                            }
+                            guard target.canWrite(to: self.currentConversationID, messages: self.conversation) else { return }
+                            self.conversation[target.slot].content += chunk
                         }
                     case .answerCard(let card):
                         // The tool's own output, not the model's account of it.
                         // It arrives before the narration and is what the reader
                         // should believe if the two ever disagree.
                         await MainActor.run {
-                            if !self.conversation.isEmpty {
-                                self.conversation[self.conversation.count - 1].cards.append(card)
-                            }
+                            guard target.canWrite(to: self.currentConversationID, messages: self.conversation) else { return }
+                            self.conversation[target.slot].cards.append(card)
                         }
                     case .toolCallStarted, .finished:
                         break
@@ -1186,13 +1298,18 @@ final class AppModel {
                     // replayed it as something the model had said — so it
                     // would then explain its own transport failure back to
                     // the user as though it were a reply.
+                    guard self.currentConversationID == target.conversation else { return }
                     self.generationError = (error as? LocalizedError)?.errorDescription
                         ?? "The reply could not be completed."
                 }
             }
             await MainActor.run {
                 self.isGenerating = false
-                self.scheduleConversationSave()
+                // The transcript this reply belongs to, or nothing at all.
+                // Whatever is on screen instead was saved on the way out of
+                // the one being left, and writing it again here is how a
+                // conversation acquires the tail of another one's answer.
+                if self.currentConversationID == target.conversation { self.scheduleConversationSave() }
             }
         }
     }

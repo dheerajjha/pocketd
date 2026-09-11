@@ -26,8 +26,11 @@ public struct OrphanedModelFile: Sendable, Equatable, Identifiable {
 ///
 /// Two states have to be excluded, and they are not the same state:
 ///
-/// - **In flight.** Known only from the app's live download map, which is why
-///   the ids are a parameter and not something this file can work out.
+/// - **In flight.** Known only to whatever is holding the transfer, which is
+///   why the ids are a parameter and not something this file can work out.
+///   The caller has to source them from `ModelStore`, the one place both doors
+///   go through: the app's own download map never hears about a pull a paired
+///   device started over `POST /api/pull`.
 /// - **Paused, or interrupted by a force-quit.** The live map is gone, but a
 ///   resume blob is sitting in the directory naming the id. `ModelStore` keeps
 ///   that blob deliberately so the next attempt resumes; deleting the weights
@@ -190,5 +193,102 @@ public struct DeletionPlan: Sendable, Equatable {
             ),
             Entry(name: EntryName.networkCache, byteCount: networkCacheBytes),
         ])
+    }
+}
+
+
+/// Empties a directory and reports what that actually freed.
+///
+/// Measured across the removals rather than after them. `deleteAllConversations`
+/// used to delete every readable transcript and only then list the directory to
+/// compute the figure, so the number it reported was whatever the first pass
+/// missed — normally nothing. Deleting 1.2 MB of transcripts rendered "Zero KB
+/// freed." on the one line whose stated job is to prove the button was not
+/// decorative.
+public enum DirectorySweep {
+    @discardableResult
+    public static func emptyOfFiles(at directory: URL, fileManager: FileManager = .default) -> Int64 {
+        func size() -> Int64 {
+            StoredFile.listing(of: directory, fileManager: fileManager).reduce(0) { $0 + $1.byteCount }
+        }
+        let before = size()
+        for file in StoredFile.listing(of: directory, fileManager: fileManager) {
+            try? fileManager.removeItem(at: directory.appendingPathComponent(file.name))
+        }
+        // The difference rather than the sum of what was attempted: a file the
+        // app is refused permission to remove has not been freed, and saying it
+        // was is the same lie in the other direction.
+        return max(0, before - size())
+    }
+}
+
+/// Every sentence the "delete everything" control says about itself.
+///
+/// Built here for the reason `DeletionPlan` is: the footer and the confirmation
+/// dialog are the same string, that string is the promise, and a promise
+/// assembled inline in a `body` is one nobody can test. The sentence that made
+/// this worth extracting asserted "nothing inside this app can" remove the
+/// preferences file — three lines under a button that rewrites it, and beside a
+/// section listing every key `UserDefaults.removePersistentDomain` would clear.
+/// Only `.systemManaged` kinds may be given that sentence, which is what
+/// `Disposal.isSystemOwned` is for.
+public enum DeletionNarrative {
+    public static func sentences(
+        plan: DeletionPlan,
+        measured: Bool,
+        systemOwnedTitles: [String],
+        preferencesBytes: Int64,
+        unnamedTitles: [String],
+        unnamedBytes: Int64
+    ) -> [String] {
+        var sentences: [String] = []
+
+        if !measured {
+            // "There is nothing here left to delete" is what an unmeasured
+            // screen would otherwise assert, in a destructive footer, before it
+            // has looked at the disk.
+            sentences.append("Still counting what is here.")
+        } else if plan.included.isEmpty {
+            sentences.append("There is nothing here left for this screen to delete.")
+        } else {
+            sentences.append("Removes \(formattedByteCount(plan.byteCount)): \(joined(plan.included.map(\.name))).")
+        }
+        for entry in plan.skipped {
+            guard let reason = entry.skippedBecause else { continue }
+            sentences.append("It leaves \(entry.name) — \(formattedByteCount(entry.byteCount)) — because \(reason).")
+        }
+        if plan.included.contains(where: { $0.name == DeletionPlan.EntryName.networkCache }) {
+            // The "freed" line afterwards is measured from the container, so it
+            // will fall short of the number above by whatever iOS has not
+            // released yet. Better said here than left as an unexplained gap.
+            sentences.append("iOS owns the cache files themselves, so the last of that number can take a while to come back.")
+        }
+        sentences.append("The API key is left alone, so devices you have already paired keep working — replace it above if that is what you want.")
+
+        if !systemOwnedTitles.isEmpty {
+            sentences.append("It does not touch \(joined(systemOwnedTitles)) — nothing inside this app can, and deleting the app is the only thing that removes them.")
+        }
+        if preferencesBytes > 0, let limitation = StoredDataKind.preferences.disposal.limitation {
+            // Its own sentence, from its own disposal. Appending it to the one
+            // above put a file this app writes on every launch into a claim
+            // reserved for bytes iOS owns.
+            sentences.append("It leaves \(StoredDataKind.preferences.title) — \(formattedByteCount(preferencesBytes)). \(limitation)")
+        }
+        if !unnamedTitles.isEmpty {
+            // Deliberately not folded into the system-owned sentence. These
+            // bytes are in this app's own folder and it could remove them; it
+            // will not, because it cannot say what they are, and that is a
+            // different claim from "nothing inside this app can".
+            sentences.append("It also leaves \(joined(unnamedTitles)) — \(formattedByteCount(unnamedBytes)) this screen has no name for and so will not delete.")
+        }
+        return sentences
+    }
+
+    /// "a, b and c", because a footer reading "a, b, c" looks truncated on the
+    /// one screen whose subject is completeness.
+    static func joined(_ items: [String]) -> String {
+        guard let last = items.last else { return "" }
+        guard items.count > 1 else { return last }
+        return items.dropLast().joined(separator: ", ") + " and " + last
     }
 }

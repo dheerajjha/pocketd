@@ -11,6 +11,15 @@ import Testing
 /// person reading it.
 private enum Fixture {
     static let london = TimeZone(identifier: "Europe/London")!
+    /// Chile moves to summer time at *midnight*, so 7 September 2025 has no
+    /// 00:00 at all and `startOfDay` for it is 01:00.
+    ///
+    /// Every other daylight-saving test in this file uses London, which shifts
+    /// at 01:00 and therefore always has a midnight — which is precisely why a
+    /// day-stepping bug is invisible to all of them. Santiago, Havana, Beirut,
+    /// São Paulo and Tehran all shift at midnight; roughly 35 million people
+    /// live in one of them.
+    static let santiago = TimeZone(identifier: "America/Santiago")!
     static let utc = TimeZone(identifier: "UTC")!
     static let posix = Locale(identifier: "en_US_POSIX")
 
@@ -311,14 +320,26 @@ struct HealthSleepTests {
 
     @Test("the cap falls exactly on a day, and a minute past it is gone")
     func theCapIsAWholeDay() {
+        // Spelled out in seconds rather than read back from the constant. Phrased
+        // as `total(seconds: maximumNightSeconds) == maximumNightSeconds` this
+        // compared the source to itself and held for any cap at all: at 14.5 h
+        // the app would silently discard the fourteen-hour night the test above
+        // exists to protect, and at 48 h a two-night chain from one corrupt
+        // record would be reported as a single 48-hour night with a superlative
+        // on top — the exact failure the cap is for — with nothing going red.
         let calendar = Fixture.calendar()
         func total(seconds: TimeInterval) -> Double? {
             let start = Fixture.date(2025, 9, 8, 0, 0)
             let intervals = [SleepInterval(start: start, end: start.addingTimeInterval(seconds), asleep: true)]
             return HealthArithmetic.nightlyTotals(intervals, calendar: calendar).first?.value
         }
-        #expect(total(seconds: HealthArithmetic.maximumNightSeconds) == HealthArithmetic.maximumNightSeconds)
-        #expect(total(seconds: HealthArithmetic.maximumNightSeconds + 60) == nil)
+        // Typed, because an untyped `24 * 3_600` on the right of an optional
+        // defaults to `Int` inside the expectation macro and the comparison then
+        // fails on two numbers that are equal.
+        let wholeDay: TimeInterval = 24 * 3_600
+        #expect(HealthArithmetic.maximumNightSeconds == wholeDay)
+        #expect(total(seconds: wholeDay) == wholeDay)
+        #expect(total(seconds: wholeDay + 60) == nil)
     }
 }
 
@@ -393,6 +414,36 @@ struct HealthBaselineTests {
         #expect(baseline?.mean == 15)
         #expect(abs((baseline?.standardDeviation ?? 0) - (350.0 / 13.0).squareRoot()) < 1e-9)
         #expect(abs((baseline?.standardDeviation ?? 0) - 5) > 0.1)
+    }
+
+    @Test("both halves of the degenerate floor bite, and neither is the other")
+    func bothDegenerateFloorsAreLoadBearing() {
+        // Every other degenerate fixture in this file uses `sd == 0` against a
+        // non-zero mean, which satisfies `max(1e-9, abs(mean) * 0.001)` twice
+        // over — so either half could be deleted with the suite green. These two
+        // straddle it in opposite directions.
+        //
+        // A resting heart rate recorded to whole numbers is the real case: 60
+        // bpm with a couple of 61s in twenty-eight days has a spread that is a
+        // rounding artefact rather than a fact about the user, and dividing by
+        // it puts today's 61 at twenty standard deviations and "well above your
+        // usual range" on a one-beat change.
+        let roundingArtefact = HealthBaseline(mean: 60, standardDeviation: 0.05, dayCount: 28, windowDays: 28)
+        #expect(roundingArtefact.spreadIsDegenerate)   // relative floor bites; 0.05 > 1e-9
+
+        let tinyAroundZero = HealthBaseline(mean: 0, standardDeviation: 1e-11, dayCount: 28, windowDays: 28)
+        #expect(tinyAroundZero.spreadIsDegenerate)     // absolute floor bites; the relative one is 0
+
+        // And a floor that is a floor rather than a blanket: just above it, the
+        // spread is real and the z-score is allowed.
+        let real = HealthBaseline(mean: 60, standardDeviation: 0.07, dayCount: 28, windowDays: 28)
+        #expect(!real.spreadIsDegenerate)
+
+        // The consequence, which is what anybody actually reads.
+        let day = Fixture.date(2025, 9, 10, 0, 0)
+        let onABeat = HealthArithmetic.compare(value: 61, on: day, metric: .resting_heart_rate, to: roundingArtefact)
+        #expect(onABeat.zScore == nil)
+        #expect(onABeat.band == .usual)
     }
 
     @Test("a window with no variation at all is degenerate rather than infinitely sensitive")
@@ -491,18 +542,67 @@ struct HealthComparisonTests {
 
     @Test("nothing non-finite ever leaves a comparison")
     func everythingIsFinite() {
+        let day = Fixture.date(2025, 9, 10, 0, 0)
+
+        // The grid, which is cheap and proves the ordinary cases stay ordinary —
+        // but on its own it cannot fail. Every sd at or below 1e-12 is caught by
+        // the degenerate check and returns `nil` before any division, and the
+        // rest divide a finite numerator by 10, so the guard is never once
+        // handed a non-finite argument and deleting it leaves this green.
         for mean in [0.0, 1e-12, 100.0] {
             for sd in [0.0, 1e-12, 10.0] {
                 for value in [0.0, 100.0, 1e9] {
                     let comparison = HealthArithmetic.compare(
-                        value: value, on: Fixture.date(2025, 9, 10, 0, 0), metric: .steps,
-                        to: Self.baseline(mean: mean, sd: sd)
+                        value: value, on: day, metric: .steps, to: Self.baseline(mean: mean, sd: sd)
                     )
                     #expect(comparison.zScore?.isFinite ?? true, "mean \(mean) sd \(sd) value \(value)")
                     #expect(comparison.percentDelta?.isFinite ?? true, "mean \(mean) sd \(sd) value \(value)")
                 }
             }
         }
+
+        // An infinite spread passes the degenerate check — `inf <= inf` — and
+        // then divides infinity by infinity, which is NaN.
+        let overflowed = HealthArithmetic.compare(
+            value: 1e308, on: day, metric: .steps, to: Self.baseline(mean: .infinity, sd: .infinity)
+        )
+        #expect(overflowed.percentDelta == nil)
+        #expect(overflowed.zScore == nil)
+
+        // A NaN spread passes it the other way — `nan <= 0.1` is false — and
+        // reaches the division as a live divisor.
+        let unmeasurable = HealthArithmetic.compare(
+            value: 120, on: day, metric: .steps, to: Self.baseline(mean: 100, sd: .nan)
+        )
+        #expect(unmeasurable.zScore == nil)
+
+        // And a non-finite value against an ordinary baseline.
+        let runaway = HealthArithmetic.compare(
+            value: .infinity, on: day, metric: .steps, to: Self.baseline(mean: 100, sd: 10)
+        )
+        #expect(runaway.zScore == nil)
+        #expect(runaway.percentDelta == nil)
+    }
+
+    @Test("a series that overflows to infinity produces no number rather than a NaN")
+    func overflowNeverReachesThePayload() {
+        // Reachable end to end: `daily` admits any finite sample, and finite
+        // samples of about 1e308 sum to `+inf`. Mean, variance and spread are
+        // then all infinite, the degenerate check passes, and the percentage is
+        // `(1e308 - inf) / inf` — a NaN, which `JSONSerialization` throws on and
+        // LocalLLMClient answers by interpolating the whole dictionary as text.
+        let calendar = Fixture.calendar()
+        let today = Fixture.date(2025, 9, 11, 0, 0)
+        let days = Fixture.series(endingBefore: today, count: 20, calendar: calendar) { _ in 1e308 }
+
+        let baseline = HealthArithmetic.baseline(of: days, endingBefore: today, calendar: calendar)
+        #expect(baseline?.mean.isFinite == false)
+
+        let comparison = HealthArithmetic.compare(
+            value: 1e308, on: today, metric: .steps, to: baseline!
+        )
+        #expect(comparison.zScore == nil)
+        #expect(comparison.percentDelta == nil)
     }
 }
 
@@ -532,19 +632,32 @@ struct HealthLongMemoryTests {
         #expect(gap == 120)
     }
 
-    @Test("a better day inside the last month is not news")
-    func recentBetterDayIsNotASuperlative() {
+    @Test("a better day 29 days back is not news and one 30 days back is")
+    func theSuperlativeGapIsExactlyAMonth() {
         // "Best since Tuesday" describes ordinary variation dressed up as a
         // finding. A month is the shortest gap at which "best since" tells the
         // user something they did not already know.
+        //
+        // Both sides of the boundary, because one side pins nothing: with the
+        // better day ten days back — where this fixture used to sit — the
+        // threshold could be anything from 11 to 99 and a better day 25 days ago,
+        // squarely inside the month the title claims, would still be announced.
         let calendar = Fixture.calendar()
         let today = Fixture.date(2025, 9, 11, 0, 0)
-        var days = Fixture.series(endingBefore: today, count: 200, calendar: calendar) { back in
-            back == 10 ? 20_000 : 6_000
-        }
-        days.append(DailyValue(day: today, value: 12_000))
 
-        #expect(HealthArithmetic.superlative(in: days, direction: .higherIsBetter, calendar: calendar) == nil)
+        func superlative(betterDayAt back: Int) -> HealthSuperlative? {
+            var days = Fixture.series(endingBefore: today, count: 200, calendar: calendar) { day in
+                day == back ? 20_000 : 6_000
+            }
+            days.append(DailyValue(day: today, value: 12_000))
+            return HealthArithmetic.superlative(in: days, direction: .higherIsBetter, calendar: calendar)
+        }
+
+        #expect(superlative(betterDayAt: 29) == nil)
+        #expect(
+            superlative(betterDayAt: 30)
+                == .bestSince(day: calendar.date(byAdding: .day, value: -30, to: today)!, gapDays: 30)
+        )
     }
 
     @Test("an all-time high is claimed only as far back as the data reaches")
@@ -558,7 +671,27 @@ struct HealthLongMemoryTests {
 
         #expect(
             HealthArithmetic.superlative(in: days, direction: .higherIsBetter, calendar: calendar)
-                == .bestInReach(spanDays: 100)
+                == .bestInReach(spanDays: 100, dayCount: 101)
+        )
+    }
+
+    @Test("a superlative counts the days it has as well as the span they straddle")
+    func bestInReachSeparatesReachFromDensity() {
+        // A tracker worn for a week in July and again this week. The span is how
+        // far the claim reaches and says nothing at all about how much is behind
+        // it, so a sentence that quotes the span as a count of days of data —
+        // "in the 39 days of step data on this iPhone", over two readings —
+        // asserts a history the phone does not hold.
+        let calendar = Fixture.calendar()
+        let today = Fixture.date(2025, 9, 11, 0, 0)
+        let days = [
+            DailyValue(day: calendar.date(byAdding: .day, value: -40, to: today)!, value: 3_000),
+            DailyValue(day: calendar.date(byAdding: .day, value: -1, to: today)!, value: 9_000)
+        ]
+
+        #expect(
+            HealthArithmetic.superlative(in: days, direction: .higherIsBetter, calendar: calendar)
+                == .bestInReach(spanDays: 39, dayCount: 2)
         )
     }
 
@@ -581,7 +714,7 @@ struct HealthLongMemoryTests {
 
         #expect(
             HealthArithmetic.superlative(in: days, direction: .lowerIsBetter, calendar: calendar)
-                == .bestInReach(spanDays: 120)
+                == .bestInReach(spanDays: 120, dayCount: 121)
         )
         // The same series read the other way round is not a high at all.
         #expect(HealthArithmetic.superlative(in: days, direction: .higherIsBetter, calendar: calendar) == nil)
@@ -598,6 +731,59 @@ struct HealthLongMemoryTests {
 
         #expect(HealthArithmetic.dayGap(from: from, to: to, calendar: calendar) == 30)
         #expect(Int(to.timeIntervalSince(from) / 86_400) == 29)
+    }
+
+    @Test("a day whose midnight never happened is still one day before the next one")
+    func gapSurvivesAZoneThatShiftsAtMidnight() {
+        // Santiago goes to summer time at midnight on 7 September 2025, so the
+        // start of that day is 01:00 and only 23 hours separate it from the start
+        // of the 8th. `dateComponents([.day],)` counts whole days from the time
+        // of day it begins at, and no whole day fits between 01:00 and the next
+        // 00:00 — so the gap came back one short for every span beginning on
+        // such a day. One short is the difference between a reading described as
+        // current and one carrying "that reading is 2 days old"; it is also a
+        // silently shortened `bestInReach` reach.
+        let calendar = Fixture.calendar(Fixture.santiago)
+        func startOfDay(_ month: Int, _ day: Int) -> Date {
+            calendar.startOfDay(for: Fixture.date(2025, month, day, 12, 0, zone: Fixture.santiago))
+        }
+
+        // The premise, stated rather than assumed: 00:00 does not exist that day.
+        #expect(startOfDay(9, 7) == Fixture.date(2025, 9, 7, 1, 0, zone: Fixture.santiago))
+        let twentyThreeHours: TimeInterval = 23 * 3_600
+        #expect(startOfDay(9, 8).timeIntervalSince(startOfDay(9, 7)) == twentyThreeHours)
+
+        #expect(HealthArithmetic.dayGap(from: startOfDay(9, 7), to: startOfDay(9, 8), calendar: calendar) == 1)
+        #expect(HealthArithmetic.dayGap(from: startOfDay(9, 7), to: startOfDay(9, 9), calendar: calendar) == 2)
+        #expect(
+            HealthArithmetic.dayGap(
+                from: startOfDay(9, 7),
+                to: Fixture.date(2025, 9, 9, 10, 0, zone: Fixture.santiago),
+                calendar: calendar
+            ) == 2
+        )
+        // Backwards too, and to itself.
+        #expect(HealthArithmetic.dayGap(from: startOfDay(9, 9), to: startOfDay(9, 7), calendar: calendar) == -2)
+        #expect(HealthArithmetic.dayGap(from: startOfDay(9, 7), to: startOfDay(9, 7), calendar: calendar) == 0)
+    }
+
+    @Test("the day before a day is that day's start, not that day's clock time")
+    func steppingADayReNormalises() {
+        // The primitive the streak walk and the baseline window both stand on.
+        // `date(byAdding: .day,)` keeps the time of day it was handed, so one
+        // step back from Santiago's 01:00 start lands on 01:00 of an ordinary
+        // day — an hour past that day's start and no longer equal to any bucket
+        // key, with the hour carried into every step after it.
+        let calendar = Fixture.calendar(Fixture.santiago)
+        func startOfDay(_ month: Int, _ day: Int) -> Date {
+            calendar.startOfDay(for: Fixture.date(2025, month, day, 12, 0, zone: Fixture.santiago))
+        }
+
+        #expect(HealthArithmetic.startOfDay(startOfDay(9, 7), offsetBy: -1, calendar: calendar) == startOfDay(9, 6))
+        #expect(HealthArithmetic.startOfDay(startOfDay(9, 6), offsetBy: 1, calendar: calendar) == startOfDay(9, 7))
+        #expect(HealthArithmetic.startOfDay(startOfDay(9, 9), offsetBy: -8, calendar: calendar) == startOfDay(9, 1))
+        // The bare subtraction this replaced, so the difference is on the record.
+        #expect(calendar.date(byAdding: .day, value: -1, to: startOfDay(9, 7)) != startOfDay(9, 6))
     }
 }
 
@@ -653,6 +839,31 @@ struct HealthStreakTests {
         days.append(DailyValue(day: today, value: 11_000))
 
         #expect(HealthArithmetic.streak(in: days, asOf: today, calendar: calendar, where: { $0 >= 10_000 })?.length == 7)
+    }
+
+    @Test("a streak counted through a midnight that never happened keeps every day")
+    func streakSurvivesAZoneThatShiftsAtMidnight() {
+        // The London test above cannot reach this: London shifts at 01:00 and so
+        // always has a midnight, which makes the bare subtraction look correct
+        // in every daylight-saving test this repo had. Santiago shifts *at*
+        // midnight, the start of 7 September is 01:00, and a chain of
+        // subtractions picks that hour up and never matches a bucket key again —
+        // so a nine-day run was reported as three, and any genuine run is
+        // truncated at the clock change for every user in the zone.
+        let calendar = Fixture.calendar(Fixture.santiago)
+        let now = Fixture.date(2025, 9, 10, 10, 0, zone: Fixture.santiago)
+        // Keyed with `startOfDay`, which is exactly how `daily` and
+        // `nightlyTotals` key a bucket.
+        let days = (1...9).map { day in
+            DailyValue(
+                day: calendar.startOfDay(for: Fixture.date(2025, 9, day, 12, 0, zone: Fixture.santiago)),
+                value: 12_000
+            )
+        }
+
+        let streak = HealthArithmetic.streak(in: days, asOf: now, calendar: calendar, where: { $0 >= 10_000 })
+        #expect(streak?.length == 9)
+        #expect(streak?.endingOn == days.last?.day)
     }
 
     @Test("the same five nights are a streak in June and are not a streak in September")
@@ -815,6 +1026,36 @@ struct HealthPartialDayTests {
         ]
 
         #expect(HealthArithmetic.mostRecentComparableDay(in: days, metric: .sleep, now: now, calendar: calendar)?.day == today)
+    }
+
+    @Test("a night dated tomorrow is not the reading for today")
+    func futureDatedDaysAreNotComparable() {
+        // Nothing validates the date a third-party app writes on a sample, the
+        // sleep window deliberately reaches tomorrow's midnight so a night
+        // ending this morning is read whole, and thirteen hours is under the
+        // plausibility cap — so a record start-dated tonight comes back, keys on
+        // tomorrow, and unbounded becomes *the* reading: a night that has not
+        // happened, in the present tense, with this morning's real one nowhere.
+        // `streak` and `longMemory` already refuse a negative age; this was the
+        // one place the same invariant was missing.
+        let calendar = Fixture.calendar()
+        let now = Fixture.date(2025, 9, 11, 10, 0)
+        let today = calendar.startOfDay(for: now)
+        let days = [
+            DailyValue(day: calendar.date(byAdding: .day, value: -1, to: today)!, value: 7 * 3600),
+            DailyValue(day: today, value: 8 * 3600),
+            DailyValue(day: calendar.date(byAdding: .day, value: 1, to: today)!, value: 13 * 3600)
+        ]
+
+        let eightHours: TimeInterval = 8 * 3600
+        let latest = HealthArithmetic.mostRecentComparableDay(in: days, metric: .sleep, now: now, calendar: calendar)
+        #expect(latest?.day == today)
+        #expect(latest?.value == eightHours)
+
+        // An accumulating metric never reached this, because its bound was
+        // already there — asserted so the two branches cannot drift apart.
+        let steps = HealthArithmetic.mostRecentComparableDay(in: days, metric: .steps, now: now, calendar: calendar)
+        #expect(steps?.day == calendar.date(byAdding: .day, value: -1, to: today))
     }
 
     @Test("with only today's steps there is no comparable day at all")

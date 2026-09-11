@@ -140,6 +140,17 @@ public actor ModelStore {
     private let session: URLSession
     private var budget: DeviceBudget
     private var manifest: [String: ModelRecord] = [:]
+    /// Models with a transfer running right now, counted rather than flagged
+    /// because nothing stops two callers asking for the same id at once.
+    ///
+    /// It lives here because this actor is the only thing both doors go
+    /// through. The app's own download map is written by the Models tab; a pull
+    /// a paired device started over `POST /api/pull` or `POST /api/models/add`
+    /// reaches `download(_:)` directly and never appears there. Anything that
+    /// refuses to delete bytes a transfer is using has to ask this, or it will
+    /// delete a laptop's download out from under it — which is what the data
+    /// inspector's "free up space" did.
+    private var transfersInFlight: [String: Int] = [:]
 
     private var manifestURL: URL { directory.appendingPathComponent("manifest.json") }
 
@@ -191,6 +202,11 @@ public actor ModelStore {
         manifest.values.sorted { $0.displayName < $1.displayName }
     }
 
+    /// Every model id with a transfer running right now, whoever started it.
+    public func downloadsInFlight() -> Set<String> {
+        Set(transfersInFlight.keys)
+    }
+
     public func isInstalled(_ model: ModelRecord) -> Bool {
         manifest[model.id] != nil
     }
@@ -209,9 +225,15 @@ public actor ModelStore {
         manifest[id].map { fileURL(for: $0) }
     }
 
-    /// Discards a paused download's resume data. The partial bytes live in
-    /// URLSession's own temporary storage, which the system reclaims once
-    /// the resume blob that references them is gone.
+    /// Discards a paused download's resume data.
+    ///
+    /// The partial bytes themselves stay where URLSession parked them, in this
+    /// app's own `tmp`: `FileDownloader` uses a default session, so the staging
+    /// file is inside the container, and iOS empties `tmp` only when the disk
+    /// comes under pressure. A container pulled off a simulator still held a
+    /// 178 MB `CFNetworkDownload` file days after the download was abandoned,
+    /// which is why the data inspector removes that file itself rather than
+    /// waiting for the system to.
     public func discardPartial(_ model: ModelRecord) {
         try? FileManager.default.removeItem(at: resumeDataURL(for: model))
         if model.projectorFilename != nil {
@@ -257,6 +279,11 @@ public actor ModelStore {
         allowingOversized: Bool,
         onProgress: @escaping @Sendable (DownloadProgress) -> Void
     ) async throws {
+        transfersInFlight[model.id, default: 0] += 1
+        defer {
+            let remaining = (transfersInFlight[model.id] ?? 1) - 1
+            transfersInFlight[model.id] = remaining > 0 ? remaining : nil
+        }
         guard allowingOversized || budget.fit(for: model).allowsDownload else {
             throw ModelStoreError.insufficientMemory(model: model.id)
         }

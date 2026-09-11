@@ -95,11 +95,70 @@ struct ContextGuardTests {
 
     @Test("the estimate is pessimistic, never optimistic")
     func estimateIsPessimistic() {
-        // Four characters per token is the English average; the guard uses three
+        // Four bytes per token is the English average; the guard uses three
         // so that code, JSON and non-Latin text cannot slip past it.
         let text = String(repeating: "x", count: 1200)
-        #expect(ContextGuard.estimateTokens(text) >= text.count / 4)
-        #expect(ContextGuard.charactersPerToken < 4)
+        #expect(ContextGuard.estimateTokens(text) >= text.utf8.count / 4)
+        #expect(ContextGuard.bytesPerToken < 4)
+    }
+
+    /// The unit, pinned against the thing that kills the process.
+    ///
+    /// `String.count` is extended grapheme clusters, and dividing those by three
+    /// is a claim of three *bytes* per token that holds only for ASCII. Measured
+    /// in clusters, 12,000 Japanese characters priced at 4,004 guard tokens
+    /// against a budget of 4,032 — admitted, and about 12,000 real tokens once a
+    /// Qwen-class tokenizer had them. llama.cpp does not error on that batch.
+    @Test("a prompt is priced by its bytes, so non-Latin text cannot walk past the guard")
+    func nonLatinTextIsPricedByItsBytes() {
+        let guardian = ContextGuard(contextTokens: 4096)
+        #expect(guardian.promptBudget == 4032)
+
+        // 12,000 clusters, 36,000 bytes. Counted as clusters this was 4,000
+        // guard tokens, which is nine bytes for every token reserved.
+        let japanese = [ChatMessage.user(String(repeating: "\u{65E5}", count: 12_000))]
+        #expect(ContextGuard.estimateTokens(japanese) >= 12_000)
+        #expect(guardian.fits(japanese) == false)
+
+        // The worse of the two: one grapheme cluster, four emoji and three
+        // joiners, twenty-five bytes — seventy-five bytes per guard token.
+        let emoji = [ChatMessage.user(String(repeating: "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}", count: 4_000))]
+        #expect(ContextGuard.estimateTokens(emoji) >= 33_000)
+        #expect(guardian.fits(emoji) == false)
+
+        // And the half that must not move. ASCII is one byte per character, so
+        // every prompt the guard admitted before this it still admits, at the
+        // same number.
+        let ascii = String(repeating: "a paragraph of prose. ", count: 100)
+        #expect(ascii.utf8.count == ascii.count)
+        #expect(ContextGuard.estimateTokens(ascii) == (ascii.count + 2) / 3)
+        #expect(guardian.fits([ChatMessage.user(ascii)]))
+    }
+
+    /// The same defect, through the route that would have served the 500.
+    ///
+    /// A 1,000-character Japanese question is 338 guard tokens counted as
+    /// clusters and 1,004 counted as bytes, against a 448-token budget — so it
+    /// went to the model, and what came back was whatever llama.cpp does with a
+    /// batch twice the size of its window.
+    @Test("a Japanese prompt past the window is refused exactly like an English one")
+    func refusesOversizedNonLatin() async throws {
+        let harness = try await TestServer.start(
+            configuration: ServerConfiguration(port: 0, binding: .loopback, maxContextTokens: 512)
+        )
+        defer { Task { await harness.stop() } }
+
+        let (status, data) = try await harness.send(try harness.request("POST", "/v1/chat/completions", json:
+            OpenAI.ChatCompletionRequest(
+                model: "echo",
+                messages: [OpenAI.Message(role: "user", content: String(repeating: "\u{65E5}", count: 1_000))],
+                stream: false
+            )
+        ))
+
+        #expect(status == 413)
+        let body = try JSONDecoder().decode(OpenAI.ErrorResponse.self, from: data)
+        #expect(body.error.type == "context_length_exceeded")
     }
 
     @Test("reserves room for the answer")
@@ -107,7 +166,7 @@ struct ContextGuardTests {
         let guardian = ContextGuard(contextTokens: 1000, reservedForCompletion: 200)
         #expect(guardian.promptBudget == 800)
         // A prompt that exactly fills the window leaves nowhere to reply.
-        let filling = [ChatMessage.user(String(repeating: "x", count: 1000 * ContextGuard.charactersPerToken))]
+        let filling = [ChatMessage.user(String(repeating: "x", count: 1000 * ContextGuard.bytesPerToken))]
         #expect(guardian.fits(filling) == false)
     }
 }
@@ -150,6 +209,29 @@ struct PromptOverheadTests {
     @Test("no tools means no overhead at all")
     func freeWhenUnused() {
         #expect(ContextGuard.toolOverhead(toolsJSON: "", templateIsToolNative: true) == 0)
+    }
+
+    /// The reservation and the estimate have to be in one unit or the budget
+    /// admits a tool set the guard then charges more for, under-reserves by the
+    /// difference, and hands llama.cpp the batch this file exists to refuse.
+    @Test("a schema is priced by its bytes too, so the two sides stay one number")
+    func schemasArePricedByTheirBytes() {
+        let schema = #"[{"type":"function","function":{"description":"健康データを読みます"}}]"#
+        #expect(schema.utf8.count > schema.count)
+
+        #expect(
+            ContextGuard.toolOverhead(toolsJSON: schema, templateIsToolNative: false)
+                == ContextGuard.toolOverhead(schemaCharacters: schema.utf8.count, templateIsToolNative: false)
+        )
+        // The ASCII schemas the app actually generates are unmoved, which is
+        // what keeps `CapabilityBudget`'s `String.count` and this the same
+        // number for every tool that exists today.
+        #expect(
+            ContextGuard.toolOverhead(toolsJSON: Self.personalDataToolsSchema, templateIsToolNative: true)
+                == ContextGuard.toolOverhead(
+                    schemaCharacters: Self.personalDataToolsSchema.count, templateIsToolNative: true
+                )
+        )
     }
 
     /// The first version of this asserted the constant against itself, which

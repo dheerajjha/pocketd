@@ -364,28 +364,65 @@ struct HealthSummaryPayloadTests {
 
     @Test("the long-memory lines are capped, because the fourth-best thing about a week is not interesting")
     func notableIsBounded() async {
+        // Five lines offered, three taken. The fixture this replaced gave each
+        // of the three activity metrics one superlative and no streak — three
+        // lines against a cap of three — so `prefix(notableLimit)` never once
+        // truncated anything: deleting it, or moving the limit to 1 or to 9,
+        // left the whole suite green. The cap is what stops a health answer
+        // spending unbounded prompt tokens on trivia, so it needs a fixture that
+        // overflows it.
+        //
+        // Steps and exercise minutes each carry a record *and* a qualifying run;
+        // active energy has no streak threshold and carries only a record.
         let today = Health.calendar.startOfDay(for: Health.now)
         var samples: [HealthMetric: [HealthSample]] = [:]
-        for (metric, unit, base) in [
-            (HealthMetric.steps, HealthUnit.count, 6_000.0),
-            (.active_energy, .kilocalorie, 300.0),
-            (.exercise_minutes, .minute, 20.0)
+        for (metric, unit, ordinary, best, second, third) in [
+            (HealthMetric.steps, HealthUnit.count, 6_000.0, 20_000.0, 15_000.0, 12_000.0),
+            (.active_energy, .kilocalorie, 300.0, 900.0, 300.0, 300.0),
+            (.exercise_minutes, .minute, 10.0, 60.0, 45.0, 35.0)
         ] {
-            var series = (1...200).reversed().map { back in
-                HealthSample(value: base, unit: unit, date: Health.calendar.date(byAdding: .day, value: -back, to: today)!)
+            samples[metric] = (1...200).reversed().map { back in
+                let value: Double
+                switch back {
+                case 1: value = best
+                case 2: value = second
+                case 3: value = third
+                default: value = ordinary
+                }
+                return HealthSample(
+                    value: value, unit: unit,
+                    date: Health.calendar.date(byAdding: .day, value: -back, to: today)!
+                )
             }
-            series.append(HealthSample(
-                value: base * 4,
-                unit: unit,
-                date: Health.calendar.date(byAdding: .day, value: -1, to: today)!
-            ))
-            samples[metric] = series
         }
 
-        let payload = await Health.payload(.activity, readout: HealthReadout(samples: samples))
-        let notable = payload["notable"] as? [String] ?? []
-        #expect(!notable.isEmpty)
-        #expect(notable.count <= HealthSummary.notableLimit)
+        let notable = (await Health.payload(.activity, readout: HealthReadout(samples: samples)))["notable"] as? [String] ?? []
+
+        #expect(notable.count == 3)
+        // Which three, in the order the metrics are asked about. Naming them is
+        // what makes a smaller cap fail as loudly as a larger one.
+        #expect(notable == [
+            "Highest steps in all 200 days of step data on this iPhone, which reach back 199 days.",
+            "3 days in a row over 10,000 steps.",
+            "Highest active energy in all 200 days of active energy data on this iPhone, which reach back 199 days."
+        ])
+        // The two that were dropped were real lines, not absent ones.
+        #expect(!notable.contains { $0.contains("exercise") })
+        #expect(!notable.contains { $0.contains("30 minutes or more") })
+    }
+
+    @Test("two consecutive days is a coincidence and three is a streak")
+    func theStreakMinimumIsExactlyThreeDays() async {
+        // The stated rule had no test at all: the constant could be moved to 2 —
+        // shipping a two-day run as a streak — or to 5, and the suite stayed
+        // green either way, bounded only by an unrelated five-night fixture.
+        func notable(nights: Int) async -> [String] {
+            let readout = HealthReadout(sleep: Health.nights(count: nights, hours: 8.5, endingOn: Health.now))
+            return (await Health.payload(.sleep, readout: readout))["notable"] as? [String] ?? []
+        }
+
+        #expect(await notable(nights: 2).isEmpty)
+        #expect(await notable(nights: 3) == ["3 nights in a row over 8 hours."])
     }
 
     @Test("a superlative that reaches past what the phone holds says so")
@@ -401,6 +438,48 @@ struct HealthSummaryPayloadTests {
         // what happened before that.
         #expect(notable.contains { $0.contains("days of step data on this iPhone") })
         #expect(!notable.contains { $0.lowercased().contains("ever") })
+    }
+
+    @Test("the superlative names how much data it has, not how far that data reaches")
+    func superlativeDoesNotQuoteItsReachAsItsEvidence() async {
+        // A tracker worn once in August and again this week. The old sentence
+        // read "Highest step in the 39 days of step data on this iPhone" — a
+        // month of history asserted from two readings, with a singular noun on
+        // top of it. Both numbers are true and they are not the same number.
+        let today = Health.calendar.startOfDay(for: Health.now)
+        let series = [
+            HealthSample(value: 3_000, unit: .count, date: Health.calendar.date(byAdding: .day, value: -40, to: today)!),
+            HealthSample(value: 9_000, unit: .count, date: Health.calendar.date(byAdding: .day, value: -1, to: today)!)
+        ]
+
+        let notable = (await Health.payload(.activity, readout: HealthReadout(samples: [.steps: series])))["notable"] as? [String] ?? []
+        #expect(notable == [
+            "Highest steps in all 2 days of step data on this iPhone, which reach back 39 days."
+        ])
+    }
+
+    @Test("the superlative reads as a sentence rather than as a column heading")
+    func superlativeUsesThePluralSubject() async {
+        // `noun` is attributive and right where it is used that way — "step
+        // data" — and wrong carrying a clause alone: "Highest step since August
+        // 2025." is what the payload used to hand a 1.7B model, which repeats a
+        // finished clause rather than repairing it.
+        let today = Health.calendar.startOfDay(for: Health.now)
+        var series = (2...200).reversed().map { back in
+            HealthSample(
+                value: back == 121 ? 9_000 : 6_000, unit: .count,
+                date: Health.calendar.date(byAdding: .day, value: -back, to: today)!
+            )
+        }
+        series.append(HealthSample(value: 8_500, unit: .count, date: Health.calendar.date(byAdding: .day, value: -1, to: today)!))
+
+        let notable = (await Health.payload(.activity, readout: HealthReadout(samples: [.steps: series])))["notable"] as? [String] ?? []
+        #expect(notable.contains { $0.hasPrefix("Highest steps since ") })
+        #expect(!notable.contains { $0.hasPrefix("Highest step since ") })
+        // The attributive form is still the attributive form.
+        #expect((await Health.payload(.activity, readout: HealthReadout(samples: [.steps: Health.samples(count: 3, unit: .count) { _ in 8_000 }])))["readings"]
+            .flatMap { $0 as? [String] }?
+            .contains { $0.contains("carry step data") } == true)
     }
 
     @Test("five nights over eight hours in a row is reported as a streak")
@@ -547,6 +626,40 @@ struct HealthSummaryRecencyTests {
         #expect(staleLine.contains("does not describe today"))
     }
 
+    @Test("a sleep record dated tomorrow does not become last night's reading")
+    func futureDatedSleepIsNotTheReading() async {
+        // The one on this list a user would actually notice. The sleep window
+        // reaches tomorrow's midnight on purpose, so that a night ending this
+        // morning is read whole; nothing validates the date a third-party app
+        // writes on a sample; and thirteen hours is comfortably under the
+        // plausibility cap. So a record running from this evening to tomorrow
+        // morning comes back, keys on tomorrow, and — unbounded — becomes THE
+        // reading: a night that has not happened, dated tomorrow, in the present
+        // tense, with no staleness note, and this morning's real eight hours
+        // never mentioned at all.
+        let today = Health.calendar.startOfDay(for: Health.now)
+        let tomorrow = Health.calendar.date(byAdding: .day, value: 1, to: today)!
+        let intervals = Health.nights(count: 30, hours: 8, endingOn: Health.now) + [
+            SleepInterval(
+                start: today.addingTimeInterval(20 * 3600),
+                end: tomorrow.addingTimeInterval(9 * 3600),
+                asleep: true
+            )
+        ]
+
+        let payload = await Health.payload(.sleep, readout: HealthReadout(sleep: intervals))
+        let sleepLine = (payload["readings"] as? [String])?.first { $0.hasPrefix("Sleep") } ?? ""
+
+        #expect(sleepLine.contains("Sleep 8 h on Thu, Sep 11"))
+        #expect(!sleepLine.contains("13 h"))
+        // Nowhere in the payload, not merely absent from the headline: a
+        // superlative or a percentage built on the same night is the same lie
+        // one clause further down.
+        let rendered = ToolResult.encode(payload)
+        #expect(!rendered.contains("Sep 12"))
+        #expect(!rendered.contains("13 h"))
+    }
+
     @Test("today's unfinished steps do not break a streak the finished days prove")
     func streaksAreJudgedOnFinishedDaysOnly() async {
         // A phone always has some steps for today, so before this the 10,000-step
@@ -564,6 +677,47 @@ struct HealthSummaryRecencyTests {
         let readings = payload["readings"] as? [String] ?? []
         #expect(readings.contains { $0.hasPrefix("Steps 12,000 on") })
         #expect(!readings.contains { $0.contains("1,200") })
+    }
+
+    @Test("a two-day-old reading says so in a zone whose clocks go forward at midnight")
+    func stalenessSurvivesAZoneThatShiftsAtMidnight() async {
+        // The staleness note and the whole long-memory currency gate are both
+        // counted with `dayGap`, which came back one short for any span starting
+        // on a day that has no 00:00 — Chile, Cuba, Lebanon, Brazil, Iran. So on
+        // one day a year per zone a two-day-old figure was dated without its
+        // year, carried no age note, and kept its streak line: exactly the "a
+        // June streak read out in September" failure the rest of this suite
+        // exists to close, reopened by an hour of arithmetic.
+        let santiago = TimeZone(identifier: "America/Santiago")!
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = santiago
+        calendar.firstWeekday = 2
+
+        func at(_ month: Int, _ day: Int, _ hour: Int) -> Date {
+            calendar.date(from: DateComponents(year: 2025, month: month, day: day, hour: hour))!
+        }
+        // The premise, stated rather than assumed.
+        #expect(calendar.startOfDay(for: at(9, 7, 12)) == at(9, 7, 1))
+
+        let lastMorning = calendar.startOfDay(for: at(9, 7, 12))
+        let intervals = (0..<30).map { back -> SleepInterval in
+            let morning = calendar.startOfDay(for: calendar.date(byAdding: .day, value: -back, to: lastMorning)!)
+            return SleepInterval(start: morning.addingTimeInterval(-8 * 3600), end: morning, asleep: true)
+        }
+
+        let payload = await HealthSummary.payload(
+            focus: .sleep, now: at(9, 9, 10), calendar: calendar, locale: Health.english,
+            timeZone: santiago, origin: .onDeviceChat,
+            read: { _, _ in HealthReadout(sleep: intervals) }
+        )
+        let line = (payload["readings"] as? [String])?.first { $0.hasPrefix("Sleep") } ?? ""
+
+        #expect(line.contains("Sun, Sep 7, 2025"))
+        #expect(line.contains("That reading is 2 days old"))
+        #expect(line.contains("does not describe today"))
+        // And the run of thirty nights is not still being announced in the
+        // present tense two days after the last one.
+        #expect(payload["notable"] == nil)
     }
 
     @Test("today's unfinished steps do not swallow yesterday's record either")

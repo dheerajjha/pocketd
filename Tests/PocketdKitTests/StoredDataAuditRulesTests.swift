@@ -174,6 +174,134 @@ struct StoredDataAuditRulesTests {
         #expect(plan.included.map(\.name) == ["model files nothing can load"])
     }
 
+    // MARK: - What the freed line is allowed to claim
+
+    @Test("what a sweep freed is measured before it sweeps, not after")
+    func sweepReportsWhatItRemoved() throws {
+        // `deleteAllConversations` deleted every readable transcript and only
+        // then listed the directory to work out the figure, so "freed" counted
+        // whatever the first pass had missed — normally nothing. Deleting
+        // 1.2 MB rendered "Zero KB freed." on the one line whose stated job is
+        // to prove the button was not decorative.
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pocketd-sweep-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        var written: Int64 = 0
+        for index in 0..<5 {
+            let bytes = 1_000 * (index + 1)
+            try Data(repeating: 0x41, count: bytes)
+                .write(to: directory.appendingPathComponent("\(index).json"))
+            written += Int64(bytes)
+        }
+        // The remnant an interrupted atomic save leaves behind. It is in the
+        // size the screen quotes, so it has to be in what the sweep reports.
+        try Data(repeating: 0x41, count: 640).write(to: directory.appendingPathComponent(".tmp-abc"))
+        written += 640
+
+        let freed = DirectorySweep.emptyOfFiles(at: directory)
+
+        #expect(freed >= written, "a sweep that reports less than it removed is the bug")
+        #expect(StoredFile.listing(of: directory).isEmpty)
+        // And an empty directory frees nothing rather than reporting a figure
+        // from the pass before it.
+        #expect(DirectorySweep.emptyOfFiles(at: directory) == 0)
+    }
+
+    // MARK: - What "delete everything" says about what survives
+
+    @Test("only bytes iOS owns get the sentence about iOS owning them")
+    func onlySystemOwnedGetsTheStrongClaim() {
+        // The preferences file was appended to this sentence by hand — three
+        // rows under a "Replace the API key" button that rewrites it, and
+        // beside a section listing every key `removePersistentDomain` clears.
+        let sentences = DeletionNarrative.sentences(
+            plan: .deleteEverything(
+                installedModelBytes: 1_000, orphanBytes: 0, conversationBytes: 0,
+                partialDownloadBytes: 0, networkCacheBytes: 0, downloadInFlight: false
+            ),
+            measured: true,
+            systemOwnedTitles: [StoredDataKind.systemState.title],
+            preferencesBytes: 4_096,
+            unnamedTitles: [],
+            unnamedBytes: 0
+        )
+        let footer = sentences.joined(separator: " ")
+
+        let strong = try? #require(sentences.first { $0.contains("nothing inside this app can") })
+        #expect(strong?.contains(StoredDataKind.systemState.title) == true)
+        #expect(strong?.contains(StoredDataKind.preferences.title) == false)
+
+        // Named rather than dropped: the section is on the screen, so the
+        // footer has to account for it, and it has to say what can be done.
+        #expect(footer.contains("It leaves \(StoredDataKind.preferences.title)"))
+        #expect(footer.contains("can be changed from this app"))
+    }
+
+    @Test("with nothing iOS owns, nothing claims iOS owns it")
+    func noSystemOwnedMeansNoClaim() {
+        let sentences = DeletionNarrative.sentences(
+            plan: .deleteEverything(
+                installedModelBytes: 0, orphanBytes: 0, conversationBytes: 0,
+                partialDownloadBytes: 0, networkCacheBytes: 0, downloadInFlight: false
+            ),
+            measured: true,
+            systemOwnedTitles: [],
+            preferencesBytes: 4_096,
+            unnamedTitles: ["Everything else in the container"],
+            unnamedBytes: 42
+        )
+        let footer = sentences.joined(separator: " ")
+
+        #expect(footer.contains("nothing inside this app can") == false)
+        #expect(footer.contains("There is nothing here left for this screen to delete."))
+        // The unnamed bytes keep their own, weaker claim: this app could remove
+        // them and will not, which is not the same statement.
+        #expect(footer.contains("has no name for and so will not delete"))
+    }
+
+    @Test("an unmeasured screen says so rather than saying there is nothing")
+    func unmeasuredDoesNotClaimEmptiness() {
+        // `.task` runs after the first body evaluation, so the first rendered
+        // frame is deterministic rather than a race: under the headline
+        // destructive control, a phone holding 4.63 GB read "There is nothing
+        // here left for this screen to delete."
+        let sentences = DeletionNarrative.sentences(
+            plan: .deleteEverything(
+                installedModelBytes: 0, orphanBytes: 0, conversationBytes: 0,
+                partialDownloadBytes: 0, networkCacheBytes: 0, downloadInFlight: false
+            ),
+            measured: false,
+            systemOwnedTitles: [],
+            preferencesBytes: 0,
+            unnamedTitles: [],
+            unnamedBytes: 0
+        )
+        #expect(sentences.first == "Still counting what is here.")
+        #expect(sentences.joined(separator: " ").contains("nothing here left") == false)
+    }
+
+    @Test("the footer quotes the plan's own number and names its own parts")
+    func footerMatchesThePlan() {
+        let plan = DeletionPlan.deleteEverything(
+            installedModelBytes: 2_000_000, orphanBytes: 0, conversationBytes: 4_000,
+            partialDownloadBytes: 900_000, networkCacheBytes: 500,
+            downloadInFlight: true
+        )
+        let footer = DeletionNarrative.sentences(
+            plan: plan, measured: true, systemOwnedTitles: [],
+            preferencesBytes: 0, unnamedTitles: [], unnamedBytes: 0
+        ).joined(separator: " ")
+
+        #expect(footer.contains(formattedByteCount(plan.byteCount)))
+        #expect(footer.contains("every model, every conversation and the network cache"))
+        // The skipped category is named with its reason rather than folded into
+        // a total the button then does not free.
+        #expect(footer.contains("It leaves every unfinished download"))
+        #expect(footer.contains("a download is running"))
+    }
+
     // MARK: - Permissions
 
     @Test("local network is reported once, from the key that knows the most")

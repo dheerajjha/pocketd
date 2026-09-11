@@ -70,7 +70,64 @@ struct StoredDataInventoryTests {
         let survey = ContainerSurvey.survey(container: root)
         #expect(survey.totalBytes == totalAllocatedBytes(under: root))
         #expect(survey.totalFiles == 16)
+        // Every directory here is readable, so this says the total above is a
+        // figure rather than a floor. It is not cover for the reporting itself
+        // — no fixture here could ever make it fail — which is what
+        // `unreadableDirectoriesAreNamed` below is for.
         #expect(survey.unreadablePaths.isEmpty)
+    }
+
+    @Test(
+        "a directory the walk cannot enter is named, and does not stop the walk",
+        // Root bypasses POSIX permissions, so on a runner that is root there is
+        // no such thing as an unreadable directory and this would prove nothing.
+        .enabled(if: getuid() != 0, "needs a user that chmod 000 actually restricts")
+    )
+    func unreadableDirectoriesAreNamed() throws {
+        // `unreadablePaths` is the only thing standing between "this screen
+        // counts every byte" and "this screen counts every byte it happened to
+        // be able to read", and the survey's own doc comment says a number from
+        // a partial walk is a number that lies downward. Nothing tested it: the
+        // line that records the path could be deleted and the whole suite
+        // stayed green.
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pocketd-unreadable-\(UUID().uuidString)")
+        let locked = root.appendingPathComponent("Library/Caches/dev.pocketd.app/aa-locked")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        for (path, size) in [
+            ("Library/Caches/dev.pocketd.app/aa-locked/hidden.bin", 4_096),
+            ("Library/Caches/dev.pocketd.app/zz-after/Cache.db", 700),
+            ("Library/Application Support/Models/qwen3-1.7b.gguf", 512),
+        ] {
+            let url = root.appendingPathComponent(path)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try Data(repeating: 0x41, count: size).write(to: url)
+        }
+        let openTotal = ContainerSurvey.survey(container: root).totalBytes
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+
+        let survey = ContainerSurvey.survey(container: root)
+
+        // Named, with the path a person could go and check.
+        #expect(survey.unreadablePaths == ["Library/Caches/dev.pocketd.app/aa-locked"])
+        // And the rest of the container is still counted rather than the walk
+        // ending at the error. This is an assertion about the survey's output,
+        // not about the `return true` in the error handler: on Darwin that
+        // return value turns out to change nothing observable here, because the
+        // enumerator raises the error while descending into the last directory
+        // it visits. Returning false leaves every number below identical.
+        #expect(survey.area(.networkCache).files.contains { $0.path.hasSuffix("zz-after/Cache.db") })
+        #expect(survey.area(.models).tally.fileCount == 1)
+        // The total really is short by what could not be read, which is exactly
+        // why the screen calls it a floor when this list is not empty.
+        #expect(survey.totalBytes < openTotal)
+        #expect(survey.totalFiles == 2)
     }
 
     @Test("a directory nothing knows about is shown, not dropped")

@@ -123,7 +123,27 @@ actor LlamaEngine: InferenceEngine {
     /// `Equatable` and because this string *is* the difference that matters:
     /// it is the text the library bakes into the chat parameters, so two tool
     /// sets that serialise identically genuinely need no rebuild.
+    ///
+    /// Recorded from the array that was actually handed to the client, read a
+    /// suspension earlier, and not from `toolsJSON` as it stands afterwards.
+    /// The two are the same string on every path where nothing interleaved, and
+    /// where something did — a Settings toggle landing inside the seconds a
+    /// load spends mapping weights — recording the later value is what made the
+    /// mismatch invisible: two equal strings, `mustRebuild` false, and a client
+    /// injecting schemas nobody was charged for, for as long as it stayed
+    /// resident.
     private var residentToolsJSON: String?
+    /// The dispatch table for the client that exists, as against the one the
+    /// next client will get.
+    ///
+    /// Split from `toolsByName` for the same reason `residentToolsJSON` is
+    /// split from `toolsJSON`, and it is the half a generation has to read: a
+    /// table built from the configured set answers calls the running client
+    /// never offered, and — the direction that actually loses text — arms
+    /// `ToolSyntaxScreen` with the wrong names, so the resident client's
+    /// `<tool_call>` output is neither parsed nor screened and reaches the
+    /// transcript as prose.
+    private var residentToolsByName: [String: AnyLLMTool] = [:]
     /// Whether the resident model's chat template renders tool schemas itself.
     ///
     /// Read from the GGUF header at load and kept, so that toggling tools can
@@ -143,16 +163,28 @@ actor LlamaEngine: InferenceEngine {
     /// What the tools silently add to every prompt, in `ContextGuard` tokens.
     ///
     /// Recomputed when the tools change or a model loads, never per request:
-    /// nothing about a request can move it. Deliberately describes the
-    /// *configured* tools rather than the resident ones — a request that
-    /// arrives after the toggle rebuilds the client before it generates, so the
-    /// schema it will be charged for is the one named here, and a guard sized
-    /// from the resident set would under-reserve by the whole preamble. The
-    /// guard exists because under-reserving means llama.cpp asserts on an
-    /// oversized batch and takes the process down.
+    /// nothing about a request can move it. Describes the dearer of the
+    /// configured set and the resident one, which are the same set except
+    /// across a rebuild — see `CapabilityBudget.reservedTokens`, which is where
+    /// the choice between them is made and argued. The guard exists because
+    /// under-reserving means llama.cpp asserts on an oversized batch and takes
+    /// the process down.
     private var toolOverheadTokens = 0
 
     var promptOverheadTokens: Int { toolOverheadTokens }
+
+    /// The model `loadHoldingGate` is part-way through building, which is the
+    /// only model there is while it is suspended.
+    ///
+    /// `self.model` is nil for the whole of a load — deliberately, so a load
+    /// that throws leaves nothing resident — and a Settings toggle arriving in
+    /// that window used to be priced against that nil: `ToolGate.decide` read
+    /// it as "no model loaded", registered nothing, and emptied the schema the
+    /// client being built at that exact moment was carrying. Pricing against
+    /// the model that is actually being built is the honest answer to the same
+    /// question, and it is available: the header facts the gate and the budget
+    /// read are both set before the suspension.
+    private var loadInFlight: ModelRecord?
 
     /// Who holds the context right now, and who is queued for it.
     private var holder: UUID?
@@ -316,16 +348,26 @@ actor LlamaEngine: InferenceEngine {
     /// would leave the live `toolsByName` pointing at the previous instances of
     /// two tools that happen to serialise the same — right today, and the kind
     /// of thing that stops being right quietly.
+    ///
+    /// Deliberately still synchronous, and therefore still able to run inside
+    /// a load's suspension. Taking the context gate here would close that hole
+    /// by making the switch wait out the load — seconds of a phone mapping
+    /// weights, from a `Task` a `didSet` on a @MainActor property spawned — and
+    /// would answer the question against a model chosen after the fact. What
+    /// the window actually needs is not exclusion but a subject: the decisions
+    /// below are priced against `loadInFlight` when there is no resident model,
+    /// which is the model the client under construction is being built from.
     func updateTools(
         _ tools: [(tool: any LLMTool, group: CapabilityGroup)],
         exempt: [any LLMTool] = []
     ) {
         self.requestedTools = tools
         self.exemptTools = exempt
-        applyGate(for: model)
-        // No model means no chat template, so there is nothing yet to price the
-        // schema against. The load recomputes it.
-        self.toolOverheadTokens = model == nil ? 0 : overhead()
+        let priced = model ?? loadInFlight
+        applyGate(for: priced)
+        // No model and none on the way means no chat template, so there is
+        // nothing yet to price the schema against. The load recomputes it.
+        self.toolOverheadTokens = priced == nil ? 0 : reservedOverhead()
     }
 
     /// Reduces what was asked for to what the resident model will be given.
@@ -333,8 +375,11 @@ actor LlamaEngine: InferenceEngine {
     /// Called from both places the answer can change — the switch and a load —
     /// so that `tools`, `toolsByName` and `toolsJSON` cannot describe different
     /// sets. A refusal here is not merely inert: `toolsJSON` becomes empty, so
-    /// `overhead()` is zero and a model that cannot use the tools is not
-    /// charged several hundred tokens of context for carrying their schemas.
+    /// the configured half of `reservedOverhead()` is zero and a model that
+    /// cannot use the tools is not charged several hundred tokens of context
+    /// for carrying their schemas. The resident half stays whatever the live
+    /// client is really injecting until that client is thrown away, which is
+    /// the point of there being two.
     private func applyGate(for model: ModelRecord?) {
         toolGate = ToolGate.decide(
             model: model,
@@ -388,8 +433,15 @@ actor LlamaEngine: InferenceEngine {
         residentSampling = nil
         residentContextTokens = nil
         residentToolsJSON = nil
+        residentToolsByName = [:]
         residentChatTemplate = nil
         residentSizeLabel = nil
+        // Names the subject a toggle arriving mid-load is priced against, and
+        // is cleared on every exit below, the throwing ones included: a record
+        // left behind here would let the next toggle price itself against a
+        // model that failed to load.
+        loadInFlight = model
+        defer { loadInFlight = nil }
         // Before the file is even opened, so that a load which throws below
         // leaves no tools behind for the next request to be handed.
         applyGate(for: nil)
@@ -443,6 +495,14 @@ actor LlamaEngine: InferenceEngine {
                 .map(ContextGuard.templateIsToolNative) ?? true
             applyGate(for: model)
 
+            // Read on this side of the suspension, because everything the
+            // client is about to freeze is decided on this side of it. What
+            // comes back from the `await` below is a client whose tools are a
+            // `let`, and `toolsJSON`/`toolsByName` by then describe whatever
+            // Settings last asked for — which is the same thing on every path
+            // where nothing interleaved, and the whole bug where something did.
+            let builtWith = (json: toolsJSON, byName: toolsByName)
+
             let resolvedContext = min(model.contextLength, contextTokens)
             let llama = try await LocalLLMClient.llama(
                 url: url,
@@ -482,25 +542,40 @@ actor LlamaEngine: InferenceEngine {
             client = AnyLLMClient(llama)
             self.model = model
             contextIsDirty = false
-            toolOverheadTokens = overhead()
             // Recorded from what was passed, not from what is configured now:
             // this is the sampler that exists, and it is what the next request
             // has to be compared against. The tools are recorded from
-            // `toolsJSON` for the same reason — `tools` was read a few lines
-            // above to build the client, and this is that same array's schema.
+            // `builtWith` for the same reason, one step stricter — `tools` was
+            // read before the suspension to build the client, and `builtWith`
+            // is that same array's schema and dispatch table. Recording the
+            // current `toolsJSON` instead made a toggle that landed inside the
+            // suspension unfindable: `mustRebuild` compared the new value
+            // against itself, saw no difference, and kept a client whose
+            // schemas nothing was reserving room for.
             residentSampling = sampling
             residentContextTokens = resolvedContext
-            residentToolsJSON = toolsJSON
+            residentToolsJSON = builtWith.json
+            residentToolsByName = builtWith.byName
+            // Last of the three, because it prices what the two above just
+            // recorded. Computed before them it would quote the schemas of the
+            // client this one replaced.
+            toolOverheadTokens = reservedOverhead()
         } catch {
             throw InferenceError.backend(String(describing: error))
         }
     }
 
-    /// What the configured tools will add to every prompt of the resident
-    /// model, in `ContextGuard` tokens.
-    private func overhead() -> Int {
-        ContextGuard.toolOverhead(
-            toolsJSON: toolsJSON,
+    /// What a prompt must reserve for tool schemas right now, in `ContextGuard`
+    /// tokens.
+    ///
+    /// The dearer of what the resident client injects and what the next one
+    /// will, which are the same number except across a rebuild — see
+    /// `CapabilityBudget.reservedTokens` for why the maximum and not either one
+    /// of them.
+    private func reservedOverhead() -> Int {
+        CapabilityBudget.reservedTokens(
+            resident: residentToolsJSON ?? "",
+            configured: toolsJSON,
             templateIsToolNative: residentTemplateIsToolNative
         )
     }
@@ -517,6 +592,7 @@ actor LlamaEngine: InferenceEngine {
         residentSampling = nil
         residentContextTokens = nil
         residentToolsJSON = nil
+        residentToolsByName = [:]
         residentChatTemplate = nil
         residentSizeLabel = nil
         applyGate(for: nil)
@@ -613,12 +689,14 @@ actor LlamaEngine: InferenceEngine {
             }
         }
 
-        // Pinned for the rest of this generation, because from here on there
-        // are `await`s a Settings toggle can slip between. The client's tools
-        // were frozen at the rebuild above and cannot follow, so reading the
-        // configured table later would answer a call the running client never
-        // offered — or take the no-tools stream on a client that has them.
-        let activeTools = toolsByName
+        // The resident table, not the configured one, and pinned on top of
+        // that. Two different toggles are being defended against here. Reading
+        // `toolsByName` would answer a call the running client never offered —
+        // or take the no-tools stream on a client that has them — because the
+        // client's tools were frozen at the rebuild above and cannot follow a
+        // switch flipped since; and pinning it keeps that answer steady across
+        // the `await`s below, which a switch flipped mid-generation can reach.
+        let activeTools = residentToolsByName
 
         // Defence in depth: the Chat tab calls the engine directly, so the
         // route-layer guard does not cover it, and an oversized prompt here is a

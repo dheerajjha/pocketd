@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Reason codes are quoted from Apple's "Describing use of required reason API"
+  and were checked against it rather than recalled. A code that does not exist,
+  or one whose stated terms the app does not meet, is itself a rejection — the
+  string is accepted by the packager and refused by review, so a typo here
+  surfaces days later as ITMS-91053 rather than as a build error.
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+
+	<!--
+	  Empty because the key means tracking domains specifically, and there are
+	  none: nothing here correlates a person with data from another app or
+	  website. The app links no ATT framework and reads no advertising
+	  identifier, so there is nothing to gate. Present rather than omitted so a
+	  future reader can tell "declared empty" from "forgotten".
+	-->
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+
+	<!--
+	  Empty because nothing is collected, in Apple's sense of the word: no data
+	  is transmitted off the device to this developer or anyone acting for
+	  them. There is no account, no analytics, no crash reporting and no
+	  telemetry, and no server of ours exists to receive any. Health, calendar
+	  and reminder data are read on-device to answer a question and are never
+	  transmitted — see docs/PRIVACY.md.
+
+	  The two outbound requests the app does make, both to huggingface.co, carry
+	  a repository and file name and nothing about the person, so they are not
+	  collection of any declarable data type.
+	-->
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<!--
+				  C617.1 — metadata of files inside the app container.
+				  ContainerSurvey.survey walks NSHomeDirectory() asking for
+				  .contentModificationDateKey so the Data screen can account for
+				  every byte the app holds, and StoredFile.listing does the same
+				  for the models and conversations directories. Both are inside
+				  this app's own container, which is the case C617.1 names.
+
+				  Deliberately not DDA9.1, which covers displaying file
+				  timestamps to the person: the survey's modifiedAt and the
+				  tally's oldest/newest reach no view. The two dates the Data
+				  screen does show are a conversation's own createdAt and
+				  updatedAt, decoded from the transcript rather than read from
+				  the filesystem. Declaring a reason the app does not exercise
+				  would be a false declaration in a file whose entire purpose is
+				  to be true.
+
+				  Not 3B52.1 either: there is no document picker anywhere in the
+				  app, so no user-granted file is ever stat-ed. Not 0A2A.1,
+				  which only a third-party SDK may declare.
+				-->
+				<string>C617.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<!--
+				  E174.1 — checking there is room before writing. ModelStore's
+				  checkDiskSpace reads volumeAvailableCapacityForImportantUsage
+				  and throws insufficientDisk rather than starting a download
+				  that cannot finish. E174.1 requires the app to behave
+				  differently in a way users can observe, and it does: the
+				  download is refused. Apple's exception for this reason names
+				  exactly this case — avoiding a download when disk space is
+				  insufficient.
+				-->
+				<string>E174.1</string>
+				<!--
+				  85F4.1 — displaying the figure. The free-byte count is shown
+				  to the person in the refusal itself
+				  ("… and only 1.2 GB is free"), and a pull started over the
+				  local API carries that same number back to the paired device
+				  as the error line in the NDJSON stream.
+
+				  That local-network hop is why this reason is here alongside
+				  E174.1 rather than instead of it. E174.1's terms permit the
+				  behaviour but not sending the number off-device; 85F4.1 is the
+				  one reason whose exception covers sending disk space over the
+				  local network to another device the same person operates, for
+				  display there. The conditions hold: the listener binds to the
+				  LAN, the caller has authenticated with the pairing code, and
+				  the figure never crosses the Internet.
+
+				  Not 7D9E.1 — there is no bug reporter. Not B728.1 — this is
+				  not a health research app.
+				-->
+				<string>85F4.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<!--
+				  CA92.1 — defaults readable only by this app. Every use is the
+				  standard suite: server configuration and the API key
+				  (ServerConfigurationStore), the pairing record
+				  (PairingSession), the measured memory ceiling
+				  (AvailableMemory), and the Data screen reading them back to
+				  show what is stored.
+
+				  Not 1C8F.1: there is no App Group. Nothing anywhere calls
+				  UserDefaults(suiteName:), so no default written here is
+				  readable by another process. Not AC6B.1: neither
+				  com.apple.configuration.managed nor
+				  com.apple.feedback.managed is touched. Not C56D.1, which only
+				  a third-party SDK may declare.
+				-->
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

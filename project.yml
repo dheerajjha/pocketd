@@ -23,6 +23,17 @@ targets:
     platform: iOS
     sources:
       - path: App/Sources
+      # Named as one file rather than adding App/Resources wholesale. That
+      # directory also holds Info.plist and the two .entitlements files, and
+      # copying those in would ship the entitlements as a readable resource and
+      # give the target a second Info.plist competing with the generated one.
+      #
+      # App Store Connect looks for the manifest at the root of the .app, which
+      # is where a plain resource copy puts it. Get this wrong and nothing
+      # fails locally — the app builds, installs and runs — and the first sign
+      # is ITMS-91053 rejecting the upload.
+      - path: App/Resources/PrivacyInfo.xcprivacy
+        buildPhase: resources
     info:
       path: App/Resources/Info.plist
       properties:

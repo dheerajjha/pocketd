@@ -413,10 +413,61 @@ private let sampleEvents = AnswerCard(
     }
 }
 
+/// The shape `AnswerCardBuilders.health` produces, with the longest figure the
+/// tool can put in a tile. `13.5 breaths/min` is the value that decides whether
+/// the strip works: it is nearly three times the width of a step count, and the
+/// tile shrinks it rather than breaking or truncating it.
+private let sampleHealth = AnswerCard(
+    source: "get_health_summary",
+    symbol: "bed.double",
+    title: "Sleep",
+    sections: [
+        .metrics(AnswerCard.Metrics(eyebrow: "Latest whole day", tiles: [
+            AnswerCard.Tile(value: "7 h 45 m", caption: "Sleep"),
+            AnswerCard.Tile(value: "13.5 breaths/min", caption: "Respiratory rate")
+        ])),
+        .facts(AnswerCard.Facts(eyebrow: "Against your own baseline", rows: [
+            AnswerCard.Fact(
+                label: "Sleep",
+                value: "on Wed, Sep 10 — 12% below your 28-day average of 8 h 48 m, below your usual range."
+            ),
+            AnswerCard.Fact(
+                label: "Respiratory rate",
+                value: "on Wed, Sep 10, against a 28-day average of 13.6 breaths/min — in your usual range."
+            )
+        ])),
+        .list(AnswerCard.Items(eyebrow: "Worth noting", items: [
+            AnswerCard.Item(text: "Highest sleep since May 2025.", symbol: "sparkles")
+        ])),
+        .note(AnswerCard.Note(
+            text: "Nothing came back for Respiratory rate. That can mean nothing has been recorded, or that Pocketd was not allowed to read it — iOS deliberately does not tell an app which, so neither can be ruled out.",
+            symbol: "questionmark.circle"
+        ))
+    ]
+)
+
+#Preview("Health") {
+    ScrollView {
+        VStack(spacing: 12) {
+            AnswerCardView(card: sampleHealth)
+            // The sentence that has to survive being drawn rather than
+            // narrated: it names both possibilities because iOS reports a
+            // refused read and an empty one identically.
+            AnswerCardView(card: .nothing(
+                "No sleep data came back from Health. That can mean nothing has been recorded, or that Pocketd was not allowed to read it — iOS deliberately does not tell an app which, so neither can be ruled out. Health permissions are under Settings > Privacy & Security > Health > Pocketd.",
+                title: "Sleep",
+                symbol: "bed.double"
+            ))
+        }
+        .padding()
+    }
+}
+
 #Preview("At accessibility3") {
     ScrollView {
         VStack(spacing: 12) {
             AnswerCardView(card: sampleEvents)
+            AnswerCardView(card: sampleHealth)
             AnswerCardView(card: AnswerCard(
                 symbol: "chart.bar",
                 title: "This week",

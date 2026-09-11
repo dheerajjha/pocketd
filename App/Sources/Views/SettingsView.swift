@@ -10,14 +10,6 @@ struct SettingsView: View {
     @State private var showingDataInspector = false
     @Environment(\.openURL) private var openURL
 
-    /// The display name of whatever is resident, for the sentence under the
-    /// personal-data switch. Falls back to the id: a model added through search
-    /// has no curated name, and naming it badly is better than not naming it.
-    private var loadedModelName: String {
-        guard let id = model.loadedModelID else { return "No model" }
-        return model.catalog.first { $0.id == id }?.displayName ?? id
-    }
-
     /// nil when the field is a usable port.
     private var portProblem: String? {
         guard !portText.isEmpty else { return "Enter a port." }
@@ -188,6 +180,11 @@ struct SettingsView: View {
                 Section {
                     Toggle("Read calendar and reminders", isOn: $model.personalDataToolsEnabled)
                     Toggle("Read health data", isOn: $model.healthToolsEnabled)
+                    if model.healthToolsEnabled, let note = model.healthCapabilityNote {
+                        Text(note)
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
                     if model.personalDataToolsEnabled {
                         // Above the permission warnings, because it outranks
                         // them: a model that will never call the tools makes
@@ -196,10 +193,26 @@ struct SettingsView: View {
                         // were the same word here until they were not, and the
                         // only way to make the switch mean what it looks like
                         // it means is to say which model is honouring it.
-                        if let note = model.personalDataToolGate.explanation(modelName: loadedModelName) {
-                            Text(note)
-                                .font(.footnote)
-                                .foregroundStyle(model.personalDataToolGate.isRefusal ? Color.orange : Color.secondary)
+                        //
+                        // One notice rather than a gate sentence and a budget
+                        // sentence, because those two can disagree about the
+                        // same registration and used to print both. See
+                        // `CapabilityNotice`.
+                        if let notice = model.capabilityNotice {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(notice.summary)
+                                    .font(.footnote)
+                                    .foregroundStyle(notice.isWarning ? Color.orange : Color.secondary)
+                                // Under the summary, which says what was
+                                // refused; each of these says what it would
+                                // cost and which window would carry it, and
+                                // that is the half a user can act on.
+                                ForEach(notice.shortfalls, id: \.self) { line in
+                                    Text(line)
+                                        .font(.footnote)
+                                        .foregroundStyle(.orange)
+                                }
+                            }
                         }
                         ForEach(PersonalDataEntity.allCases, id: \.self) { entity in
                             if let status = model.personalDataAuthorization[entity], !status.canRead {

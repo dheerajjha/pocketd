@@ -16,6 +16,7 @@ struct DataInspectorView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var audit = StoredDataAudit()
     @State private var pending: Pending?
     @State private var showAPIKey = false
@@ -62,6 +63,52 @@ struct DataInspectorView: View {
         }
     }
 
+    // MARK: - Measuring, and colours that survive both appearances
+
+    /// Whether the walk has landed. Every section below renders its own empty
+    /// state, and until this is false that empty state is a falsehood: the
+    /// first frame of this screen said "No models downloaded.", "Nothing left
+    /// over.", "Nothing cached." and, under the headline destructive control,
+    /// "There is nothing here left for this screen to delete." — on a phone
+    /// holding 4.63 GB across 37 files. `survey == nil` already tells "not
+    /// measured" from "measured, empty"; only the total was using it.
+    private var isMeasuring: Bool { audit.survey == nil }
+
+    private var measuringRow: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text("Still counting.").font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    /// The warning colour, rather than the system tint.
+    ///
+    /// `Color.orange` is meant for fills. As `.caption` and `.footnote` body
+    /// copy on the light grouped background it measures 2.20:1 against WCAG
+    /// AA's 4.5:1, so every warning on this screen reads clearly in dark mode
+    /// and is nearly invisible in light — invisible, too, to anyone developing
+    /// in dark. `StoredDataPresentationTests` asserts the ratios these
+    /// components actually achieve on both grounds.
+    private var warning: Color {
+        Self.adaptive(light: StoredDataPalette.warningOnLight, dark: StoredDataPalette.warningOnDark)
+    }
+
+    private var success: Color {
+        Self.adaptive(light: StoredDataPalette.successOnLight, dark: StoredDataPalette.successOnDark)
+    }
+
+    private static func adaptive(light: StoredDataColor, dark: StoredDataColor) -> Color {
+        Color(uiColor: UIColor { traits in
+            let chosen = traits.userInterfaceStyle == .dark ? dark : light
+            return UIColor(
+                red: CGFloat(chosen.red),
+                green: CGFloat(chosen.green),
+                blue: CGFloat(chosen.blue),
+                alpha: 1
+            )
+        })
+    }
+
     // MARK: - Summary
 
     private var summarySection: some View {
@@ -87,13 +134,13 @@ struct DataInspectorView: View {
                         systemImage: "exclamationmark.triangle"
                     )
                     .font(.footnote)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(warning)
                 }
             }
             if let freed = audit.lastFreed {
                 Label("\(freed) freed.", systemImage: "checkmark.circle")
                     .font(.footnote)
-                    .foregroundStyle(.green)
+                    .foregroundStyle(success)
             }
         } header: {
             Text("Everything Pocketd stores")
@@ -141,7 +188,9 @@ struct DataInspectorView: View {
 
     private var modelsSection: some View {
         Section {
-            if audit.models.isEmpty {
+            if isMeasuring {
+                measuringRow
+            } else if audit.models.isEmpty {
                 Text("No models downloaded.").foregroundStyle(.secondary).font(.footnote)
             }
             ForEach(audit.models) { row in
@@ -149,7 +198,7 @@ struct DataInspectorView: View {
                     HStack(alignment: .firstTextBaseline) {
                         Text(row.record.displayName).font(.subheadline)
                         if row.isLoaded {
-                            Circle().fill(.green).frame(width: 7, height: 7)
+                            Circle().fill(success).frame(width: 7, height: 7)
                                 .accessibilityLabel("In memory now")
                         }
                         Spacer()
@@ -161,7 +210,7 @@ struct DataInspectorView: View {
                     }
                     if row.isMissing {
                         Text("Listed as installed, and its file is not on disk.")
-                            .font(.caption).foregroundStyle(.orange)
+                            .font(.caption).foregroundStyle(warning)
                     }
                     Button("Delete", role: .destructive) { pending = .model(row.record) }
                         .buttonStyle(.borderless)
@@ -171,17 +220,20 @@ struct DataInspectorView: View {
                 .padding(.vertical, 2)
             }
             ForEach(audit.orphanedModelFiles) { orphan in
-                // Live download state, not the state of the last walk. The
-                // sheet can sit open while a download starts, and the file this
-                // row offers to delete is then the finished half of it.
-                let abandoned = orphan.isStillAbandoned(downloadingIDs: Set(model.downloads.keys))
+                // Live download state, not the state of the last walk, and
+                // from both doors rather than from this app's own map: the
+                // sheet can sit open while a download starts — including one a
+                // paired laptop started — and the file this row offers to
+                // delete is then the finished half of it.
+                let abandoned = orphan.isStillAbandoned(downloadingIDs: audit.downloadingIDs(model))
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(alignment: .firstTextBaseline) {
-                        Text(orphan.file.name).font(.system(.caption, design: .monospaced))
+                        Text(breakableIdentifier(orphan.file.name))
+                            .font(.system(.caption, design: .monospaced))
                         Spacer()
                         Text(bytes(orphan.file.byteCount)).font(.subheadline).monospacedDigit()
                     }
-                    Text(orphan.explanation).font(.caption).foregroundStyle(.orange)
+                    Text(orphan.explanation).font(.caption).foregroundStyle(warning)
                     if !abandoned {
                         Text("A download for this model is running, so this file is not stranded after all. It is left alone until the download finishes or is cancelled.")
                             .font(.caption).foregroundStyle(.secondary)
@@ -204,31 +256,35 @@ struct DataInspectorView: View {
 
     private var conversationsSection: some View {
         Section {
-            let summary = audit.conversations
-            LabeledContent("Conversations", value: "\(summary.readableCount)")
-            LabeledContent("Messages", value: "\(summary.messageCount)")
-            LabeledContent("Size") { Text(bytes(summary.byteCount)).monospacedDigit() }
-            if let oldest = summary.oldest, let newest = summary.newest {
-                LabeledContent("From", value: oldest.formatted(date: .abbreviated, time: .omitted))
-                LabeledContent("To", value: newest.formatted(date: .abbreviated, time: .omitted))
+            if isMeasuring {
+                measuringRow
+            } else {
+                let summary = audit.conversations
+                LabeledContent("Conversations", value: "\(summary.readableCount)")
+                LabeledContent("Messages", value: "\(summary.messageCount)")
+                LabeledContent("Size") { Text(bytes(summary.byteCount)).monospacedDigit() }
+                if let oldest = summary.oldest, let newest = summary.newest {
+                    LabeledContent("From", value: oldest.formatted(date: .abbreviated, time: .omitted))
+                    LabeledContent("To", value: newest.formatted(date: .abbreviated, time: .omitted))
+                }
+                if summary.unreadableCount > 0 {
+                    // These are the ones a naive delete leaves behind, so they
+                    // are named before the button rather than after it.
+                    Text("\(summary.unreadableCount) transcripts on disk cannot be opened by this build and do not appear in your history. They are still text you typed, and Delete below removes them too.")
+                        .font(.footnote)
+                        .foregroundStyle(warning)
+                }
+                if summary.remnantCount > 0 {
+                    // The size above counts these, so the screen says what they
+                    // are rather than letting the number be larger than the
+                    // conversation count explains.
+                    Text("\(summary.remnantCount) files here — \(bytes(summary.remnantBytes)) — are not transcripts. Saving writes each conversation to a temporary file first, and a process killed mid-write leaves one behind. They are in the size above and Delete removes them.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Button("Delete every conversation", role: .destructive) { pending = .allConversations }
+                    .disabled(summary.fileCount == 0 && summary.remnantCount == 0)
             }
-            if summary.unreadableCount > 0 {
-                // These are the ones a naive delete leaves behind, so they are
-                // named before the button rather than after it.
-                Text("\(summary.unreadableCount) transcripts on disk cannot be opened by this build and do not appear in your history. They are still text you typed, and Delete below removes them too.")
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
-            }
-            if summary.remnantCount > 0 {
-                // The size above counts these, so the screen says what they
-                // are rather than letting the number be larger than the
-                // conversation count explains.
-                Text("\(summary.remnantCount) files here — \(bytes(summary.remnantBytes)) — are not transcripts. Saving writes each conversation to a temporary file first, and a process killed mid-write leaves one behind. They are in the size above and Delete removes them.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            Button("Delete every conversation", role: .destructive) { pending = .allConversations }
-                .disabled(summary.fileCount == 0 && summary.remnantCount == 0)
         } header: {
             Text(StoredDataKind.conversations.title)
         } footer: {
@@ -241,8 +297,11 @@ struct DataInspectorView: View {
     @ViewBuilder
     private var partialDownloadsSection: some View {
         let area = audit.survey?.area(.partialDownloads) ?? StoredDataArea(kind: .partialDownloads)
+        let downloading = audit.downloadingIDs(model)
         Section {
-            if area.tally.isEmpty {
+            if isMeasuring {
+                measuringRow
+            } else if area.tally.isEmpty {
                 Text("Nothing left over.").font(.footnote).foregroundStyle(.secondary)
             } else {
                 LabeledContent("Left on disk") { Text(bytes(area.tally.byteCount)).monospacedDigit() }
@@ -251,7 +310,7 @@ struct DataInspectorView: View {
                 // person would think to look, and naming it is most of the
                 // point of reporting it.
                 ForEach(area.files.prefix(6)) { file in
-                    Text(file.path)
+                    Text(breakableIdentifier(file.path))
                         .font(.system(.caption2, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
@@ -260,8 +319,8 @@ struct DataInspectorView: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 Button("Delete unfinished downloads", role: .destructive) { pending = .partialDownloads }
-                    .disabled(!model.downloads.isEmpty)
-                if !model.downloads.isEmpty {
+                    .disabled(!downloading.isEmpty)
+                if !downloading.isEmpty {
                     Text("A download is running. One of the files above belongs to it.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
@@ -278,41 +337,88 @@ struct DataInspectorView: View {
     private var settingsSection: some View {
         Section {
             if model.configuration.requiresAuth {
-                HStack {
-                    Text("API key")
-                    Spacer()
-                    Text(showAPIKey ? model.configuration.apiKey : redactedSecret(model.configuration.apiKey))
-                        .font(.system(.caption, design: .monospaced))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .foregroundStyle(.secondary)
-                    Button(showAPIKey ? "Hide" : "Show") { showAPIKey.toggle() }
-                        .font(.caption)
-                        .accessibilityHint("Reveals the key other devices use to reach this phone")
-                }
+                apiKeyRow
+                // The only route off this screen to the whole key. Selection
+                // alone is not enough on a row that was truncating it.
+                Button("Copy the API key") { UIPasteboard.general.string = model.configuration.apiKey }
                 Button("Replace the API key", role: .destructive) { pending = .apiKey }
             } else {
                 Label("No API key is required, so anything on your network can use this model.", systemImage: "exclamationmark.triangle")
                     .font(.footnote)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(warning)
             }
+            // A stack rather than `LabeledContent`, because `LabeledContent`
+            // puts the value under the label as soon as it does not fit and
+            // then keeps it in the trailing alignment the trailing track
+            // wanted — ragged-left text under a left-aligned key. Both halves
+            // start at the same edge at every text size instead.
             ForEach(audit.defaults) { row in
-                LabeledContent {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(breakableIdentifier(row.key))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(row.isSystem ? .secondary : .primary)
                     Text(row.summary)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.trailing)
-                } label: {
-                    Text(row.key)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(row.isSystem ? .secondary : .primary)
                 }
+                .padding(.vertical, 1)
+                .accessibilityElement(children: .combine)
             }
         } header: {
             Text(StoredDataKind.preferences.title)
         } footer: {
             Text("Every key in this app's preferences file, listed as it is stored — the app's own first, anything iOS wrote after. \(bytes(audit.survey?.area(.preferences).tally.byteCount ?? 0)) in all. \(StoredDataKind.preferences.disposal.limitation ?? "")")
         }
+    }
+
+    /// The key, readable at every text size.
+    ///
+    /// `Show` is the only control on this screen whose whole function is to
+    /// reveal a string, and in a fixed single-line row at `.accessibility3` it
+    /// revealed six characters of a thirty-five character key — fewer than the
+    /// nine the redaction it replaced was already showing. Stacking when the
+    /// type is large, and wrapping rather than truncating while shown, are what
+    /// make the control do its job.
+    @ViewBuilder
+    private var apiKeyRow: some View {
+        if typeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("API key")
+                    Spacer()
+                    apiKeyToggle
+                }
+                apiKeyValue
+            }
+        } else {
+            HStack {
+                Text("API key")
+                Spacer()
+                apiKeyValue
+                apiKeyToggle
+            }
+        }
+    }
+
+    private var apiKeyToggle: some View {
+        Button(showAPIKey ? "Hide" : "Show") { showAPIKey.toggle() }
+            .font(.caption)
+            .accessibilityHint("Reveals the key other devices use to reach this phone")
+    }
+
+    private var apiKeyValue: some View {
+        // No limit while it is shown, so a key that does not fit wraps instead
+        // of losing characters the redaction was already showing.
+        let limit: Int? = showAPIKey ? nil : 1
+        return Text(showAPIKey
+            ? breakableIdentifier(model.configuration.apiKey)
+            : redactedSecret(model.configuration.apiKey))
+            .font(.system(.caption, design: .monospaced))
+            .lineLimit(limit)
+            .truncationMode(.middle)
+            .multilineTextAlignment(typeSize.isAccessibilitySize ? .leading : .trailing)
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
     }
 
     // MARK: - Permissions
@@ -326,7 +432,7 @@ struct DataInspectorView: View {
                         Spacer()
                         Text(row.state.label)
                             .font(.caption)
-                            .foregroundStyle(row.state.isConcern ? Color.orange : Color.secondary)
+                            .foregroundStyle(row.state.isConcern ? warning : Color.secondary)
                     }
                     if let note = row.note {
                         Text(note).font(.caption).foregroundStyle(.secondary)
@@ -334,7 +440,16 @@ struct DataInspectorView: View {
                 }
                 .padding(.vertical, 2)
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel("\(row.title): \(row.state.label)")
+                // With the note folded in. Combining derives a label from the
+                // children and this override replaces it outright, so the
+                // sentence that makes each row honest — including the one
+                // saying iOS never reports whether a Health read was allowed —
+                // had no route out to VoiceOver at all.
+                .accessibilityLabel(permissionAnnouncement(
+                    title: row.title,
+                    state: row.state.label,
+                    note: row.note
+                ))
             }
             Button("Open iOS Settings") {
                 if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
@@ -355,7 +470,9 @@ struct DataInspectorView: View {
     private var networkCacheSection: some View {
         let area = audit.survey?.area(.networkCache) ?? StoredDataArea(kind: .networkCache)
         Section {
-            if area.tally.isEmpty {
+            if isMeasuring {
+                measuringRow
+            } else if area.tally.isEmpty {
                 Text("Nothing cached.").font(.footnote).foregroundStyle(.secondary)
             } else {
                 LabeledContent("Kept by the system") { Text(bytes(area.tally.byteCount)).monospacedDigit() }
@@ -418,7 +535,7 @@ struct DataInspectorView: View {
             }
             if area.kind == .other {
                 ForEach(area.files) { file in
-                    Text(file.path)
+                    Text(breakableIdentifier(file.path))
                         .font(.system(.caption2, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
@@ -445,55 +562,20 @@ struct DataInspectorView: View {
 
     /// The confirmation dialog's body and the footer are the same string on
     /// purpose, and both are built from the plan the delete itself uses. The
-    /// footer used to be written by hand from a total that summed every
-    /// deletable area — including unfinished downloads, which the delete skips
-    /// whenever one is running — so with a transfer in flight it promised
-    /// gigabytes it then deliberately left alone.
+    /// sentences are assembled in `DeletionNarrative` rather than here, so the
+    /// promise this control makes is somewhere a test can read it — the version
+    /// written inline appended the preferences file to a sentence reserved for
+    /// bytes iOS owns, three rows under the button that rewrites it.
     private var everythingFooter: String {
-        let plan = audit.deletionPlan(model)
-        var sentences: [String] = []
-
-        if plan.included.isEmpty {
-            sentences.append("There is nothing here left for this screen to delete.")
-        } else {
-            sentences.append("Removes \(bytes(plan.byteCount)): \(list(plan.included.map(\.name))).")
-        }
-        for entry in plan.skipped {
-            guard let reason = entry.skippedBecause else { continue }
-            sentences.append("It leaves \(entry.name) — \(bytes(entry.byteCount)) — because \(reason).")
-        }
-        if plan.included.contains(where: { $0.name == DeletionPlan.EntryName.networkCache }) {
-            // The "freed" line afterwards is measured from the container, so
-            // it will fall short of the number above by whatever iOS has not
-            // released yet. Better said here than left as an unexplained gap.
-            sentences.append("iOS owns the cache files themselves, so the last of that number can take a while to come back.")
-        }
-        sentences.append("The API key is left alone, so devices you have already paired keep working — replace it above if that is what you want.")
-
-        let systemOwned = audit.systemOwnedAreas.map(\.kind.title)
-        let preferences = audit.survey?.area(.preferences)
-        let keptByIOS = systemOwned + ((preferences?.tally.isEmpty == false) ? [StoredDataKind.preferences.title] : [])
-        if !keptByIOS.isEmpty {
-            sentences.append("It does not touch \(list(keptByIOS)) — nothing inside this app can, and deleting the app is the only thing that removes them.")
-        }
-        let unnamed = audit.unnamedAreas
-        if !unnamed.isEmpty {
-            let size = bytes(unnamed.reduce(0) { $0 + $1.tally.byteCount })
-            // Deliberately not folded into the sentence above. These bytes are
-            // in this app's own folder and it could remove them; it will not,
-            // because it cannot say what they are, and that is a different
-            // claim from "nothing inside this app can".
-            sentences.append("It also leaves \(list(unnamed.map(\.kind.title))) — \(size) this screen has no name for and so will not delete.")
-        }
-        return sentences.joined(separator: " ")
-    }
-
-    /// "a, b and c", because a footer that says "a, b, c" reads like a
-    /// truncated list on the screen whose subject is completeness.
-    private func list(_ items: [String]) -> String {
-        guard let last = items.last else { return "" }
-        guard items.count > 1 else { return last }
-        return items.dropLast().joined(separator: ", ") + " and " + last
+        DeletionNarrative.sentences(
+            plan: audit.deletionPlan(model),
+            measured: !isMeasuring,
+            systemOwnedTitles: audit.systemOwnedAreas.map(\.kind.title),
+            preferencesBytes: audit.survey?.area(.preferences).tally.byteCount ?? 0,
+            unnamedTitles: audit.unnamedAreas.map(\.kind.title),
+            unnamedBytes: audit.unnamedAreas.reduce(0) { $0 + $1.tally.byteCount }
+        )
+        .joined(separator: " ")
     }
 
     // MARK: - Confirmation
@@ -590,8 +672,7 @@ struct DataInspectorView: View {
         case .apiKey:
             await audit.regenerateAPIKey(model)
         case let .model(record):
-            await model.delete(record)
-            await audit.refresh(model)
+            await audit.deleteModel(record, model: model)
         case let .orphan(row):
             await audit.deleteOrphan(row, model: model)
         case .everything:

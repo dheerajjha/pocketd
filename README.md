@@ -335,6 +335,22 @@ listener on a kernel-assigned port; calling handlers directly would pass while
 the SSE framing and the status codes were wrong, which is exactly the layer
 third-party clients depend on.
 
+## Privacy
+
+[**docs/PRIVACY.md**](docs/PRIVACY.md) — short, and checkable against this
+source tree rather than taken on trust.
+
+No account, no analytics, no crash reporting, no telemetry. One host is ever
+contacted, `huggingface.co`, and only to search for or download a model.
+Inference is local; the HTTP server only answers. Health, calendar and reminder
+data are read on-device and are refused to network callers — including the chat
+page the phone itself serves — by the origin gate in `RequestOrigin.swift`.
+
+The page also spells out the parts that are less tidy: the Bonjour broadcast,
+the hand-off to Safari, and the system pasteboard. The app's own Data screen
+makes the same argument interactively, by walking the container and accounting
+for every byte in it.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

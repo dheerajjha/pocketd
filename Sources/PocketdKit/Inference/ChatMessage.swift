@@ -41,6 +41,18 @@ public struct ChatMessage: Sendable, Codable, Equatable {
     public static func assistant(_ content: String) -> ChatMessage { .init(role: .assistant, content: content) }
 }
 
+/// Decodes an `AnswerCard`, or nothing, without taking the message down with it.
+///
+/// Applied per element so one bad card in a message does not discard the
+/// message's other cards alongside it.
+private struct LossyCard: Decodable {
+    let card: AnswerCard?
+
+    init(from decoder: any Decoder) throws {
+        card = try? AnswerCard(from: decoder)
+    }
+}
+
 extension ChatMessage {
     private enum CodingKeys: String, CodingKey {
         case role, content, images, cards
@@ -60,7 +72,20 @@ extension ChatMessage {
         role = try container.decode(Role.self, forKey: .role)
         content = try container.decode(String.self, forKey: .content)
         images = try container.decodeIfPresent([Data].self, forKey: .images) ?? []
-        cards = try container.decodeIfPresent([AnswerCard].self, forKey: .cards) ?? []
+        // Lossy on purpose, and the asymmetry with `AnswerCard`'s own strictness
+        // is the point. Inside a card, a section of a known kind whose body will
+        // not decode throws, so a bug surfaces in a test instead of hiding. At
+        // this boundary the same throw costs the user their entire conversation:
+        // `ConversationStore.all()` skips a file it cannot decode, so one
+        // unreadable card took the whole transcript — messages, questions and
+        // answers — out of the history list. Measured, not theorised: a probe
+        // with a single malformed section recovered zero conversations.
+        //
+        // The messages are the part that cannot be recreated. A card is a
+        // rendering of a tool result and is worth exactly nothing by
+        // comparison, so it is the card that gets dropped.
+        cards = (try? container.decodeIfPresent([LossyCard].self, forKey: .cards))?
+            .compactMap(\.card) ?? []
     }
 
     public func encode(to encoder: any Encoder) throws {

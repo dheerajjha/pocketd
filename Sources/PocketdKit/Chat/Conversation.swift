@@ -84,6 +84,22 @@ public actor ConversationStore {
         )
         let directory = support.appendingPathComponent("Conversations", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        // Kept out of iCloud Backup, and this is a policy obligation rather
+        // than a preference. Once the assistant can read Health, a transcript
+        // holds resting heart rate, HRV and sleep — and Apple's HealthKit terms
+        // forbid storing that in iCloud. `ModelStore` has excluded its own
+        // directory since it was written, with a comment explaining why; the
+        // same reasoning was never applied one directory over, to the bytes
+        // that are the ones a user cannot re-download.
+        //
+        // Set on every call rather than only at creation: every install that
+        // already exists has this directory, and would otherwise keep backing
+        // it up forever.
+        var mutable = directory
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? mutable.setResourceValues(values)
         return directory
     }
 
