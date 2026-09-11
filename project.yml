@@ -34,6 +34,11 @@ targets:
       # is ITMS-91053 rejecting the upload.
       - path: App/Resources/PrivacyInfo.xcprivacy
         buildPhase: resources
+      # Named explicitly for the same reason, and it must be the catalogue
+      # rather than the PNG: an app icon copied in as a loose resource is not
+      # an app icon, it is a file in the bundle, and the home screen shows the
+      # grey placeholder.
+      - path: App/Resources/Assets.xcassets
     info:
       path: App/Resources/Info.plist
       properties:
@@ -96,6 +101,7 @@ targets:
           devices on your network. Everything stays on your local network.
     settings:
       base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PRODUCT_BUNDLE_IDENTIFIER: dev.pocketd.app
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
