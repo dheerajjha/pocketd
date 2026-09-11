@@ -180,6 +180,27 @@ struct SettingsView: View {
                     Text("A loaded model holds its weights in memory the whole time. Backgrounding closes the socket anyway, so releasing it there costs nothing and stops iOS killing the app while it is away. Idle offload is this phone's keep_alive: the next request loads the model again, which takes a few seconds.")
                 }
 
+                // Next to the data inspector on purpose: this is the same
+                // question that screen answers — what is here and where does
+                // it go — and someone who came to Settings suspicious will be
+                // looking in this neighbourhood.
+                Section {
+                    Toggle("Share anonymous usage", isOn: Binding(
+                        // Undecided reads as off because undecided IS off:
+                        // nothing is sent until someone says yes, so a switch
+                        // showing on would be describing a state that does not
+                        // exist. Someone who skipped the intro finds this
+                        // already off, and turning it on is their first
+                        // decision rather than a correction of ours.
+                        get: { model.analyticsConsent.permitsSending },
+                        set: { model.setAnalyticsConsent($0 ? .granted : .refused) }
+                    ))
+                } header: {
+                    Text("Usage")
+                } footer: {
+                    Text("Sent: which screens get opened, which models are downloaded and whether they load, how fast generation runs, and whether another device connected. Never sent: anything you type, anything the model says, anything read from Health, Calendar or Reminders, your files, your network addresses or your location. Turning this off stops it and discards anything not yet sent.")
+                }
+
                 Section {
                     Button("See and delete everything Pocketd stores") {
                         showingDataInspector = true
