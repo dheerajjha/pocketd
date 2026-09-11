@@ -21,6 +21,13 @@ struct OnboardingView: View {
 
     @State private var step = 0
     @State private var chosen: ModelRecord?
+    /// The toggle's position, which is not the same thing as consent.
+    ///
+    /// On by default, but `AnalyticsConsent` stays `.undecided` — and so sends
+    /// nothing — until this screen has been passed. Someone who taps Skip on
+    /// screen one never sees the sentence, so they never grant anything, and
+    /// that is the right outcome even though it costs the data.
+    @State private var shareUsage = true
 
     private var lastStep: Int { 4 }
 
@@ -40,7 +47,14 @@ struct OnboardingView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 24)
                 .padding(.top, 8)
-                .padding(.bottom, 24)
+                // 24 was enough until the consent screen, which is the tallest
+                // in the intro: on a 4.7-inch phone its last rows ran into the
+                // page dots, leaving text half-drawn behind them. Enough room
+                // that the tail scrolls clear of the footer instead of fighting
+                // it. Measured on an iPhone SE rather than guessed — the
+                // toggle still sits above the fold there, which is the part
+                // that has to be true for an on-by-default switch to be honest.
+                .padding(.bottom, 56)
             }
             footer
         }
@@ -83,7 +97,7 @@ struct OnboardingView: View {
             .accessibilityLabel("Step \(step + 1) of \(lastStep + 1)")
 
             if step < 3 {
-                Button(action: { step += 1 }) {
+                Button(action: { advance() }) {
                     Text(continueTitle)
                         .frame(maxWidth: .infinity)
                 }
@@ -144,26 +158,56 @@ struct OnboardingView: View {
         }
     }
 
+    /// The promise, the exceptions to it, and the one control — in that order.
+    ///
+    /// Order is deliberate and the toggle is last on purpose: a switch above
+    /// the explanation makes people decide before they have read anything.
+    ///
+    /// The headline used to be "Nothing leaves this phone," which was already
+    /// slightly overstated before analytics existed — model downloads come
+    /// from Hugging Face, and they did in 1.0.0 too. The store listing was
+    /// corrected when someone read it closely; this screen was not, because
+    /// nobody was looking at it. So this is not only absorbing telemetry, it
+    /// is repairing a claim that could not survive being checked.
+    ///
+    /// "Your words never leave this phone" is the strongest sentence that is
+    /// literally true, and it is about the thing people actually worry about.
     private var privacyAndNetwork: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
             eyebrow("Where your words go")
-            title("Nothing leaves this phone.")
+            title("Your words never leave this phone.")
             body("""
-            No account, no cloud, no analytics. The model runs on this device \
-            and your conversations stay on it.
+            What you type, what the model says back, and anything it reads from \
+            your Health, Calendar or Reminders all stay on this device. The model \
+            runs here. There is no account and no cloud to sync to.
             """)
-            // The counterweight, said in the same breath rather than buried in
-            // Settings. "Private" and "reachable over the network" are both
-            // true here, and only saying the first one would be a half-truth
-            // about the entire point of the app.
+            body("Two things do use the network, and you can see both:")
+
             calloutRow(
-                icon: "key.fill",
-                text: "Serving other devices means they reach this phone over your network, so pocketd requires an API key by default."
+                icon: "arrow.down.circle",
+                text: "Models are downloaded from Hugging Face, when you choose one."
             )
+            // "on real phones" is doing the honest work here: it says why we
+            // want this, and the reason is true — model loading could not be
+            // tested across real hardware before shipping.
             calloutRow(
-                icon: "list.bullet.rectangle",
-                text: "Every request that arrives is listed on the Server tab, with where it came from."
+                icon: "chart.bar",
+                text: "Anonymous usage counts tell us which features get opened and whether models load properly on real phones. Never your words, never the model's, never your location."
             )
+
+            // Grouped tightly so the caption travels with the control rather
+            // than trailing a screen-height away from it. On a 4.7-inch phone
+            // the two were separated by the fold, which left the caption
+            // half-drawn behind the page dots — the control has to be the
+            // thing that reads as finished.
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle("Share anonymous usage", isOn: $shareUsage)
+                    .font(.subheadline.weight(.medium))
+                Text("You can change this any time in Settings.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.top, 2)
         }
     }
 
@@ -436,6 +480,15 @@ struct OnboardingView: View {
         case count - 1: return "Most capable"
         default: return "Balanced"
         }
+    }
+
+    /// Moves on, and commits the analytics decision when the screen carrying it
+    /// has actually been read past.
+    private func advance() {
+        if step == 2 {
+            model.setAnalyticsConsent(shareUsage ? .granted : .refused)
+        }
+        step += 1
     }
 
     private func leave(to tab: AppTab) {

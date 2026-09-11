@@ -84,6 +84,35 @@ final class AppModel {
 
     func transfer(for id: String) -> ModelTransfer? { transfers[id] }
 
+    // MARK: Analytics consent
+
+    /// Whether anonymous usage counts may be sent, as decided by the person
+    /// holding the phone.
+    ///
+    /// Starts `.undecided` and stays there until someone is actually shown the
+    /// sentence explaining it, which happens on the third onboarding screen.
+    /// Nothing is sent while undecided — so a user who taps Skip before
+    /// reaching that screen produces no analytics at all, which is the correct
+    /// outcome even though it costs us the data.
+    private(set) var analyticsConsent: AnalyticsConsent = {
+        let stored = UserDefaults.standard.string(forKey: Keys.analyticsConsent)
+        return stored.flatMap(AnalyticsConsent.init(rawValue:)) ?? .undecided
+    }()
+
+    func setAnalyticsConsent(_ consent: AnalyticsConsent) {
+        guard consent != analyticsConsent else { return }
+        analyticsConsent = consent
+        UserDefaults.standard.set(consent.rawValue, forKey: Keys.analyticsConsent)
+        // Refusing has to do more than stop the tap. Anything queued and not
+        // yet flushed goes, and the identifier with it.
+        if !consent.permitsSending { analytics.stopAndForget() }
+    }
+
+    /// Where events go. `NoAnalytics` until the SDK is wired, and `NoAnalytics`
+    /// forever in tests — a type that has no code capable of transmitting,
+    /// rather than a flag that says not to.
+    private(set) var analytics: any AnalyticsSink = NoAnalytics()
+
 #if DEBUG
     /// Seeds transfer states for previews.
     ///
@@ -142,6 +171,7 @@ final class AppModel {
         static let personalDataTools = "pocketd.personalDataTools"
         static let healthTools = "pocketd.healthTools"
         static let completedOnboarding = "pocketd.completedOnboarding"
+        static let analyticsConsent = "pocketd.analyticsConsent"
     }
 
     init() {
