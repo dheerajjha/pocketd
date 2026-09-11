@@ -170,7 +170,10 @@ final class AppModel {
     }
 
     func bootstrap() async {
-        let governor = DeviceGovernor(batteryFloor: configuration.pauseBelowBatteryLevel) { [weak self] condition in
+        let governor = DeviceGovernor(
+            batteryFloor: configuration.pauseBelowBatteryLevel,
+            tolerance: configuration.thermalTolerance
+        ) { [weak self] condition in
             guard let self else { return }
             self.condition = condition
             Task { await self.server.setCondition(condition) }
@@ -298,6 +301,7 @@ final class AppModel {
         configuration = new
         // The context limit moves the memory ceiling, so every fit badge and
         // the download gate have to be recomputed against the new one.
+        governor?.updateThermalTolerance(new.thermalTolerance)
         budget.servedContextTokens = new.maxContextTokens
         await store.updateBudget(budget)
         await engine.updateDefaultSampling(new.sampling)

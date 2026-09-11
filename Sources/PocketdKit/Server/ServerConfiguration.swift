@@ -61,6 +61,13 @@ public struct ServerConfiguration: Sendable, Equatable, Codable {
     /// 1.0 models that small fall into loops often enough that "correcting"
     /// this to the documented default would be a visible regression sold as a
     /// bug fix. It is a setting now, so anyone who disagrees can move it.
+    /// How hot this phone may get before it stops answering.
+    ///
+    /// Beside `pauseBelowBatteryLevel` because they are the same kind of
+    /// decision: both trade the device's wellbeing against staying reachable,
+    /// and only the person holding it knows which way that should go today.
+    public var thermalTolerance: ThermalTolerance = .pausesWhenHot
+
     public var sampling: SamplingParameters = {
         var shipped = SamplingParameters.default
         shipped.repeatPenalty = 1.1

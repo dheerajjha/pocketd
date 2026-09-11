@@ -113,6 +113,11 @@ struct SettingsView: View {
                     // in Settings". Until now there was no such control
                     // anywhere, so the one remedy the app offered below 15%
                     // battery was unreachable.
+                    Picker("Stop serving when hot", selection: $draft.thermalTolerance) {
+                        ForEach(ThermalTolerance.allCases) { tolerance in
+                            Text(tolerance.title).tag(tolerance)
+                        }
+                    }
                     Stepper(
                         draft.pauseBelowBatteryLevel <= 0
                             ? "Stop serving below: never"
@@ -124,7 +129,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Device")
                 } footer: {
-                    Text("Generating drains the battery fast. Below this level the server keeps listening but answers 503 with a reason, so a client can wait rather than assume the phone has gone. Charging exempts it.")
+                    Text("Generating drains the battery fast. Below this level the server keeps listening but answers 503 with a reason, so a client can wait rather than assume the phone has gone. Charging exempts it.\n\nRaising the heat limit does not make the phone faster — iOS throttles the processor itself once it is hot, so the server keeps answering, slowly. At the very hottest level iOS may close the app, and no setting here can stop that.")
                 }
 
                 Section {

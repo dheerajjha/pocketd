@@ -286,7 +286,7 @@ struct GovernorTests {
     @Test("a serious thermal state stops serving")
     func hot() {
         #expect(ServeCondition.evaluate(
-            thermalIsSevere: true, thermalIsElevated: false,
+            thermal: .serious,
             batteryLevel: 0.9, charging: true, floor: floor, current: .ok
         ) == .thermal)
     }
@@ -297,12 +297,12 @@ struct GovernorTests {
         // sitting at the boundary would otherwise flap every few seconds, which
         // is worse for a client than staying down.
         #expect(ServeCondition.evaluate(
-            thermalIsSevere: false, thermalIsElevated: true,
+            thermal: .fair,
             batteryLevel: 0.9, charging: true, floor: floor, current: .thermal
         ) == .thermal)
 
         #expect(ServeCondition.evaluate(
-            thermalIsSevere: false, thermalIsElevated: false,
+            thermal: .nominal,
             batteryLevel: 0.9, charging: true, floor: floor, current: .thermal
         ) == .ok)
     }
@@ -310,13 +310,13 @@ struct GovernorTests {
     @Test("a flat battery stops serving, and charging exempts it")
     func battery() {
         #expect(ServeCondition.evaluate(
-            thermalIsSevere: false, thermalIsElevated: false,
+            thermal: .nominal,
             batteryLevel: 0.10, charging: false, floor: floor, current: .ok
         ) == .battery)
 
         // Plugged in, the phone is not going flat, so the floor does not apply.
         #expect(ServeCondition.evaluate(
-            thermalIsSevere: false, thermalIsElevated: false,
+            thermal: .nominal,
             batteryLevel: 0.10, charging: true, floor: floor, current: .ok
         ) == .ok)
     }
@@ -325,12 +325,12 @@ struct GovernorTests {
     func batteryHysteresis() {
         // Exactly at the floor is not recovery.
         #expect(ServeCondition.evaluate(
-            thermalIsSevere: false, thermalIsElevated: false,
+            thermal: .nominal,
             batteryLevel: 0.15, charging: false, floor: floor, current: .battery
         ) == .battery)
 
         #expect(ServeCondition.evaluate(
-            thermalIsSevere: false, thermalIsElevated: false,
+            thermal: .nominal,
             batteryLevel: 0.20, charging: false, floor: floor, current: .battery
         ) == .ok)
     }
@@ -340,7 +340,7 @@ struct GovernorTests {
         // UIDevice reports -1 when monitoring is off or unavailable. Reading
         // that as "below the floor" would refuse every request on a simulator.
         #expect(ServeCondition.evaluate(
-            thermalIsSevere: false, thermalIsElevated: false,
+            thermal: .nominal,
             batteryLevel: -1, charging: false, floor: floor, current: .ok
         ) == .ok)
     }
@@ -348,8 +348,70 @@ struct GovernorTests {
     @Test("thermal outranks battery")
     func thermalWins() {
         #expect(ServeCondition.evaluate(
-            thermalIsSevere: true, thermalIsElevated: false,
+            thermal: .serious,
             batteryLevel: 0.05, charging: false, floor: floor, current: .ok
         ) == .thermal)
+    }
+}
+
+@Suite("Thermal tolerance")
+struct ThermalToleranceTests {
+    private let floor = 0.15
+
+    private func condition(
+        _ thermal: ThermalLevel,
+        _ tolerance: ThermalTolerance,
+        current: ServeCondition = .ok
+    ) -> ServeCondition {
+        ServeCondition.evaluate(
+            thermal: thermal, tolerance: tolerance,
+            batteryLevel: 0.9, charging: true, floor: floor, current: current
+        )
+    }
+
+    @Test("the default is what the app did before this was a choice")
+    func defaultMatchesTheOldBehaviour() {
+        #expect(condition(.nominal, .pausesWhenHot) == .ok)
+        #expect(condition(.fair, .pausesWhenHot) == .ok)
+        #expect(condition(.serious, .pausesWhenHot) == .thermal)
+        #expect(condition(.critical, .pausesWhenHot) == .thermal)
+    }
+
+    @Test("the wider tolerance keeps serving through hot, but not through critical")
+    func onlyCritical() {
+        #expect(condition(.serious, .pausesOnlyWhenCritical) == .ok)
+        #expect(condition(.critical, .pausesOnlyWhenCritical) == .thermal)
+    }
+
+    @Test("never means never, including at critical")
+    func never() {
+        for level in ThermalLevel.allCases {
+            #expect(condition(level, .never) == .ok, "\(level) should still serve")
+        }
+    }
+
+    @Test("hysteresis moves with the threshold instead of being pinned to fair")
+    func hysteresisFollowsTheSetting() {
+        // The old rule hard-coded "fair is not cool enough to resume". With a
+        // threshold of critical, the step below is serious — resuming the
+        // moment it drops out of critical would flap exactly the way the
+        // original rule existed to prevent.
+        #expect(condition(.serious, .pausesOnlyWhenCritical, current: .thermal) == .thermal)
+        #expect(condition(.fair, .pausesOnlyWhenCritical, current: .thermal) == .ok)
+
+        #expect(condition(.fair, .pausesWhenHot, current: .thermal) == .thermal)
+        #expect(condition(.nominal, .pausesWhenHot, current: .thermal) == .ok)
+    }
+
+    @Test("heat tolerance does not exempt a flat battery")
+    func batteryStillApplies() {
+        // Two independent reasons to stop. Overriding one must not silently
+        // override the other, or a phone set to "never pause for heat" runs
+        // itself flat.
+        let flat = ServeCondition.evaluate(
+            thermal: .critical, tolerance: .never,
+            batteryLevel: 0.05, charging: false, floor: floor, current: .ok
+        )
+        #expect(flat == .battery)
     }
 }

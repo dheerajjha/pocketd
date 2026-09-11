@@ -37,6 +37,55 @@ public enum ServeCondition: String, Sendable, Codable, Equatable {
     }
 }
 
+/// How hot the device says it is.
+///
+/// Mirrors `ProcessInfo.ThermalState` so the decision stays a pure function the
+/// tests can drive — the alternative is a rule that can only be exercised by
+/// physically heating a phone.
+public enum ThermalLevel: Int, Sendable, Codable, Comparable, CaseIterable {
+    case nominal, fair, serious, critical
+
+    public static func < (a: ThermalLevel, b: ThermalLevel) -> Bool { a.rawValue < b.rawValue }
+}
+
+/// How hot this phone is allowed to get before it stops answering.
+///
+/// A setting rather than a constant because the right answer depends on things
+/// the app cannot see: a phone on a charger in a cool room can sit at `serious`
+/// for an hour without trouble, and pausing there is a worse outcome than the
+/// heat. A phone in a pocket in July is a different question.
+///
+/// What an override does NOT do, and the Settings copy says so: it does not make
+/// the phone faster. iOS throttles the CPU and GPU itself at `serious` and
+/// `critical`, so overriding buys you a server that keeps answering slowly
+/// rather than one that says why it stopped. And at `critical` iOS may
+/// terminate the app outright, which no setting here can prevent.
+public enum ThermalTolerance: String, Sendable, Codable, CaseIterable, Identifiable {
+    /// The default, and what the app did before this was a choice.
+    case pausesWhenHot
+    case pausesOnlyWhenCritical
+    case never
+
+    public var id: String { rawValue }
+
+    /// The level at or above which serving stops, or nil to never stop for heat.
+    var pausesAtOrAbove: ThermalLevel? {
+        switch self {
+        case .pausesWhenHot: .serious
+        case .pausesOnlyWhenCritical: .critical
+        case .never: nil
+        }
+    }
+
+    public var title: String {
+        switch self {
+        case .pausesWhenHot: "When the phone is hot"
+        case .pausesOnlyWhenCritical: "Only when it is very hot"
+        case .never: "Never"
+        }
+    }
+}
+
 public extension ServeCondition {
     /// Whether the device should be serving, given what the sensors say.
     ///
@@ -49,16 +98,19 @@ public extension ServeCondition {
     /// between serving and refusing every few seconds, which is worse for a
     /// client than staying down until it genuinely recovers.
     static func evaluate(
-        thermalIsSevere: Bool,
-        thermalIsElevated: Bool,
+        thermal: ThermalLevel,
+        tolerance: ThermalTolerance = .pausesWhenHot,
         batteryLevel: Double,
         charging: Bool,
         floor: Double,
         current: ServeCondition
     ) -> ServeCondition {
-        if thermalIsSevere { return .thermal }
-        // Once hot, "fair" is not yet cool enough to resume.
-        if current == .thermal, thermalIsElevated { return .thermal }
+        if let pauseAt = tolerance.pausesAtOrAbove {
+            if thermal >= pauseAt { return .thermal }
+            // Once hot, one step below the pause point is not yet cool enough
+            // to resume.
+            if current == .thermal, thermal.rawValue >= pauseAt.rawValue - 1 { return .thermal }
+        }
 
         // A charging phone is not going flat, so the floor does not apply.
         if !charging, batteryLevel >= 0 {

@@ -1,4 +1,18 @@
 import Foundation
+
+extension ThermalLevel {
+    /// `ProcessInfo.ThermalState` is not `Comparable` and is not available to
+    /// the package, so the mapping happens here, once.
+    init(_ state: ProcessInfo.ThermalState) {
+        switch state {
+        case .nominal: self = .nominal
+        case .fair: self = .fair
+        case .serious: self = .serious
+        case .critical: self = .critical
+        @unknown default: self = .critical
+        }
+    }
+}
 import PocketdKit
 #if canImport(UIKit)
 import UIKit
@@ -15,9 +29,15 @@ final class DeviceGovernor {
     private var observers: [NSObjectProtocol] = []
     private let onChange: (ServeCondition) -> Void
     private var batteryFloor: Double
+    private var tolerance: ThermalTolerance
 
-    init(batteryFloor: Double, onChange: @escaping (ServeCondition) -> Void) {
+    init(
+        batteryFloor: Double,
+        tolerance: ThermalTolerance = .pausesWhenHot,
+        onChange: @escaping (ServeCondition) -> Void
+    ) {
         self.batteryFloor = batteryFloor
+        self.tolerance = tolerance
         self.onChange = onChange
     }
 
@@ -45,6 +65,15 @@ final class DeviceGovernor {
         evaluate()
     }
 
+    /// Re-evaluates immediately, so a phone already paused for heat starts
+    /// answering the moment the tolerance is widened rather than at the next
+    /// thermal notification — which on a device that has settled may be a long
+    /// time coming.
+    func updateThermalTolerance(_ tolerance: ThermalTolerance) {
+        self.tolerance = tolerance
+        evaluate()
+    }
+
     func stop() {
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers = []
@@ -53,8 +82,8 @@ final class DeviceGovernor {
     private func evaluate() {
         let thermal = ProcessInfo.processInfo.thermalState
         let next = ServeCondition.evaluate(
-            thermalIsSevere: thermal == .serious || thermal == .critical,
-            thermalIsElevated: thermal == .fair,
+            thermal: ThermalLevel(thermal),
+            tolerance: tolerance,
             batteryLevel: Self.currentBatteryLevel(),
             charging: Self.isCharging(),
             floor: batteryFloor,
