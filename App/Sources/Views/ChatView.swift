@@ -386,8 +386,15 @@ private struct ChatComposer: View {
             } else {
                 Button("Send", systemImage: "arrow.up.circle.fill") { model.send() }
                     .labelStyle(.iconOnly)
+                    // whitespacesAndNewlines, matching `send()` exactly.
+                    // `.whitespaces` does not include newlines, so a draft of
+                    // one Return left this button enabled over a `send()` that
+                    // trims properly and returns immediately: the button lit
+                    // up, the tap landed, and nothing happened. Two predicates
+                    // deciding one question is how that happens, so they are
+                    // now the same predicate.
                     .disabled(
-                        model.draft.trimmingCharacters(in: .whitespaces).isEmpty
+                        model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             && model.attachments.isEmpty
                     )
             }
