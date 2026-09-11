@@ -57,6 +57,18 @@ targets:
       properties:
         CFBundleDisplayName: Pocketd
         CFBundleShortVersionString: $(MARKETING_VERSION)
+        # Declared here so it is answered once, in the repo, rather than as a
+        # manual question in App Store Connect on every single upload — and so
+        # the answer is reviewable next to the reasoning for it.
+        #
+        # False is the correct answer, and it is not "we do no encryption".
+        # The app is a TLS *client* (Hugging Face downloads over HTTPS through
+        # URLSession) and its own LAN server speaks plain HTTP. Encryption
+        # reached only through Apple's own APIs is exempt under the standard
+        # exemption, and nothing here ships a cryptographic implementation of
+        # its own. The API key the server requires is a shared secret compared
+        # in constant time, not encryption.
+        ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
