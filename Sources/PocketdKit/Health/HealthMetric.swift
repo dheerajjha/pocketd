@@ -15,11 +15,25 @@ public enum HealthUnit: String, Sendable, Codable, CaseIterable {
     case count
     case kilocalorie
     case minute
+    case kilometer
+    case kilogram
     case beatsPerMinute = "bpm"
     case breathsPerMinute = "breaths/min"
     case millisecond = "ms"
-    /// Sleep, which arrives as intervals rather than as a recorded quantity.
+    /// Sleep and mindful sessions, which arrive as intervals rather than as a
+    /// recorded quantity.
     case second
+    /// Blood oxygen, in the magnitude HealthKit keeps it in: `HKUnit.percent()`
+    /// measures a value between 0 and 1, so a saturation of 98% arrives as 0.98.
+    /// This is the one unit here whose HealthKit spelling means something other
+    /// than it looks like, and naming the magnitude rather than the sign is what
+    /// keeps the hundredfold in one place — `HealthFormat`, beside the sign it
+    /// prints.
+    case fractionOfOne
+    /// VO2 max. HealthKit normalises the compound unit to `mL/min·kg` whichever
+    /// order it is assembled in, and everybody else writes the mass first, so
+    /// the two spellings have to be held apart rather than assumed equal.
+    case millilitersPerKilogramMinute = "mL/kg·min"
 
     /// How HealthKit spells this unit in `HKUnit.unitString`.
     ///
@@ -35,12 +49,16 @@ public enum HealthUnit: String, Sendable, Codable, CaseIterable {
         case .count: "count"
         case .kilocalorie: "kcal"
         case .minute: "min"
+        case .kilometer: "km"
+        case .kilogram: "kg"
         // One unit to HealthKit, two names here. A pulse and a breathing rate
         // are both counts per minute; the two names exist so a rendered line
         // reads correctly, not because the magnitudes differ.
         case .beatsPerMinute, .breathsPerMinute: "count/min"
         case .millisecond: "ms"
         case .second: "s"
+        case .fractionOfOne: "%"
+        case .millilitersPerKilogramMinute: "mL/min·kg"
         }
     }
 
@@ -88,22 +106,37 @@ public enum HealthMetric: String, Sendable, Codable, CaseIterable {
     case steps
     case active_energy
     case exercise_minutes
+    case distance
+    case stand_hours
     case resting_heart_rate
     case heart_rate_variability
     case walking_heart_rate
+    case heart_rate
+    case blood_oxygen
     case respiratory_rate
     case sleep
+    case mindful_minutes
+    case body_mass
+    case vo2_max
 
     public var label: String {
         switch self {
         case .steps: "Steps"
         case .active_energy: "Active energy"
         case .exercise_minutes: "Exercise"
+        case .distance: "Distance"
+        case .stand_hours: "Stand hours"
         case .resting_heart_rate: "Resting heart rate"
         case .heart_rate_variability: "Heart rate variability"
         case .walking_heart_rate: "Walking heart rate"
+        case .heart_rate: "Heart rate"
+        case .blood_oxygen: "Blood oxygen"
         case .respiratory_rate: "Respiratory rate"
         case .sleep: "Sleep"
+        case .mindful_minutes: "Mindful minutes"
+        // Health's own word for `bodyMass`, and the one anybody says out loud.
+        case .body_mass: "Weight"
+        case .vo2_max: "VO2 max"
         }
     }
 
@@ -113,11 +146,18 @@ public enum HealthMetric: String, Sendable, Codable, CaseIterable {
         case .steps: "step"
         case .active_energy: "active energy"
         case .exercise_minutes: "exercise"
+        case .distance: "distance"
+        case .stand_hours: "stand hour"
         case .resting_heart_rate: "resting heart rate"
         case .heart_rate_variability: "heart rate variability"
         case .walking_heart_rate: "walking heart rate"
+        case .heart_rate: "heart rate"
+        case .blood_oxygen: "blood oxygen"
         case .respiratory_rate: "respiratory rate"
         case .sleep: "sleep"
+        case .mindful_minutes: "mindfulness"
+        case .body_mass: "weight"
+        case .vo2_max: "VO2 max"
         }
     }
 
@@ -125,15 +165,19 @@ public enum HealthMetric: String, Sendable, Codable, CaseIterable {
     ///
     /// `noun` is attributive — "step data", "a day of step data" — and reads
     /// wrong the moment it carries a sentence by itself: "Highest step since
-    /// August 2025." Steps are the only metric where the two forms differ, and
-    /// the switch is exhaustive so a metric added later has to answer the
-    /// question rather than inherit the wrong answer. The payload hands the
-    /// model finished clauses to select and connect, never ones to repair.
+    /// August 2025." The two forms part company for the metrics that are counted
+    /// rather than measured, and the switch is exhaustive so a metric added later
+    /// has to answer the question rather than inherit the wrong answer. The
+    /// payload hands the model finished clauses to select and connect, never ones
+    /// to repair.
     public var subjectNoun: String {
         switch self {
         case .steps: "steps"
-        case .active_energy, .exercise_minutes, .resting_heart_rate,
-             .heart_rate_variability, .walking_heart_rate, .respiratory_rate, .sleep: noun
+        case .stand_hours: "stand hours"
+        case .mindful_minutes: "mindful minutes"
+        case .active_energy, .exercise_minutes, .distance, .resting_heart_rate,
+             .heart_rate_variability, .walking_heart_rate, .heart_rate, .blood_oxygen,
+             .respiratory_rate, .sleep, .body_mass, .vo2_max: noun
         }
     }
 
@@ -142,26 +186,50 @@ public enum HealthMetric: String, Sendable, Codable, CaseIterable {
         case .steps: .count
         case .active_energy: .kilocalorie
         case .exercise_minutes: .minute
+        // Kilometres and kilograms for everybody, not the region the phone is
+        // set to, for the reason `HealthFormat.number` refuses locale grouping:
+        // this payload is read by a 1.7B model before any of it reaches a
+        // person, and one unit everywhere is one fewer thing for it to get
+        // wrong. The unit word is printed beside every figure either way.
+        case .distance: .kilometer
+        case .stand_hours: .count
         case .resting_heart_rate: .beatsPerMinute
         case .heart_rate_variability: .millisecond
         case .walking_heart_rate: .beatsPerMinute
+        case .heart_rate: .beatsPerMinute
+        case .blood_oxygen: .fractionOfOne
         case .respiratory_rate: .breathsPerMinute
         case .sleep: .second
+        case .mindful_minutes: .second
+        case .body_mass: .kilogram
+        case .vo2_max: .millilitersPerKilogramMinute
         }
     }
 
     public var aggregation: HealthAggregation {
         switch self {
-        case .steps, .active_energy, .exercise_minutes, .sleep: .sum
-        case .resting_heart_rate, .heart_rate_variability, .walking_heart_rate, .respiratory_rate: .mean
+        case .steps, .active_energy, .exercise_minutes, .distance, .stand_hours,
+             .sleep, .mindful_minutes: .sum
+        case .resting_heart_rate, .heart_rate_variability, .walking_heart_rate,
+             .heart_rate, .blood_oxygen, .respiratory_rate, .body_mass, .vo2_max: .mean
         }
     }
 
     public var direction: HealthDirection {
         switch self {
         case .resting_heart_rate, .walking_heart_rate: .lowerIsBetter
-        case .respiratory_rate: .neither
-        case .steps, .active_energy, .exercise_minutes, .heart_rate_variability, .sleep: .higherIsBetter
+        // Two more with no better end, for two different reasons. A raw heart
+        // rate is 52 asleep and 150 up a staircase, so a day's mean of it moves
+        // with what the day contained rather than with the user — which is the
+        // signal `resting_heart_rate` isolates and this one averages away. And
+        // there is no weight that is better than another weight. `direction`
+        // feeds nothing but the superlative, so the value here is the whole
+        // difference between reporting a number and telling somebody it is
+        // their best weight since May.
+        case .respiratory_rate, .heart_rate, .body_mass: .neither
+        case .steps, .active_energy, .exercise_minutes, .distance, .stand_hours,
+             .heart_rate_variability, .blood_oxygen, .sleep, .mindful_minutes,
+             .vo2_max: .higherIsBetter
         }
     }
 
@@ -177,15 +245,37 @@ public enum HealthMetric: String, Sendable, Codable, CaseIterable {
     /// morning it ended (see `nightlyTotals`), so by the time anyone asks it is
     /// finished. Asked at four in the morning it is not, which is the one hole
     /// in this and is not worth a second mechanism.
+    ///
+    /// A mindful session is the same shape of thing and gets no such exception:
+    /// it is attributed to the day it began on, and nothing stops another one
+    /// happening before that day is over.
     public var accumulatesAcrossTheDay: Bool {
         switch self {
-        case .steps, .active_energy, .exercise_minutes: true
-        case .resting_heart_rate, .heart_rate_variability, .walking_heart_rate, .respiratory_rate, .sleep: false
+        case .steps, .active_energy, .exercise_minutes, .distance, .stand_hours,
+             .mindful_minutes: true
+        case .resting_heart_rate, .heart_rate_variability, .walking_heart_rate,
+             .heart_rate, .blood_oxygen, .respiratory_rate, .sleep, .body_mass,
+             .vo2_max: false
         }
     }
 
     /// Digits after the point when the number is shown.
-    var fractionDigits: Int { 0 }
+    ///
+    /// One decimal for the five that move by less than a whole unit at a time: a
+    /// breathing rate lives between 13 and 17, a blood oxygen reading between 95
+    /// and 100, a VO2 max shifts by a point or two a season, a weight by a few
+    /// hundred grams, and a day's walking by a few hundred metres. Rounding any
+    /// of those to whole units throws away most of the signal the comparison is
+    /// built on. None goes to two, which would claim a precision that a mean of
+    /// sixteen noisy days does not have.
+    var fractionDigits: Int {
+        switch self {
+        case .steps, .active_energy, .exercise_minutes, .stand_hours,
+             .resting_heart_rate, .heart_rate_variability, .walking_heart_rate,
+             .heart_rate, .sleep, .mindful_minutes: 0
+        case .distance, .blood_oxygen, .respiratory_rate, .body_mass, .vo2_max: 1
+        }
+    }
 }
 
 // MARK: - Samples

@@ -951,7 +951,7 @@ struct AnswerCardHealthTests {
     }
 
     /// A reading whose wording has moved keeps its whole clause rather than
-    /// guessing at half of it. The split is a lookup against the eight labels
+    /// guessing at half of it. The split is a lookup against the labels
     /// `HealthMetric` declares plus one ASCII literal, and it fails closed.
     @Test("a reading the builder cannot split keeps every word of it")
     func healthUnsplittableReadingIsKept() {

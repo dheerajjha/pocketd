@@ -14,13 +14,13 @@ import PocketdKit
 /// pays for it twice. The usable window at the default 4096 context is 4032.
 /// Five health tools would be most of a thousand tokens spent before the user
 /// has typed a word, on every question, including the ones about pasta. A single
-/// tool with a four-value enum is one schema, and a small model picks from four
+/// tool with a five-value enum is one schema, and a small model picks from five
 /// words far more reliably than it picks between five similarly-named tools.
 ///
 /// The argument is a fixed set of focus names rather than a metric name or a
 /// date range, for the same reason `CalendarRange` is: a 1–3B model asked for
 /// free-form text produces something plausible and wrong often enough that it
-/// has to be planned for, and four values cannot be malformed. Which days to
+/// has to be planned for, and a closed set of names cannot be malformed. Which days to
 /// look at, how long a baseline is, and which day is the last complete one are
 /// all decided in `HealthSummary`, where a calendar and a time zone are
 /// available and none of them are the model's problem.

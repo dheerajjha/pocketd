@@ -687,14 +687,16 @@ public enum AnswerCardBuilders {
     ///
     /// `HealthSummary.reading` writes the metric's label, then the formatted
     /// figure, then `" on "` and the date. Reading those back is a lookup
-    /// against the eight labels `HealthMetric` declares and a search for one
-    /// ASCII literal — not a parse of free text. A wording change there makes
-    /// the split fail rather than succeed wrongly, and a failed split costs the
-    /// card its metric strip and nothing else, which is why the fallbacks below
-    /// keep the whole clause rather than a guess at part of it.
+    /// against the labels `HealthMetric` declares and a search for one ASCII
+    /// literal — not a parse of free text. A wording change there makes the
+    /// split fail rather than succeed wrongly, and a failed split costs the card
+    /// its metric strip and nothing else, which is why the fallbacks below keep
+    /// the whole clause rather than a guess at part of it.
     static func healthReading(_ line: String) -> (label: String, clause: String?, figure: String?, rest: String?) {
-        // Longest label first: none of the eight is a prefix of another today,
-        // and a ninth that was would otherwise steal the row.
+        // Longest label first, and that is load-bearing rather than tidy:
+        // "Heart rate" is a prefix of "Heart rate variability", so taking the
+        // labels in declaration order would let the short one steal every HRV
+        // row and file it under the wrong metric with the wrong unit.
         let labels = HealthMetric.allCases.map(\.label).sorted { $0.count > $1.count }
         guard let label = labels.first(where: { line.hasPrefix($0) }) else {
             return (line, nil, nil, nil)
@@ -821,6 +823,7 @@ public enum AnswerCardBuilders {
         case .activity: "Activity"
         case .heart: "Heart"
         case .sleep: "Sleep"
+        case .body: "Body"
         case .workouts: "Workouts"
         }
     }
@@ -834,6 +837,7 @@ public enum AnswerCardBuilders {
         case .activity: "figure.walk"
         case .heart: "heart"
         case .sleep: "bed.double"
+        case .body: "figure.stand"
         case .workouts: "figure.run"
         }
     }

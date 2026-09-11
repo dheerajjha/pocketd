@@ -28,7 +28,7 @@ actor HealthAccess {
     /// HealthKit lets an app request authorization several times with different
     /// type sets, and that is used deliberately: asking for sleep the first time
     /// someone asks about sleep is a far more answerable question than a sheet
-    /// with nine switches on it at launch. Cached per process rather than
+    /// with sixteen switches on it at launch. Cached per process rather than
     /// persisted — a fresh launch costs one silent round trip, and iOS never
     /// shows the sheet twice for the same type anyway.
     private var requested: Set<HealthFocus> = []
@@ -43,6 +43,16 @@ actor HealthAccess {
     /// `HealthSuperlative.bestInReach` reports the span it actually saw.
     private static let sleepSampleLimit = 10_000
 
+    /// Cap on raw category samples fetched in one go, for the types that are not
+    /// sleep.
+    ///
+    /// The same ceiling and the same trade. A stand hour is one marker per hour,
+    /// so three years of them is about thirteen thousand rows; ten thousand
+    /// stood hours is around eight hundred days of reach, which is further back
+    /// than any claim the summary makes with them. Mindful sessions are nowhere
+    /// near the cap for anybody.
+    private static let categorySampleLimit = 10_000
+
     // MARK: - Availability
 
     /// `nonisolated` because it reads a process-wide flag with no I/O, so a view
@@ -55,33 +65,50 @@ actor HealthAccess {
 
     /// The curated read set for one focus.
     ///
-    /// Nine types across all four foci, and every one of them is read by
+    /// Sixteen types across all five foci, and every one of them is read by
     /// something the summary actually prints. Asking for a type we never query
     /// is asking a user to agree to a capability we do not use, which is the
     /// single thing that makes a Health sheet look like a data grab — and the
     /// sheet lists every type by name, so it is visible.
     ///
-    /// - Steps, active energy and Apple exercise time are the three halves of
-    ///   "how active have I been". Steps alone works with no watch at all, which
-    ///   is most people; the other two only exist if there is one.
+    /// - Steps, active energy, Apple exercise time, walking and running distance
+    ///   and stand hours are "how active have I been". Steps and distance work
+    ///   with no watch at all, which is most people; the other three only exist
+    ///   if there is one.
     /// - Resting heart rate is the best single "is today different" signal there
     ///   is, and HRV is the one that moves with recovery rather than with
     ///   effort. Walking heart rate average completes the pair: it is measured
     ///   under load, so together they separate a bad night from a fitness change.
+    ///   Heart rate is the series all three are derived from, and blood oxygen
+    ///   is the other vital the same sensor records.
     /// - Sleep analysis is the whole sleep focus.
     /// - Respiratory rate is recorded while asleep, and a rise against baseline
     ///   is the classic early sign of something coming on. It is read with sleep
-    ///   because that is when it is measured.
+    ///   because that is when it is measured. Mindful sessions are read there for
+    ///   the neighbouring reason: the question they answer is about rest.
+    /// - Body mass and VO2 max move over months rather than over days, which is
+    ///   the timescale a phone holding everything the user ever recorded can see
+    ///   and a service keeping ninety days cannot.
     /// - Workouts, plus the active energy already requested, are what a workout
     ///   row is made of.
     ///
-    /// Not requested, deliberately: blood oxygen, body mass, ECG, menstrual
-    /// data, clinical records. Nothing here reads them, and several of them are
-    /// the kinds of data that make a permission sheet a reason to close the app.
+    /// Not requested, deliberately: ECG and heart rhythm, menstrual and
+    /// reproductive data, blood glucose, medications, clinical records. Nothing
+    /// here reads them, and several of them are the kinds of data that make a
+    /// permission sheet a reason to close the app.
     static func readTypes(for focus: HealthFocus) -> Set<HKObjectType> {
         var types = Set<HKObjectType>(focus.metrics.compactMap(quantityType))
+        // The three metrics HealthKit keeps as categories rather than as
+        // quantities, each named on its own because `quantityType` cannot answer
+        // for any of them.
         if focus.metrics.contains(.sleep) {
             types.insert(HKCategoryType(.sleepAnalysis))
+        }
+        if focus.metrics.contains(.stand_hours) {
+            types.insert(HKCategoryType(.appleStandHour))
+        }
+        if focus.metrics.contains(.mindful_minutes) {
+            types.insert(HKCategoryType(.mindfulSession))
         }
         if focus == .workouts {
             types.insert(HKObjectType.workoutType())
@@ -166,8 +193,20 @@ actor HealthAccess {
         guard availability == .available else { return HealthReadout(availability: availability) }
 
         var samples: [HealthMetric: [HealthSample]] = [:]
-        for metric in focus.metrics where metric != .sleep {
-            samples[metric] = await dailyBuckets(of: metric, in: window)
+        for metric in focus.metrics {
+            switch metric {
+            // Sleep is the one metric whose raw shape survives the crossing, so
+            // that the night-to-morning attribution and the union of overlapping
+            // sources happen where they can be tested.
+            case .sleep: continue
+            case .stand_hours: samples[metric] = await standHours(in: window)
+            case .mindful_minutes: samples[metric] = await mindfulSessions(in: window)
+            // A default rather than twelve more names, and it is safe in the one
+            // direction that matters: a metric nothing here maps gets no
+            // quantity type, reads as empty, and is reported as data that did
+            // not arrive rather than as a number nobody measured.
+            default: samples[metric] = await dailyBuckets(of: metric, in: window)
+            }
         }
 
         let sleep = focus.metrics.contains(.sleep) ? await sleepIntervals(in: window) : []
@@ -282,6 +321,74 @@ actor HealthAccess {
         }
     }
 
+    /// Stand hours, counted rather than measured.
+    ///
+    /// `appleStandHour` is a category type that writes one marker an hour, so a
+    /// day's figure is how many of those markers say the user stood — which is
+    /// the number on the watch's ring and the number the label claims.
+    /// `appleStandTime` is the quantity alternative and would go through the
+    /// statistics path for free, but it measures minutes spent on your feet: a
+    /// real measurement of a different thing, and summing it under the word
+    /// "hours" would be wrong by construction rather than by accident.
+    ///
+    /// The idle markers are excluded by the predicate rather than counted and
+    /// then filtered, which fails closed the way `isAsleep` does: a value a later
+    /// iOS invents is not a stood hour until somebody here says it is.
+    private func standHours(in window: DateInterval) async -> [HealthSample] {
+        let stood = HKQuery.predicateForCategorySamples(
+            with: .equalTo, value: HKCategoryValueAppleStandHour.stood.rawValue
+        )
+        let samples = await categorySamples(of: HKCategoryType(.appleStandHour), matching: stood, in: window)
+        return samples.map { HealthSample(value: 1, unit: .count, date: $0.startDate) }
+    }
+
+    /// Mindful sessions, as the durations they are.
+    ///
+    /// A mindful session carries no quantity at all — its value is
+    /// `HKCategoryValue.notApplicable` and the measurement is the distance
+    /// between its two dates — so there is no `HKUnit` to read it in and no
+    /// statistics collection to ask for it. What crosses the seam is seconds,
+    /// which is what `timeIntervalSince` means and is therefore the one unit
+    /// here that cannot be got wrong. From there it is an ordinary summed
+    /// metric, added up per day by the same code that adds up steps, rather than
+    /// a second interval mechanism beside sleep's.
+    ///
+    /// A session is attributed to the day it began on. One running through
+    /// midnight is the only case where that is arguable, and splitting it would
+    /// be new machinery for a few seconds either way.
+    private func mindfulSessions(in window: DateInterval) async -> [HealthSample] {
+        let samples = await categorySamples(of: HKCategoryType(.mindfulSession), matching: nil, in: window)
+        return samples.map {
+            HealthSample(value: $0.endDate.timeIntervalSince($0.startDate), unit: .second, date: $0.startDate)
+        }
+    }
+
+    /// The category samples of one type inside a window, newest first.
+    ///
+    /// Newest first for the reason the sleep read is: a cap that bites drops the
+    /// oldest days rather than the ones the baseline and the streak are built
+    /// from, so it shortens the reach instead of corrupting what is left.
+    private func categorySamples(
+        of type: HKCategoryType,
+        matching predicate: NSPredicate?,
+        in window: DateInterval
+    ) async -> [HKCategorySample] {
+        let inWindow = HKQuery.predicateForSamples(withStart: window.start, end: window.end, options: [])
+        let descriptor = HKSampleQueryDescriptor(
+            predicates: [
+                .categorySample(
+                    type: type,
+                    predicate: predicate.map {
+                        NSCompoundPredicate(andPredicateWithSubpredicates: [inWindow, $0])
+                    } ?? inWindow
+                )
+            ],
+            sortDescriptors: [SortDescriptor(\.startDate, order: .reverse)],
+            limit: Self.categorySampleLimit
+        )
+        return (try? await descriptor.result(for: store)) ?? []
+    }
+
     /// The most recent workouts, one more than will be shown.
     private func recentWorkouts(in window: DateInterval) async -> [WorkoutRow] {
         let descriptor = HKSampleQueryDescriptor(
@@ -321,13 +428,19 @@ actor HealthAccess {
         case .steps: HKQuantityType(.stepCount)
         case .active_energy: HKQuantityType(.activeEnergyBurned)
         case .exercise_minutes: HKQuantityType(.appleExerciseTime)
+        case .distance: HKQuantityType(.distanceWalkingRunning)
         case .resting_heart_rate: HKQuantityType(.restingHeartRate)
         case .heart_rate_variability: HKQuantityType(.heartRateVariabilitySDNN)
         case .walking_heart_rate: HKQuantityType(.walkingHeartRateAverage)
+        case .heart_rate: HKQuantityType(.heartRate)
+        case .blood_oxygen: HKQuantityType(.oxygenSaturation)
         case .respiratory_rate: HKQuantityType(.respiratoryRate)
-        // Sleep is a category type, not a quantity, and there is no quantity
-        // type for sleep duration anywhere in HealthKit.
-        case .sleep: nil
+        case .body_mass: HKQuantityType(.bodyMass)
+        case .vo2_max: HKQuantityType(.vo2Max)
+        // The three HealthKit keeps as categories. There is no quantity type for
+        // sleep duration, for a stand hour or for a mindful session anywhere in
+        // the framework, and each is read by a query of its own above.
+        case .sleep, .stand_hours, .mindful_minutes: nil
         }
     }
 
@@ -346,10 +459,26 @@ actor HealthAccess {
         case .steps: HKUnit.count()
         case .active_energy: HKUnit.kilocalorie()
         case .exercise_minutes: HKUnit.minute()
-        case .resting_heart_rate, .walking_heart_rate: HKUnit.count().unitDivided(by: .minute())
+        case .distance: HKUnit.meterUnit(with: .kilo)
+        case .resting_heart_rate, .walking_heart_rate, .heart_rate: HKUnit.count().unitDivided(by: .minute())
         case .heart_rate_variability: HKUnit.secondUnit(with: .milli)
+        // Between 0 and 1, which is what `HKUnit.percent()` measures and what a
+        // saturation of 98% therefore arrives as. Reading it in the magnitude
+        // HealthKit stores it in is what leaves the tag on the sample meaning
+        // something; turning it into a percentage is `HealthFormat`'s job, and
+        // doing it here instead would rescale the number and relabel it in one
+        // motion, which is the mistake this whole arrangement exists to catch.
+        case .blood_oxygen: HKUnit.percent()
         case .respiratory_rate: HKUnit.count().unitDivided(by: .minute())
-        case .sleep: nil
+        case .body_mass: HKUnit.gramUnit(with: .kilo)
+        // Built rather than named: HealthKit has no constant for this one, and
+        // it normalises whatever order the parts are assembled in to the single
+        // string `mL/min·kg` — which is what `HealthUnit` has to match, and is
+        // not the order anybody writes it in.
+        case .vo2_max:
+            HKUnit.literUnit(with: .milli)
+                .unitDivided(by: HKUnit.gramUnit(with: .kilo).unitMultiplied(by: .minute()))
+        case .sleep, .stand_hours, .mindful_minutes: nil
         }
     }
 

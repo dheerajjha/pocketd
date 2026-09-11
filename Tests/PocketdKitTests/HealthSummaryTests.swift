@@ -242,7 +242,9 @@ struct HealthSummaryAmbiguityTests {
         let complete = HealthReadout(samples: [
             .resting_heart_rate: Health.samples(count: 20, unit: .beatsPerMinute) { _ in 70 },
             .heart_rate_variability: Health.samples(count: 20, unit: .millisecond) { _ in 40 },
-            .walking_heart_rate: Health.samples(count: 20, unit: .beatsPerMinute) { _ in 104 }
+            .walking_heart_rate: Health.samples(count: 20, unit: .beatsPerMinute) { _ in 104 },
+            .heart_rate: Health.samples(count: 20, unit: .beatsPerMinute) { _ in 68 },
+            .blood_oxygen: Health.samples(count: 20, unit: .fractionOfOne) { _ in 0.97 }
         ])
         let payload = await Health.payload(.heart, readout: complete)
         // Three sentences on every answer that had nothing to explain is context
@@ -824,4 +826,201 @@ struct HealthNumberLocaleTests {
     func precisionSurvives() {
         #expect(HealthFormat.number(72.46, digits: 1, locale: Locale(identifier: "de_DE")) == "72.5")
     }
+}
+
+@Suite("Health summary: the metrics added after the first eight")
+struct HealthAddedMetricPayloadTests {
+
+    @Test("each one computes a baseline and a delta of its own")
+    func addedMetricsCompareAgainstTheirOwnBaseline() async {
+        // The arithmetic is generic, so what is being checked here is the data:
+        // a wrong unit drops every sample and produces no line at all, a wrong
+        // aggregation produces a figure nobody has, and a wrong number of
+        // decimals produces a comparison the user cannot check. Each row is
+        // read in the metric's own declared unit, so the fixture cannot agree
+        // with the code by accident.
+        let cases: [(metric: HealthMetric, focus: HealthFocus, usual: Double, spread: Double, latest: Double, figure: String, mean: String, delta: String)] = [
+            (.distance, .activity, 5, 0.5, 6, "6.0 km", "5.0 km", "20% above"),
+            (.stand_hours, .activity, 10, 1, 12, "12", "10", "20% above"),
+            (.heart_rate, .heart, 70, 3, 84, "84 bpm", "70 bpm", "20% above"),
+            (.blood_oxygen, .heart, 0.96, 0.005, 0.98, "98.0%", "96.0%", "2% above"),
+            (.mindful_minutes, .sleep, 600, 60, 900, "15 m", "10 m", "50% above"),
+            (.body_mass, .body, 72, 0.5, 75.6, "75.6 kg", "72.0 kg", "5% above"),
+            (.vo2_max, .body, 40, 1, 44, "44.0 mL/kg·min", "40.0 mL/kg·min", "10% above")
+        ]
+
+        let yesterday = Health.calendar.date(
+            byAdding: .day, value: -1, to: Health.calendar.startOfDay(for: Health.now)
+        )!
+
+        for row in cases {
+            // 28 whole days ending the day before the reading, so the reading is
+            // not folded into the mean it is measured against.
+            var samples = Health.samples(count: 28, unit: row.metric.unit, endingDaysBack: 2) { back in
+                back % 2 == 0 ? row.usual - row.spread : row.usual + row.spread
+            }
+            samples.append(HealthSample(value: row.latest, unit: row.metric.unit, date: yesterday))
+
+            let payload = await Health.payload(row.focus, readout: HealthReadout(samples: [row.metric: samples]))
+            let line = (payload["readings"] as? [String])?.first { $0.hasPrefix(row.metric.label) } ?? ""
+
+            #expect(line.contains("\(row.metric.label) \(row.figure) on"), "\(row.metric): \(line)")
+            #expect(line.contains("\(row.delta) your 28-day average of \(row.mean)"), "\(row.metric): \(line)")
+        }
+    }
+
+    @Test("at nine in the morning the distance reported is yesterday's whole day")
+    func thisMorningsDistanceIsNotTheReading() async {
+        // The partial-day bug, end to end and in the payload the model actually
+        // reads. Without the accumulation rule this line is "Distance 0.4 km on
+        // Thu, Sep 11 — 93% below your 28-day average", every morning, to
+        // somebody who has simply not been out yet.
+        let nineAm = Health.calendar.date(from: DateComponents(year: 2025, month: 9, day: 11, hour: 9))!
+        var samples = Health.samples(count: 28, unit: .kilometer) { _ in 6 }
+        samples.append(HealthSample(value: 0.4, unit: .kilometer, date: Health.calendar.startOfDay(for: nineAm)))
+
+        let payload = await Health.payload(
+            .activity, asOf: nineAm, readout: HealthReadout(samples: [.distance: samples])
+        )
+        let line = (payload["readings"] as? [String])?.first { $0.hasPrefix("Distance") } ?? ""
+
+        #expect(line.contains("Distance 6.0 km on Wed, Sep 10"))
+        #expect(!line.contains("0.4"))
+        #expect(!line.contains("below"))
+    }
+
+    @Test("a weight higher than any on this phone is reported without being called a record")
+    func weightIsNeverASuperlative() async {
+        // Two hundred days of it, the last the highest there has ever been —
+        // the exact shape that fires a superlative for any metric with a better
+        // end. Nothing but `direction` stands between this payload and "highest
+        // weight in all 201 days of weight data on this iPhone", which is a
+        // judgement about somebody's body dressed as a milestone.
+        let yesterday = Health.calendar.date(
+            byAdding: .day, value: -1, to: Health.calendar.startOfDay(for: Health.now)
+        )!
+
+        func rising(unit: HealthUnit, usual: Double, spread: Double, peak: Double) -> [HealthSample] {
+            var samples = Health.samples(count: 200, unit: unit, endingDaysBack: 2) { back in
+                back % 2 == 0 ? usual - spread : usual + spread
+            }
+            samples.append(HealthSample(value: peak, unit: unit, date: yesterday))
+            return samples
+        }
+
+        let weight = await Health.payload(.body, readout: HealthReadout(
+            samples: [.body_mass: rising(unit: .kilogram, usual: 72, spread: 0.5, peak: 78)]
+        ))
+        #expect((weight["readings"] as? [String])?.contains { $0.contains("Weight 78.0 kg") } == true)
+        #expect(weight["notable"] == nil)
+
+        // The same shape through VO2 max, which does have a better end, so the
+        // silence above is the direction and not the fixture.
+        let vo2 = await Health.payload(.body, readout: HealthReadout(
+            samples: [.vo2_max: rising(unit: .millilitersPerKilogramMinute, usual: 40, spread: 1, peak: 48)]
+        ))
+        #expect((vo2["notable"] as? [String])?.contains { $0.hasPrefix("Highest VO2 max") } == true)
+    }
+
+    @Test("blood oxygen reaches the model as a percentage and never as a fraction")
+    func bloodOxygenIsNeverAFractionInThePayload() async {
+        // 0.98 is a number a model will read as 0.98 percent, or as a ratio, or
+        // narrate unchanged. The value is kept in HealthKit's own magnitude
+        // everywhere the unit tag can still catch a mistake, and turned into a
+        // percentage at the last possible moment — which means the last possible
+        // moment has to be before the payload is encoded.
+        var samples = Health.samples(count: 28, unit: .fractionOfOne, endingDaysBack: 2) { back in
+            back % 2 == 0 ? 0.955 : 0.965
+        }
+        let yesterday = Health.calendar.date(
+            byAdding: .day, value: -1, to: Health.calendar.startOfDay(for: Health.now)
+        )!
+        samples.append(HealthSample(value: 0.98, unit: .fractionOfOne, date: yesterday))
+
+        let rendered = ToolResult.encode(
+            await Health.payload(.heart, readout: HealthReadout(samples: [.blood_oxygen: samples]))
+        )
+        #expect(rendered.contains("Blood oxygen 98.0%"))
+        #expect(rendered.contains("average of 96.0%"))
+        #expect(!rendered.contains("0.9"))
+    }
+}
+
+@Suite("Health permissions: what the sheet asks for")
+struct HealthPermissionSheetTests {
+
+    /// Counted against the app rather than against a fixture of it.
+    ///
+    /// `HealthAccess` cannot be imported here — it needs HealthKit, and these
+    /// tests run on macOS with no Health store to have — but the read set it
+    /// asks for is the one part of it a user sees, listed by name on a modal
+    /// sheet. A type requested and never read is the single thing that makes
+    /// that sheet look like a data grab, and a metric with no type behind it is
+    /// a row of the answer that silently never arrives. So the source is read,
+    /// the way `AnswerCardTests` reads the app's tool registrations.
+    @Test("sixteen HealthKit types are named, one for every metric plus workouts")
+    func theReadSetIsWhatItClaims() throws {
+        let source = try String(contentsOf: healthAccessSource(), encoding: .utf8)
+        let quantity = identifiers(matching: #"HKQuantityType\(\.(\w+)\)"#, in: source)
+        let category = identifiers(matching: #"HKCategoryType\(\.(\w+)\)"#, in: source)
+
+        #expect(quantity == [
+            "stepCount", "activeEnergyBurned", "appleExerciseTime", "distanceWalkingRunning",
+            "restingHeartRate", "heartRateVariabilitySDNN", "walkingHeartRateAverage", "heartRate",
+            "oxygenSaturation", "respiratoryRate", "bodyMass", "vo2Max"
+        ])
+        // Three, and no more: sleep, a stand hour and a mindful session are the
+        // only things this app reads that HealthKit does not keep as a quantity.
+        #expect(category == ["sleepAnalysis", "appleStandHour", "mindfulSession"])
+        #expect(source.contains("HKObjectType.workoutType()"))
+
+        // One type per metric, plus the workouts that are not a metric at all.
+        #expect(quantity.count + category.count == HealthMetric.allCases.count)
+        #expect(quantity.count + category.count + 1 == 16)
+    }
+
+    @Test("nothing is asked for write access, because nothing writes")
+    func theShareSetIsEmpty() throws {
+        // Both authorization calls, counted rather than eyeballed. A non-empty
+        // share set puts a second sheet in front of the user, listing types this
+        // app would be allowed to change — for a capability it does not have.
+        let source = try String(contentsOf: healthAccessSource(), encoding: .utf8)
+        let shared = matches(of: #"requestAuthorization\(toShare: (\[[^\]]*\]), read:"#, in: source)
+
+        #expect(shared == ["[]", "[]"])
+        #expect(source.components(separatedBy: "requestAuthorization(").count - 1 == shared.count)
+    }
+
+    @Test("no sentence anywhere in the read path claims the user refused anything")
+    func nothingClaimsADenial() throws {
+        // iOS reports a refused read and a type nobody ever recorded
+        // identically, so any word that picks one is a guess presented as a
+        // fact. The rule is worth restating against the source because it is the
+        // kind of thing a helpful sentence added later quietly breaks.
+        let source = try String(contentsOf: healthAccessSource(), encoding: .utf8)
+        for word in ["denied", "Denied", "refused access", "not authorized", "not authorised"] {
+            #expect(!source.contains(word), "\(word) appears in HealthAccess.swift")
+        }
+    }
+}
+
+/// The app-side file these tests read, from this one.
+private func healthAccessSource() -> URL {
+    URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()   // PocketdKitTests
+        .deletingLastPathComponent()   // Tests
+        .deletingLastPathComponent()   // repository root
+        .appendingPathComponent("App/Sources/Tools/HealthAccess.swift")
+}
+
+/// Every first capture group of `pattern`, in the order they appear.
+private func matches(of pattern: String, in source: String) -> [String] {
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+    return regex.matches(in: source, range: NSRange(source.startIndex..., in: source)).compactMap { match in
+        Range(match.range(at: 1), in: source).map { String(source[$0]) }
+    }
+}
+
+private func identifiers(matching pattern: String, in source: String) -> Set<String> {
+    Set(matches(of: pattern, in: source))
 }

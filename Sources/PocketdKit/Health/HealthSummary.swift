@@ -4,14 +4,15 @@ import Foundation
 
 /// The only shapes of health question the tool accepts.
 ///
-/// Four names, and deliberately not one tool per metric. Registering a tool
+/// Five names, and deliberately not one tool per metric. Registering a tool
 /// injects its schema into the system message of every prompt — 116 guard
 /// tokens for this one on a plain chat template and 232 on a tool-native one,
-/// measured rather than guessed — against a usable window of 4032 at the
-/// default 4096 context. Five health tools would be most of a thousand tokens
-/// spent before the user has typed anything. One tool with an enum costs one
-/// schema, and a small model picks from four words far more reliably than it
-/// picks between five similarly-named tools.
+/// measured against the four names it started with, to which a fifth adds seven
+/// characters — against a usable window of 4032 at the default 4096 context.
+/// Fifteen metrics as fifteen tools would be thousands of tokens spent before
+/// the user has typed anything. One tool with an enum costs one schema, and a
+/// small model picks from five words far more reliably than it picks between
+/// fifteen similarly-named tools.
 ///
 /// The raw values are what the model literally reads in the schema, so they are
 /// snake_case like `CalendarRange`.
@@ -19,6 +20,7 @@ public enum HealthFocus: String, Sendable, Codable, CaseIterable {
     case activity
     case heart
     case sleep
+    case body
     case workouts
 
     /// What a focus is made of. Grouped rather than split one metric per name:
@@ -27,11 +29,20 @@ public enum HealthFocus: String, Sendable, Codable, CaseIterable {
     /// runs once, on purpose.
     public var metrics: [HealthMetric] {
         switch self {
-        case .activity: [.steps, .active_energy, .exercise_minutes]
-        case .heart: [.resting_heart_rate, .heart_rate_variability, .walking_heart_rate]
+        case .activity: [.steps, .active_energy, .exercise_minutes, .distance, .stand_hours]
+        case .heart: [.resting_heart_rate, .heart_rate_variability, .walking_heart_rate,
+                      .heart_rate, .blood_oxygen]
         // Respiratory rate is recorded while asleep and belongs with the night
         // it was measured on, not with the resting metrics it resembles.
-        case .sleep: [.sleep, .respiratory_rate]
+        // Mindful minutes are here for the neighbouring reason: what they answer
+        // is a question about rest, and filed under activity they would be read
+        // as a kind of exercise.
+        case .sleep: [.sleep, .respiratory_rate, .mindful_minutes]
+        // Weight and VO2 max move over months, not over days. A focus of their
+        // own is what keeps a figure that has not changed since Tuesday out of
+        // an answer about how far somebody walked yesterday — and keeps the
+        // question that reaches them one the user asked on purpose.
+        case .body: [.body_mass, .vo2_max]
         case .workouts: []
         }
     }
@@ -53,10 +64,16 @@ public enum HealthFocus: String, Sendable, Codable, CaseIterable {
     /// says which of the two claims it is making, so the shorter reach is
     /// reported rather than papered over.
     ///
+    /// Stand hours and mindful sessions are category samples too, and cross the
+    /// boundary one at a time like sleep does — but an hourly marker is a few
+    /// bytes, so what bounds those two is `HealthAccess`'s cap on how many it
+    /// will fetch rather than this number. Either way the reach is shortened
+    /// rather than corrupted, and `HealthSuperlative` reports the span it saw.
+    ///
     /// Workouts are a list, not a series. Four weeks is what "recently" means.
     public var historyDays: Int {
         switch self {
-        case .activity, .heart: 1096
+        case .activity, .heart, .body: 1096
         case .sleep: 180
         case .workouts: 28
         }
@@ -67,6 +84,7 @@ public enum HealthFocus: String, Sendable, Codable, CaseIterable {
         case .activity: "activity"
         case .heart: "heart"
         case .sleep: "sleep"
+        case .body: "body measurement"
         case .workouts: "workout"
         }
     }
@@ -206,7 +224,7 @@ public enum HealthSummary {
         switch focus {
         case .workouts:
             return workoutPayload(readout, locale: locale, timeZone: timeZone, calendar: calendar)
-        case .activity, .heart, .sleep:
+        case .activity, .heart, .sleep, .body:
             return seriesPayload(focus, readout, now: now, calendar: calendar, locale: locale, timeZone: timeZone)
         }
     }
@@ -425,7 +443,11 @@ public enum HealthSummary {
     /// nothing here suggests a target — the line only ever reports what happened.
     ///
     /// Active energy, resting heart rate and HRV get no streak: there is no
-    /// figure for those that means the same thing to two different people.
+    /// figure for those that means the same thing to two different people. Nor
+    /// does anything added since. The nearest candidate is twelve stand hours,
+    /// and it fails the same test from the other side: the stand goal is
+    /// adjustable on the watch, so twelve would be this app's number rather than
+    /// one the user holds themselves to.
     static func streakThreshold(for metric: HealthMetric) -> (value: Double, dayNoun: String, clause: String)? {
         switch metric {
         case .sleep: (8 * 3600, "night", "over 8 hours")
@@ -435,8 +457,10 @@ public enum HealthSummary {
         // the formatter was changed to prevent.
         case .steps: (10_000, "day", "over 10000 steps")
         case .exercise_minutes: (30, "day", "with 30 minutes or more of exercise")
-        case .active_energy, .resting_heart_rate, .heart_rate_variability,
-             .walking_heart_rate, .respiratory_rate: nil
+        case .active_energy, .distance, .stand_hours, .resting_heart_rate,
+             .heart_rate_variability, .walking_heart_rate, .heart_rate,
+             .blood_oxygen, .respiratory_rate, .mindful_minutes, .body_mass,
+             .vo2_max: nil
         }
     }
 
@@ -503,28 +527,36 @@ public enum HealthFormat {
     public static func value(_ value: Double, metric: HealthMetric, locale: Locale = .current) -> String {
         guard value.isFinite else { return "unavailable" }
         switch metric {
-        case .sleep:
+        case .sleep, .mindful_minutes:
             return duration(value)
-        case .steps:
-            // No unit word. Every line that carries this number is already
-            // labelled "Steps", and "Steps 8,000 steps" is a stutter the model
-            // repeats verbatim.
+        case .steps, .stand_hours:
+            // No unit word. Every line that carries one of these numbers is
+            // already labelled with what it counts, and "Steps 8,000 steps" is a
+            // stutter the model repeats verbatim.
             return number(value, digits: metric.fractionDigits, locale: locale)
         case .active_energy:
             return "\(number(value, digits: metric.fractionDigits, locale: locale)) kcal"
         case .exercise_minutes:
             return "\(number(value, digits: metric.fractionDigits, locale: locale)) min"
-        case .resting_heart_rate:
+        case .distance:
+            return "\(number(value, digits: metric.fractionDigits, locale: locale)) km"
+        case .resting_heart_rate, .walking_heart_rate, .heart_rate:
             return "\(number(value, digits: metric.fractionDigits, locale: locale)) bpm"
         case .heart_rate_variability:
             return "\(number(value, digits: metric.fractionDigits, locale: locale)) ms"
-        case .walking_heart_rate:
-            return "\(number(value, digits: metric.fractionDigits, locale: locale)) bpm"
+        case .blood_oxygen:
+            // The one reading in the app that is rescaled on its way to being
+            // printed, and it happens here rather than at the seam so that what
+            // is stored stays the magnitude HealthKit handed over — the tag on
+            // the sample then still means something, and the sign is printed in
+            // the same breath as the number that earns it.
+            return "\(number(value * 100, digits: metric.fractionDigits, locale: locale))%"
         case .respiratory_rate:
-            // One decimal, unlike everything else here: a breathing rate moves
-            // between 13 and 17, and rounding to whole breaths throws away most
-            // of the signal the comparison is built on.
-            return "\(number(value, digits: 1, locale: locale)) breaths/min"
+            return "\(number(value, digits: metric.fractionDigits, locale: locale)) breaths/min"
+        case .body_mass:
+            return "\(number(value, digits: metric.fractionDigits, locale: locale)) kg"
+        case .vo2_max:
+            return "\(number(value, digits: metric.fractionDigits, locale: locale)) mL/kg·min"
         }
     }
 

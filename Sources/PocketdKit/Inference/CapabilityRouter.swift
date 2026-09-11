@@ -84,7 +84,15 @@ public enum CapabilityRouter {
     private static let stems: [CapabilityGroup: [String]] = [
         .calendar: ["calendar", "meeting", "appointment", "schedul", "agenda", "diary", "booked", "booking"],
         .reminders: ["remind", "todo", "errand", "grocer", "shopping", "deadline", "overdue"],
-        .health: ["sleep", "slept", "workout", "exercis", "calorie", "hydrat", "fitness"],
+        // Widened when the health focuses went from four to five. Prefixes are
+        // chosen to survive their own inflections — `breath` catches breathing,
+        // `mindful` catches mindfulness — while the ones that would collide
+        // with ordinary words live in the whole-word set below.
+        .health: [
+            "sleep", "slept", "workout", "exercis", "calorie", "hydrat", "fitness",
+            "vo2", "mindful", "meditat", "breath", "oxygen",
+            "distance", "hiked", "cardio"
+        ],
         .alarms: ["snooze"],
         .timers: ["timer", "stopwatch", "countdown"]
     ]
@@ -111,7 +119,8 @@ public enum CapabilityRouter {
         .health: [
             "run", "ran", "runs", "running", "active", "activity", "activities",
             "heart", "hearts", "heartrate", "step", "steps",
-            "walk", "walks", "walked", "walking", "weight", "weights"
+            "walk", "walks", "walked", "walking", "weight", "weights",
+            "weigh", "weighed", "kilos", "kilograms", "stood", "standing"
         ],
         .alarms: ["alarm", "alarms", "wake", "waking", "woke", "oversleep", "overslept"],
         .timers: []

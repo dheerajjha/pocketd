@@ -1067,3 +1067,264 @@ struct HealthPartialDayTests {
         #expect(HealthArithmetic.mostRecentComparableDay(in: days, metric: .steps, now: now, calendar: calendar) == nil)
     }
 }
+
+/// What every metric added after the first eight has to answer, and why each
+/// answer is the one that matters.
+///
+/// A metric is data rather than logic in this package — the baseline, the
+/// z-score, the delta and the record scan are all generic over it — which is
+/// exactly why this file is where a new one can go wrong. Nothing in the
+/// arithmetic can tell that a heart rate was summed instead of averaged, or that
+/// a weight was given a better end; both produce a well-formed number and a
+/// confident sentence.
+private struct MetricSpec: Sendable {
+    let metric: HealthMetric
+    let unit: HealthUnit
+    let aggregation: HealthAggregation
+    let direction: HealthDirection
+    let accumulates: Bool
+}
+
+/// The seven, written out a second time on purpose.
+///
+/// Every one of these is a fact about HealthKit or about the world that no code
+/// in this package can derive, so the only defence is two copies that have to be
+/// edited together. A table that merely restated the switch would be worthless;
+/// the value here is that the tests below use it to drive real arithmetic.
+private let addedMetrics: [MetricSpec] = [
+    MetricSpec(metric: .distance, unit: .kilometer, aggregation: .sum, direction: .higherIsBetter, accumulates: true),
+    MetricSpec(metric: .stand_hours, unit: .count, aggregation: .sum, direction: .higherIsBetter, accumulates: true),
+    MetricSpec(metric: .heart_rate, unit: .beatsPerMinute, aggregation: .mean, direction: .neither, accumulates: false),
+    MetricSpec(metric: .blood_oxygen, unit: .fractionOfOne, aggregation: .mean, direction: .higherIsBetter, accumulates: false),
+    MetricSpec(metric: .mindful_minutes, unit: .second, aggregation: .sum, direction: .higherIsBetter, accumulates: true),
+    MetricSpec(metric: .body_mass, unit: .kilogram, aggregation: .mean, direction: .neither, accumulates: false),
+    MetricSpec(metric: .vo2_max, unit: .millilitersPerKilogramMinute, aggregation: .mean, direction: .higherIsBetter, accumulates: false)
+]
+
+@Suite("Health arithmetic: the metrics added after the first eight")
+struct HealthAddedMetricTests {
+
+    @Test("each one answers with the unit, aggregation, direction and accumulation it is documented to")
+    func theVocabularyIsWhatItClaims() {
+        for spec in addedMetrics {
+            #expect(spec.metric.unit == spec.unit, "\(spec.metric) unit")
+            #expect(spec.metric.aggregation == spec.aggregation, "\(spec.metric) aggregation")
+            #expect(spec.metric.direction == spec.direction, "\(spec.metric) direction")
+            #expect(spec.metric.accumulatesAcrossTheDay == spec.accumulates, "\(spec.metric) accumulation")
+            // And the unit survives the round trip the reader does, so a
+            // correctly configured read cannot be dropped as a mismatch.
+            #expect(HealthUnit.named(spec.unit.hkUnitString, preferring: spec.unit) == spec.unit, "\(spec.metric) tag")
+        }
+    }
+
+    @Test("a day of point measurements is averaged rather than added up")
+    func pointMeasurementsAreNeverSummed() {
+        // Summed, a day of heart rate samples is a number in the thousands, and
+        // nothing downstream can tell that from a pulse: the payload hands the
+        // model finished clauses, so whatever comes out of here is repeated as a
+        // fact about somebody's body.
+        let calendar = Fixture.calendar()
+        let day = Fixture.date(2025, 9, 10, 0, 0)
+        let readings: [(metric: HealthMetric, unit: HealthUnit, values: [Double], mean: Double)] = [
+            (.heart_rate, .beatsPerMinute, [54, 150, 66], 90),
+            (.blood_oxygen, .fractionOfOne, [0.96, 0.98], 0.97),
+            (.body_mass, .kilogram, [72, 73], 72.5),
+            (.vo2_max, .millilitersPerKilogramMinute, [41, 43], 42)
+        ]
+
+        for reading in readings {
+            let samples = reading.values.enumerated().map { index, value in
+                HealthSample(value: value, unit: reading.unit, date: Fixture.date(2025, 9, 10, 6 + index * 4, 0))
+            }
+            let days = HealthArithmetic.daily(samples, metric: reading.metric, calendar: calendar)
+
+            #expect(days.count == 1, "\(reading.metric)")
+            #expect(days.first?.day == day, "\(reading.metric)")
+            #expect(abs((days.first?.value ?? .nan) - reading.mean) < 1e-9, "\(reading.metric) came back \(String(describing: days.first?.value))")
+            // The number this is standing in front of, named rather than
+            // implied: three readings of a pulse add to 270.
+            #expect(days.first?.value != reading.values.reduce(0, +), "\(reading.metric)")
+        }
+    }
+
+    @Test("at nine in the morning a running total is read from the last day that is over")
+    func runningTotalsWaitForTheDayToEnd() {
+        // The bug an earlier review caught, once per metric that can have it. A
+        // day still being added to, measured against a mean of whole ones,
+        // reports the user far below their usual range every single morning —
+        // and it is invisible in a fixture that only ever holds finished days.
+        let calendar = Fixture.calendar()
+        let now = Fixture.date(2025, 9, 11, 9, 0)
+        let today = calendar.startOfDay(for: now)
+        let yesterday = HealthArithmetic.startOfDay(today, offsetBy: -1, calendar: calendar)
+        let days = [DailyValue(day: yesterday, value: 10), DailyValue(day: today, value: 2)]
+
+        for spec in addedMetrics where spec.accumulates {
+            let latest = HealthArithmetic.mostRecentComparableDay(
+                in: days, metric: spec.metric, now: now, calendar: calendar
+            )
+            #expect(latest?.day == yesterday, "\(spec.metric)")
+            #expect(latest?.value == 10, "\(spec.metric)")
+        }
+
+        // And the other way for the ones that are single readings: a weight
+        // written this morning is finished the moment it is written, and holding
+        // it back a day would answer "what do I weigh" with Tuesday.
+        for spec in addedMetrics where !spec.accumulates {
+            let latest = HealthArithmetic.mostRecentComparableDay(
+                in: days, metric: spec.metric, now: now, calendar: calendar
+            )
+            #expect(latest?.day == today, "\(spec.metric)")
+        }
+    }
+
+    @Test("a running total on a day whose midnight never happened is still read from the day before")
+    func runningTotalsSurviveAMidnightThatNeverHappened() {
+        // Santiago goes to summer time at midnight on 7 September 2025, so that
+        // day begins at 01:00. Every comparison below is between a bucket key
+        // and a day boundary, and a day-step that kept its clock time would land
+        // an hour inside the wrong day and hand back this morning's unfinished
+        // distance as though the day were over.
+        let calendar = Fixture.calendar(Fixture.santiago)
+        let now = Fixture.date(2025, 9, 7, 9, 0, zone: Fixture.santiago)
+        let today = calendar.startOfDay(for: now)
+        let yesterday = HealthArithmetic.startOfDay(today, offsetBy: -1, calendar: calendar)
+
+        // The premise, stated rather than assumed.
+        #expect(today == Fixture.date(2025, 9, 7, 1, 0, zone: Fixture.santiago))
+        #expect(calendar.startOfDay(for: yesterday) == yesterday)
+
+        let days = [DailyValue(day: yesterday, value: 8.2), DailyValue(day: today, value: 1.1)]
+        let latest = HealthArithmetic.mostRecentComparableDay(
+            in: days, metric: .distance, now: now, calendar: calendar
+        )
+        #expect(latest?.day == yesterday)
+        #expect(latest?.value == 8.2)
+    }
+
+    @Test("a metric with no better end is never given a record, whichever way the day went")
+    func metricsWithNoDirectionClaimNoSuperlative() {
+        // `direction` feeds nothing but the superlative, so this is the whole of
+        // what a wrong value there would buy: "lowest weight since May", a
+        // health judgement about a number that has no better end, in a sentence
+        // the user cannot check. Both extremes are tried, because a wrong
+        // direction is only visible from one side.
+        let calendar = Fixture.calendar()
+        let end = Fixture.date(2025, 9, 11, 0, 0)
+
+        func series(endingAt last: Double) -> [DailyValue] {
+            var days = Fixture.series(endingBefore: end, count: 200, calendar: calendar) { _ in 75 }
+            days[days.count - 1] = DailyValue(day: days[days.count - 1].day, value: last)
+            return days
+        }
+        let highest = series(endingAt: 90)
+        let lowest = series(endingAt: 60)
+
+        for metric in [HealthMetric.body_mass, .heart_rate] {
+            #expect(metric.direction == .neither, "\(metric)")
+            #expect(HealthArithmetic.superlative(in: highest, direction: metric.direction, calendar: calendar) == nil, "\(metric) at its highest")
+            #expect(HealthArithmetic.superlative(in: lowest, direction: metric.direction, calendar: calendar) == nil, "\(metric) at its lowest")
+        }
+
+        // Both series do fire for a direction that has an opinion, so the two
+        // silences above are the direction and not the fixture.
+        #expect(HealthArithmetic.superlative(in: highest, direction: .higherIsBetter, calendar: calendar) != nil)
+        #expect(HealthArithmetic.superlative(in: lowest, direction: .lowerIsBetter, calendar: calendar) != nil)
+    }
+
+    @Test("a day of stand hours is a count of markers rather than a length of time")
+    func standHoursAreCounted() {
+        // The watch writes one marker an hour and the ring shows how many of
+        // them say the user stood, so a day's figure is a count of markers.
+        // `appleStandTime`, the quantity type beside it, measures minutes spent
+        // on your feet — a real number about a different thing, and the label
+        // "Stand hours" over a sum of it would be wrong by construction.
+        let calendar = Fixture.calendar()
+        let samples = (7..<19).map { hour in
+            HealthSample(value: 1, unit: .count, date: Fixture.date(2025, 9, 10, hour, 30))
+        }
+
+        let days = HealthArithmetic.daily(samples, metric: .stand_hours, calendar: calendar)
+        #expect(days == [DailyValue(day: Fixture.date(2025, 9, 10, 0, 0), value: 12)])
+        #expect(HealthFormat.value(12, metric: .stand_hours, locale: Fixture.posix) == "12")
+    }
+
+    @Test("mindful sessions are added in seconds and printed the way sleep is")
+    func mindfulSessionsAreDurations() {
+        // A mindful session has no quantity at all: its value is not applicable
+        // and the measurement is the distance between its two dates. Seconds are
+        // what `timeIntervalSince` means, which is the one unit here that cannot
+        // be got wrong, and from there it is an ordinary summed metric rather
+        // than a second interval mechanism beside sleep's.
+        let calendar = Fixture.calendar()
+        let samples = [
+            HealthSample(value: 600, unit: .second, date: Fixture.date(2025, 9, 10, 7, 0)),
+            HealthSample(value: 900, unit: .second, date: Fixture.date(2025, 9, 10, 21, 30))
+        ]
+
+        let days = HealthArithmetic.daily(samples, metric: .mindful_minutes, calendar: calendar)
+        #expect(days == [DailyValue(day: Fixture.date(2025, 9, 10, 0, 0), value: 1_500)])
+        #expect(HealthFormat.value(1_500, metric: .mindful_minutes, locale: Fixture.posix) == "25 m")
+        #expect(HealthFormat.value(4_500, metric: .mindful_minutes, locale: Fixture.posix) == "1 h 15 m")
+    }
+
+    @Test("blood oxygen stays the fraction HealthKit stores and becomes a percentage once")
+    func bloodOxygenIsAFractionUntilItIsPrinted() {
+        // `HKUnit.percent()` measures a value between 0 and 1, so a saturation
+        // of 98% arrives as 0.98. Multiplying at the seam would rescale the
+        // number and relabel it in the same motion, which is the one failure the
+        // unit tag exists to catch and the only one it cannot; multiplying where
+        // the sign is printed cannot go wrong quietly.
+        #expect(HealthUnit.fractionOfOne.hkUnitString == "%")
+        #expect(HealthFormat.value(0.968, metric: .blood_oxygen, locale: Fixture.posix) == "96.8%")
+        // The baseline mean goes through the same formatter as the reading, so
+        // the two can never end up in different magnitudes.
+        #expect(HealthFormat.value(0.97, metric: .blood_oxygen, locale: Fixture.posix) == "97.0%")
+    }
+
+    @Test("VO2 max carries two spellings of one unit, and they are held apart")
+    func vo2MaxSpellingsAreNotInterchangeable() {
+        // Checked against the framework rather than remembered: HealthKit
+        // normalises this compound unit to `mL/min·kg` whichever order its parts
+        // are assembled in, while everybody else writes the mass first. A guess
+        // here is not a wrong number — `daily` drops every sample whose tag does
+        // not match — it is a watch that has been recording for years reported
+        // as having nothing.
+        #expect(HealthUnit.millilitersPerKilogramMinute.hkUnitString == "mL/min·kg")
+        #expect(HealthUnit.millilitersPerKilogramMinute.rawValue == "mL/kg·min")
+        #expect(HealthUnit.named("mL/min·kg", preferring: .millilitersPerKilogramMinute) == .millilitersPerKilogramMinute)
+        // The spelling the payload prints is not one this app will accept from
+        // HealthKit, so the two cannot be quietly swapped for each other.
+        #expect(HealthUnit.named("mL/kg·min", preferring: .millilitersPerKilogramMinute) == nil)
+    }
+
+    @Test("every new figure carries its unit into the payload, or is already labelled by one")
+    func figuresAreSelfDescribing() {
+        // The model reads these strings and nothing else. A bare 7.4 beside a
+        // 28-day average of 6.1 is a comparison it will narrate in whatever unit
+        // it assumes, on a phone set to any region.
+        #expect(HealthFormat.value(7.42, metric: .distance, locale: Fixture.posix) == "7.4 km")
+        #expect(HealthFormat.value(72.46, metric: .body_mass, locale: Fixture.posix) == "72.5 kg")
+        #expect(HealthFormat.value(42.13, metric: .vo2_max, locale: Fixture.posix) == "42.1 mL/kg·min")
+        #expect(HealthFormat.value(61, metric: .heart_rate, locale: Fixture.posix) == "61 bpm")
+        // The two exceptions, and they are exceptions because their own label
+        // already says what they count: "Stand hours 12 hours" is a stutter.
+        #expect(HealthMetric.stand_hours.label == "Stand hours")
+        #expect(HealthMetric.mindful_minutes.label == "Mindful minutes")
+    }
+
+    @Test("no metric belongs to two foci, so nothing is read or reported twice")
+    func fociDoNotOverlap() {
+        // `oneToolCoversEverything` proves every metric is reachable; this is the
+        // other half. A metric in two foci is read twice, printed twice and
+        // counted twice against the notable cap.
+        var seen: Set<HealthMetric> = []
+        for focus in HealthFocus.allCases {
+            for metric in focus.metrics {
+                #expect(seen.insert(metric).inserted, "\(metric) appears in \(focus) and in another focus")
+            }
+        }
+        #expect(seen.count == HealthMetric.allCases.count)
+        #expect(HealthFocus.body.metrics == [.body_mass, .vo2_max])
+    }
+}
