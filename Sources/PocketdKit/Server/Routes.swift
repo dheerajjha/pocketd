@@ -302,7 +302,18 @@ extension Duration {
 public enum PocketdKit {
     /// Reported through `/health` and `/api/version`. Ollama clients version-gate
     /// on the latter, so it has to parse as a semantic version.
-    public static let version = "0.1.0"
+    ///
+    /// It must also equal the app's MARKETING_VERSION, and it silently did not:
+    /// the app shipped 1.0.0 while every `/health` response and every OpenAI
+    /// `system_fingerprint` still said 0.1.0. Nothing could notice, because
+    /// this package has no bundle to read the real number out of — it is built
+    /// and tested without one on purpose, so the server can be exercised on a
+    /// Linux runner in seconds.
+    ///
+    /// So the two are pinned together by `ServerVersionTests` instead, which
+    /// reads project.yml. Bumping one without the other is now a test failure
+    /// rather than a wrong answer on the wire.
+    public static let version = "1.0.0"
 
     /// Echoed on OpenAI responses. The SDKs surface it verbatim, so it says
     /// what actually served the request rather than imitating another vendor.
