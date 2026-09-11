@@ -25,7 +25,9 @@ struct AnalyticsTaxonomyTests {
         .modelLoadFailed(modelID: "qwen3-4b", ramClass: "6gb", reason: .outOfMemory),
         .chatMessageSent(modelID: "smollm2-360m"),
         .serverStarted,
+        .serverStopped(servedSeconds: 742.5),
         .externalClientConnected(dialect: .openai),
+        .onDeviceClientConnected(dialect: .ollama),
         .generationRefused(reason: .thermal)
     ]
 
@@ -70,7 +72,7 @@ struct AnalyticsTaxonomyTests {
         // other test in this file silently stops covering it. The count is
         // hand-maintained on purpose: bumping it is the moment you notice you
         // must also add a sample.
-        #expect(Self.sample.count == 13)
+        #expect(Self.sample.count == 15)
         #expect(Set(Self.sample.map(\.name)).count == Self.sample.count, "duplicate event in sample")
         #expect(Set(Self.sample.map(\.name)) == Set(AnalyticsSchema.allowedProperties.keys),
                 "sample and schema disagree about which events exist")

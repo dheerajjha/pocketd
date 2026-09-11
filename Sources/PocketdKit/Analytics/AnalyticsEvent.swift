@@ -108,6 +108,13 @@ public enum AnalyticsEvent: Sendable, Equatable {
 
     case chatMessageSent(modelID: String)
     case serverStarted
+    /// How long it actually served, which is not how long the app was open.
+    ///
+    /// The listener dies when the app backgrounds, so foreground time and
+    /// serving time are different numbers and only one of them is the product.
+    /// Mixpanel's automatic session tracking measures the wrong one, which is
+    /// why it is off — but declining it left nothing measuring the right one.
+    case serverStopped(servedSeconds: Double)
     /// The moment this stops being a chat app and starts being the product.
     ///
     /// Emitted for LAN clients only. The phone's own /chat page is a network
@@ -118,6 +125,13 @@ public enum AnalyticsEvent: Sendable, Equatable {
     /// wrong, and the headline is what gets quoted. The event means what its
     /// name says instead.
     case externalClientConnected(dialect: ClientDialect)
+    /// The phone answering its own served chat page.
+    ///
+    /// Kept out of `externalClientConnected` so that number means what its
+    /// name says — but kept, rather than discarded. Excluding loopback from
+    /// the north-star metric and throwing the data away were presented as one
+    /// decision and are two; this is the second one going the other way.
+    case onDeviceClientConnected(dialect: ClientDialect)
     case generationRefused(reason: RefusalReason)
 
     public var name: String {
@@ -133,7 +147,9 @@ public enum AnalyticsEvent: Sendable, Equatable {
         case .modelLoadFailed: "model_load_failed"
         case .chatMessageSent: "chat_message_sent"
         case .serverStarted: "server_started"
+        case .serverStopped: "server_stopped"
         case .externalClientConnected: "external_client_connected"
+        case .onDeviceClientConnected: "on_device_client_connected"
         case .generationRefused: "generation_refused"
         }
     }
@@ -162,7 +178,11 @@ public enum AnalyticsEvent: Sendable, Equatable {
             ["model_id": .string(modelID)]
         case .serverStarted:
             [:]
+        case let .serverStopped(served):
+            ["served_s": .double(served)]
         case let .externalClientConnected(dialect):
+            ["dialect": .string(dialect.rawValue)]
+        case let .onDeviceClientConnected(dialect):
             ["dialect": .string(dialect.rawValue)]
         case let .generationRefused(reason):
             ["reason": .string(reason.rawValue)]
@@ -193,7 +213,9 @@ public enum AnalyticsSchema {
         "model_load_failed": ["model_id", "ram_class", "reason"],
         "chat_message_sent": ["model_id"],
         "server_started": [],
+        "server_stopped": ["served_s"],
         "external_client_connected": ["dialect"],
+        "on_device_client_connected": ["dialect"],
         "generation_refused": ["reason"]
     ]
 

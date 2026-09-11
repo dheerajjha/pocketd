@@ -85,3 +85,29 @@ struct AnalyticsMappingTests {
         #expect(AnalyticsMapping.loadReason(for: Surprise()) == .other)
     }
 }
+
+@Suite("Onboarding consent rule")
+struct OnboardingConsentRuleTests {
+    @Test("leaving before the toggle grants nothing; leaving from it onward honours it")
+    func whatCountsAsSeen() {
+        // The line between informed and assumed. Screens 0 and 1 are what this
+        // app is and what it cannot do; the toggle is on screen 2.
+        #expect(OnboardingConsentRule.decisionWasSeen(leavingFromStep: 0) == false)
+        #expect(OnboardingConsentRule.decisionWasSeen(leavingFromStep: 1) == false)
+
+        // Leaving FROM the consent screen counts: it is on screen, above the
+        // fold on the smallest device we support, reading ON. Someone who saw
+        // it and moved past it has been informed, which is what opt-out means.
+        #expect(OnboardingConsentRule.decisionWasSeen(leavingFromStep: 2))
+        #expect(OnboardingConsentRule.decisionWasSeen(leavingFromStep: 3))
+        #expect(OnboardingConsentRule.decisionWasSeen(leavingFromStep: 4))
+    }
+
+    @Test("the index matches the screen the toggle is actually on")
+    func indexIsPinned() {
+        // Fails if someone inserts a screen before the consent one without
+        // moving this. The failure mode otherwise is silent and bad in the
+        // worst direction: consent granted by people who never saw the toggle.
+        #expect(OnboardingConsentRule.consentScreenIndex == 2)
+    }
+}

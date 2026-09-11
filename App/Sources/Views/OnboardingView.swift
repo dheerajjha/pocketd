@@ -485,13 +485,30 @@ struct OnboardingView: View {
     /// Moves on, and commits the analytics decision when the screen carrying it
     /// has actually been read past.
     private func advance() {
-        if step == 2 {
+        if step == OnboardingConsentRule.consentScreenIndex {
             model.setAnalyticsConsent(shareUsage ? .granted : .refused)
         }
         step += 1
     }
 
     private func leave(to tab: AppTab) {
+        // Skip from the consent screen onward honours the toggle as it was
+        // displayed. Skip from before it grants nothing, because they never
+        // saw the sentence.
+        //
+        // This reverses an earlier decision to treat Skip as never granting.
+        // The argument for that was that Skip is an escape gesture and reading
+        // it as agreement is the dark pattern this design exists to avoid —
+        // rhetorically satisfying, and wrong. Tapping Skip on a five-screen
+        // intro is impatience with ONBOARDING, not an objection to analytics.
+        //
+        // The cost was not only volume. People who skip intros skew
+        // experienced and impatient, which is exactly this app's audience, so
+        // the hole would have been in the shape of our core users and nothing
+        // in the data could have shown us that.
+        if OnboardingConsentRule.decisionWasSeen(leavingFromStep: step) {
+            model.setAnalyticsConsent(shareUsage ? .granted : .refused)
+        }
         model.completeOnboarding()
         finish(tab)
     }

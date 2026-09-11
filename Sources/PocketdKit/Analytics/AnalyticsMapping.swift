@@ -96,3 +96,25 @@ public enum AnalyticsMapping {
         return nil
     }
 }
+
+
+/// When leaving the intro counts as having seen the analytics decision.
+///
+/// A rule rather than a comparison written inline in a view, because it is the
+/// line between "informed" and "assumed" and a bare `step >= 2` in a layout
+/// file is not somewhere that line survives a screen being reordered. If
+/// someone inserts a screen before the consent one, this constant is what they
+/// have to change, and the test is what tells them they forgot.
+public enum OnboardingConsentRule {
+    /// Zero-based index of the screen carrying the toggle.
+    public static let consentScreenIndex = 2
+
+    /// Whether someone leaving from `step` was shown the toggle first.
+    ///
+    /// Leaving from the consent screen itself counts: it is on screen, above
+    /// the fold, reading ON. Leaving from before it does not — they never saw
+    /// the sentence, and a default nobody was shown is not a decision.
+    public static func decisionWasSeen(leavingFromStep step: Int) -> Bool {
+        step >= consentScreenIndex
+    }
+}
