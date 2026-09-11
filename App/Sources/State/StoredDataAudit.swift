@@ -273,7 +273,10 @@ final class StoredDataAudit {
     /// because it is written the instant a tap lands, before the store's task
     /// has begun. Neither alone is complete.
     func downloadingIDs(_ model: AppModel) -> Set<String> {
-        storeTransfers.union(model.downloads.keys)
+        // Active only. A finished notice still on screen, or a transfer paused
+        // with its bytes on disk, is not a reason to refuse a delete — and
+        // this set is what guards one.
+        storeTransfers.union(model.transfers.values.filter(\.isActive).map(\.id))
     }
 
     /// The same question, asked of the store again, for a caller about to

@@ -34,11 +34,26 @@ final class AppModel {
     // MARK: Models
 
     private(set) var installed: [ModelRecord] = []
-    private(set) var downloads: [String: DownloadProgress] = [:]
-    private(set) var downloadErrors: [String: String] = [:]
-    /// Interrupted rather than failed: the bytes are still on disk and the
-    /// next tap resumes them.
-    private(set) var downloadPaused: [String: String] = [:]
+
+    /// Every model arriving on this phone, keyed by id, with the record.
+    ///
+    /// One dictionary rather than the three it replaced — progress, error and
+    /// paused, each keyed by an id and none of them holding the model. That
+    /// shape worked only because the eight curated records are compiled into
+    /// the binary and could be looked up by id later. Anything from Hugging
+    /// Face has no such entry, so a search download was an id with no record,
+    /// and every screen here builds its list out of records. The bytes moved
+    /// for minutes and not one pixel changed.
+    private(set) var transfers: [String: ModelTransfer] = [:]
+
+    /// A model that is on disk and would not load.
+    ///
+    /// Separate from a transfer's `.failed`, because they are separate
+    /// failures with separate fixes: one means download it again, the other
+    /// means this phone cannot hold it. They shared a dictionary before and
+    /// the row said "download failed" about a download that had succeeded.
+    private(set) var loadErrors: [String: String] = [:]
+
     private(set) var loadedModelID: String?
     private(set) var isLoadingModel = false
     /// Varies with the context limit: what fits depends on how much KV cache
@@ -51,13 +66,48 @@ final class AppModel {
     /// bug: `/api/models/add` can pull any GGUF on Hugging Face, it lands in
     /// the manifest, and the Models tab — which iterated the static catalogue —
     /// never showed it. The download worked and the model was invisible.
-    /// Installed entries win on id so a catalogue model that has been
+    /// Curated entries win on id so a catalogue model that has been
     /// downloaded keeps its curated name and description.
+    ///
+    /// Models still arriving are in here too. They were not, and that is the
+    /// whole reason a Hugging Face download had no row to draw its progress
+    /// in: the row is built from this list, and this list only knew about
+    /// things that were finished or compiled in.
     var catalog: [ModelRecord] {
-        var merged = ModelCatalog.all
-        let known = Set(merged.map(\.id))
-        merged.append(contentsOf: installed.filter { !known.contains($0.id) })
-        return merged
+        ModelCatalog.listing(
+            installed: installed,
+            transferring: transfers.values
+                .map(\.record)
+                .sorted { $0.displayName < $1.displayName }
+        )
+    }
+
+    func transfer(for id: String) -> ModelTransfer? { transfers[id] }
+
+#if DEBUG
+    /// Seeds transfer states for previews.
+    ///
+    /// The banner has six states and most of them are hard to reach on
+    /// demand: waiting lasts a second, stopping a little longer, finished six,
+    /// and paused and failed need a network that misbehaves on cue. A preview
+    /// is how you look at all of them before a user does.
+    func previewSeed(_ seeded: [ModelTransfer]) {
+        transfers = Dictionary(uniqueKeysWithValues: seeded.map { ($0.id, $0) })
+    }
+#endif
+
+    /// What the banner above the tabs should be showing, in a stable order.
+    ///
+    /// Active first: a download in progress outranks a notice about one that
+    /// finished, and the order must not depend on dictionary iteration or the
+    /// banner swaps rows at random while someone is reading it.
+    var visibleTransfers: [ModelTransfer] {
+        transfers.values
+            .filter { !dismissedDownloads.contains($0.id) && $0.isWorthShowing() }
+            .sorted {
+                if $0.isActive != $1.isActive { return $0.isActive }
+                return $0.record.displayName < $1.record.displayName
+            }
     }
 
     // MARK: Chat
@@ -76,6 +126,8 @@ final class AppModel {
     private let engine: LlamaEngine
     private let server: InferenceServer
     private var downloadTasks: [String: Task<Void, Never>] = [:]
+    /// One per finished transfer, counting down its completion notice.
+    private var noticeTimers: [String: Task<Void, Never>] = [:]
     private var generationTask: Task<Void, Never>?
     private var observers: [Task<Void, Never>] = []
     private let bonjour = BonjourAdvertiser()
@@ -419,24 +471,68 @@ final class AppModel {
 
     func download(_ model: ModelRecord, allowingOversized: Bool = false) {
         guard downloadTasks[model.id] == nil else { return }
-        downloadErrors[model.id] = nil
-        downloadPaused[model.id] = nil
-        downloads[model.id] = DownloadProgress(modelID: model.id, receivedBytes: 0, totalBytes: model.sizeBytes)
+        loadErrors[model.id] = nil
+        // A banner hidden during the last attempt should not hide this one.
+        dismissedDownloads.remove(model.id)
+        // `.waiting`, not zero-of-total. The gap between tapping Download and
+        // the first byte is a DNS lookup, a redirect to Hugging Face's CDN and
+        // a TLS handshake — a second or two on a phone, longer on a bad
+        // network — and a progress bar pinned at 0% for that long is the
+        // picture of an app that has hung.
+        transfers[model.id] = ModelTransfer(
+            record: model,
+            state: .waiting,
+            // A resume starts from the bytes already on disk, so the bar
+            // belongs where the pause left it rather than back at zero.
+            lastProgress: transfers[model.id]?.lastProgress,
+            allowingOversized: allowingOversized || transfers[model.id]?.allowingOversized == true
+        )
 
         downloadTasks[model.id] = Task { [store] in
             do {
-                for try await progress in await store.download(model, allowingOversized: allowingOversized) {
+                let permitted = await MainActor.run { self.transfers[model.id]?.allowingOversized ?? allowingOversized }
+                for try await progress in await store.download(model, allowingOversized: permitted) {
                     await MainActor.run {
-                        self.downloads[model.id] = progress
+                        self.transfers[model.id]?.advance(to: .running(progress))
                         self.recordSample(progress)
                     }
                 }
                 let list = await store.installed()
+                // A stream that ends without throwing is not proof of success.
+                // Cancelling this task makes the iterator finish rather than
+                // throw, so control reaches here for a download that stopped
+                // at three percent — and the old code's only reaction was to
+                // clear an invisible progress bar, which hid it. Now that the
+                // same line announces "Downloaded", the lie is on screen: Stop
+                // on a 3% download said it had finished, offered Load, and the
+                // file was 120 MB of a 3.11 GB model.
+                //
+                // The manifest is the one witness that cannot be wrong about
+                // this: `ModelStore` writes an entry only after verifying the
+                // bytes on disk against the size that was promised.
+                guard list.contains(where: { $0.id == model.id }) else {
+                    await MainActor.run {
+                        // `cancelDownload` has usually already recorded a pause
+                        // with the bytes it kept; anything still calling itself
+                        // active here ended for a reason nobody stated.
+                        if self.transfers[model.id]?.isActive == true {
+                            self.transfers[model.id] = nil
+                        }
+                        self.downloadTasks[model.id] = nil
+                        self.clearSamples(model.id)
+                    }
+                    return
+                }
                 let shouldLoad = await MainActor.run {
                     self.installed = list
-                    self.downloads[model.id] = nil
+                    // The manifest's record, not the one we started with: the
+                    // store verifies the sizes on the way in, and for a search
+                    // download those were an API's claim until now.
+                    self.transfers[model.id]?.record = list.first { $0.id == model.id } ?? model
+                    self.transfers[model.id]?.advance(to: .finished(at: Date()))
                     self.downloadTasks[model.id] = nil
                     self.clearSamples(model.id)
+                    self.expireNotice(for: model.id)
                     // Nothing resident means the app cannot answer anything, so
                     // a download that just finished is unambiguously the model
                     // that was wanted. Without this the intro ends on a screen
@@ -449,7 +545,13 @@ final class AppModel {
                 }
             } catch is CancellationError {
                 await MainActor.run {
-                    self.downloads[model.id] = nil
+                    // `cancelDownload` has already decided whether there were
+                    // bytes worth keeping and said so. This callback lands
+                    // afterwards, so clearing unconditionally would delete the
+                    // paused state a quarter-second after writing it.
+                    if self.transfers[model.id]?.isActive == true {
+                        self.transfers[model.id] = nil
+                    }
                     self.downloadTasks[model.id] = nil
                     self.clearSamples(model.id)
                 }
@@ -459,12 +561,12 @@ final class AppModel {
                     // carries the signed CDN URL and the entire resume blob,
                     // and all of it landed on screen.
                     if let paused = DownloadInterruption.from(error) {
-                        self.downloadPaused[model.id] = paused.message
+                        self.transfers[model.id]?.advance(to: .paused(paused.message))
                     } else {
-                        self.downloadErrors[model.id] =
+                        self.transfers[model.id]?.advance(to: .failed(
                             (error as? LocalizedError)?.errorDescription ?? "The download failed."
+                        ))
                     }
-                    self.downloads[model.id] = nil
                     self.downloadTasks[model.id] = nil
                     self.clearSamples(model.id)
                 }
@@ -472,27 +574,82 @@ final class AppModel {
         }
     }
 
+    /// Clears a finished transfer once its notice has been on screen long
+    /// enough to read.
+    ///
+    /// A timer rather than `isWorthShowing` alone, because that reads the
+    /// clock and nothing re-renders a SwiftUI view when a clock passes a
+    /// number. Removing the entry is what tells the banner to go.
+    private func expireNotice(for id: String) {
+        noticeTimers[id]?.cancel()
+        noticeTimers[id] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(6))
+            guard !Task.isCancelled else { return }
+            let stillLoading = await MainActor.run { self?.loadingModelID == id }
+            // A download that finishes with nothing resident loads itself, and
+            // that takes far longer than the notice does. Pulling the banner
+            // out from under it would leave the phone visibly busy with no
+            // word anywhere about what it is busy with.
+            if stillLoading {
+                await MainActor.run { self?.expireNotice(for: id) }
+                return
+            }
+            await MainActor.run {
+                guard let self else { return }
+                self.noticeTimers[id] = nil
+                if case .finished = self.transfers[id]?.state {
+                    self.transfers[id] = nil
+                }
+            }
+        }
+    }
+
     func cancelDownload(_ model: ModelRecord) {
-        let kept = downloads[model.id]?.receivedBytes ?? 0
+        let kept = transfers[model.id]?.bytesSoFar?.receivedBytes ?? 0
         downloadTasks[model.id]?.cancel()
         downloadTasks[model.id] = nil
-        downloads[model.id] = nil
-        // Cancelling keeps the bytes so the next tap resumes. That is the
-        // right behaviour and it was completely invisible: the row reverted
-        // to a plain Download button, indistinguishable from never having
-        // started, while hundreds of megabytes sat on disk with no way to
-        // reclaim them short of deleting the app.
-        if kept > 0 {
-            downloadPaused[model.id] = "Paused — "
-                + ByteCountFormatter.string(fromByteCount: kept, countStyle: .file)
-                + " kept. Tap Download to resume, or Discard to free it."
+        guard kept > 0 else {
+            transfers[model.id] = nil
+            return
         }
+        // Cancelling usually keeps the bytes so the next tap resumes. That is
+        // the right behaviour and it was completely invisible: the row
+        // reverted to a plain Download button, indistinguishable from never
+        // having started, while hundreds of megabytes sat on disk with no way
+        // to reclaim them short of deleting the app.
+        //
+        // "Usually", though, and the gap is the whole reason for this state.
+        // Whether those bytes are recoverable is not known when Stop is
+        // tapped — it is known when URLSession finishes writing its resume
+        // blob, seconds later. Announcing "kept" and offering Resume before
+        // then meant a prompt tap started the download again from zero,
+        // immediately after the screen had promised it would not.
+        transfers[model.id]?.advance(to: .stopping)
+        Task { [store] in
+            let resumable = await store.awaitResumeData(for: model)
+            await MainActor.run {
+                guard case .stopping = self.transfers[model.id]?.state else { return }
+                self.transfers[model.id]?.advance(to: .paused(
+                    resumable
+                    ? "Paused — \(ByteCountFormatter.string(fromByteCount: kept, countStyle: .file)) kept. Resume picks up where it stopped."
+                    : "Stopped. This one cannot be continued, so Resume starts it again."
+                ))
+            }
+        }
+    }
+
+    /// Stops showing a finished, failed or paused transfer.
+    func clearTransfer(_ id: String) {
+        noticeTimers[id]?.cancel()
+        noticeTimers[id] = nil
+        guard transfers[id]?.isActive == false else { return }
+        transfers[id] = nil
     }
 
     /// Throws away a paused download's bytes.
     func discardPartialDownload(_ model: ModelRecord) async {
         await store.discardPartial(model)
-        downloadPaused[model.id] = nil
+        transfers[model.id] = nil
     }
 
     func delete(_ model: ModelRecord) async {
@@ -536,7 +693,7 @@ final class AppModel {
             if remember { UserDefaults.standard.set(model.id, forKey: Keys.loadedModel) }
         } catch {
             syncLoadedModel(nil)
-            downloadErrors[model.id] = (error as? LocalizedError)?.errorDescription
+            loadErrors[model.id] = (error as? LocalizedError)?.errorDescription
                 ?? "Could not load \(model.displayName)."
         }
     }
@@ -736,7 +893,7 @@ final class AppModel {
         guard rate > 0 else { return DownloadPace(bytesPerSecond: 0, secondsRemaining: nil) }
 
         var remaining: TimeInterval?
-        if let progress = downloads[id], progress.totalBytes > progress.receivedBytes {
+        if let progress = transfers[id]?.progress, progress.totalBytes > progress.receivedBytes {
             remaining = Double(progress.totalBytes - progress.receivedBytes) / rate
         }
         return DownloadPace(bytesPerSecond: rate, secondsRemaining: remaining)

@@ -207,6 +207,33 @@ public actor ModelStore {
         Set(transfersInFlight.keys)
     }
 
+    /// Whether an interrupted download left bytes a retry can continue from.
+    public func hasResumeData(for model: ModelRecord) -> Bool {
+        FileManager.default.fileExists(atPath: resumeDataURL(for: model).path)
+    }
+
+    /// The same question, asked of a cancel that has only just happened.
+    ///
+    /// URLSession produces its resume blob from the completion handler of
+    /// `cancel(byProducingResumeData:)`, and that lands well after the cancel
+    /// call returns — measured at around eight seconds for a 3 GB transfer on
+    /// a simulator. Nothing signals its arrival, so asking once immediately
+    /// after a Stop reliably gets "no" for a download that is perfectly
+    /// resumable. Hence the wait: it is polling because URLSession offers
+    /// nothing to await, and a wrong answer here is the difference between
+    /// continuing a download and silently starting it over.
+    public func awaitResumeData(
+        for model: ModelRecord,
+        timeout: Duration = .seconds(10)
+    ) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while ContinuousClock.now < deadline {
+            if hasResumeData(for: model) { return true }
+            try? await Task.sleep(for: .milliseconds(150))
+        }
+        return hasResumeData(for: model)
+    }
+
     public func isInstalled(_ model: ModelRecord) -> Bool {
         manifest[model.id] != nil
     }

@@ -25,7 +25,7 @@ struct RootView: View {
             // Above the tabs rather than inside one of them: a download is the
             // one thing here that outlives the screen that started it.
             VStack(spacing: 0) {
-                DownloadBanner()
+                DownloadBanner(goTo: { tab = $0 })
                 TabView(selection: $tab) {
                     Tab("Server", systemImage: "network", value: AppTab.server) {
                         ServerView(goTo: { tab = $0 })

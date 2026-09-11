@@ -221,10 +221,22 @@ struct OnboardingView: View {
 
     private var whereNext: some View {
         VStack(alignment: .leading, spacing: 16) {
-            eyebrow(model.downloads.isEmpty ? "You're set up" : "Downloading now")
+            let started = model.transfers.values.sorted { $0.record.displayName < $1.record.displayName }
+            let downloading = started.contains { $0.isActive }
+            eyebrow(downloading ? "Downloading now" : "You're set up")
             title("Two ways to use it.")
-            if !model.downloads.isEmpty {
-                body("The download keeps going while you look around — there's a progress bar at the top of every screen.")
+
+            // The download the last step started, shown rather than described.
+            //
+            // This screen used to say "there's a progress bar at the top of
+            // every screen" — true the moment you leave, and not true here,
+            // because the banner lives above the tab bar and the tab bar is
+            // not on screen during the intro. So the one place a first
+            // download is almost always started was the one place that could
+            // not show it, and the sentence pointed at something the reader
+            // could not see.
+            ForEach(started) { transfer in
+                transferCard(transfer)
             }
 
             destinationCard(
@@ -243,6 +255,79 @@ struct OnboardingView: View {
     }
 
     // MARK: Pieces
+
+    /// A download in progress, on the screen that started it.
+    @ViewBuilder
+    private func transferCard(_ transfer: ModelTransfer) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                switch transfer.state {
+                case .waiting, .stopping:
+                    ProgressView().controlSize(.small)
+                case .running:
+                    Image(systemName: "arrow.down.circle.fill").foregroundStyle(Color.accentColor)
+                case .finished:
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                case .paused:
+                    Image(systemName: "pause.circle.fill").foregroundStyle(.orange)
+                case .failed:
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(transfer.record.displayName)
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                    Text(transferLine(transfer))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 0)
+            }
+            switch transfer.state {
+            case .waiting:
+                ProgressView().progressViewStyle(.linear)
+            case .running, .stopping, .paused:
+                ProgressView(value: transfer.fraction).progressViewStyle(.linear)
+            case .finished, .failed:
+                EmptyView()
+            }
+            if case .failed = transfer.state {
+                Button("Try again") { model.download(transfer.record) }
+                    .font(.caption)
+                    .buttonStyle(.bordered)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color.secondary.opacity(0.08)))
+        .accessibilityElement(children: .combine)
+    }
+
+    private func transferLine(_ transfer: ModelTransfer) -> String {
+        switch transfer.state {
+        case .waiting:
+            return "Starting · \(ByteCountFormatter.string(fromByteCount: transfer.record.totalDownloadBytes, countStyle: .file)) to fetch"
+        case .stopping:
+            return "Stopping · checking what can be kept"
+        case let .running(progress):
+            let percent = Int((transfer.fraction * 100).rounded(.down))
+            var line = "\(percent)% · \(ByteCountFormatter.string(fromByteCount: progress.receivedBytes, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: progress.totalBytes, countStyle: .file))"
+            if let pace = model.pace(for: transfer.id), pace.bytesPerSecond > 0 {
+                line += " · \(ByteCountFormatter.string(fromByteCount: Int64(pace.bytesPerSecond), countStyle: .file))/s"
+            }
+            return line
+        case .finished:
+            return model.loadingModelID == transfer.id
+                ? "Downloaded · loading it now"
+                : "Downloaded · ready to use"
+        case let .paused(message):
+            return message
+        case let .failed(message):
+            return message
+        }
+    }
 
     private func starterRow(_ record: ModelRecord, tier: String) -> some View {
         let isChosen = (chosen ?? model.recommendedStarter)?.id == record.id

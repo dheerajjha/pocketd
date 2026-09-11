@@ -13,9 +13,22 @@ options:
 packages:
   PocketdKit:
     path: .
+  # By revision, not by version, and that is forced rather than chosen.
+  # LocalLLMClientLlama passes -Xlinker rpath flags through to llama.cpp, and
+  # SwiftPM refuses to let a *version*-based dependency carry unsafe flags:
+  #
+  #   error: The package product 'LocalLLMClientLlama-product' cannot be used
+  #   as a dependency of this target because it uses unsafe build flags.
+  #
+  # `from: 0.5.0` therefore could not build the app target from a clean
+  # checkout at all — the only reason it ever worked here was a derived-data
+  # directory resolved before the rule bit, and deleting that took the app
+  # build with it. A revision requirement lifts the restriction, and this SHA
+  # *is* 0.5.0, so what gets compiled has not moved. It is also the stronger
+  # pin the comments elsewhere already claimed this was.
   LocalLLMClient:
     url: https://github.com/tattn/LocalLLMClient.git
-    from: 0.5.0
+    revision: edc39ef2ffc1cef9cf856b0788de8d331f776c2e
 
 targets:
   Pocketd:
@@ -134,3 +147,28 @@ targets:
         product: LocalLLMClient
       - package: LocalLLMClient
         product: LocalLLMClientLlama
+
+# A shared scheme, on disk and in git's view of the world.
+#
+# Without one, `xcodebuild -scheme Pocketd` still works — it synthesises a
+# scheme in memory — but Xcode.app opens the project with an empty scheme
+# picker, and anything that needs a scheme (previews, profiling, a fresh
+# clone's first Run) has nothing to select. That is a worse first five
+# minutes than it sounds, and it is one block of YAML.
+schemes:
+  Pocketd:
+    build:
+      targets:
+        Pocketd: all
+    run:
+      config: Debug
+    # No test targets here: the suite is the Swift package's, run with
+    # `swift test`, and it deliberately does not need a simulator.
+    test:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

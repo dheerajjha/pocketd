@@ -281,7 +281,7 @@ private struct RepositoryFilesView: View {
     private func row(for file: HuggingFaceSearch.File, projector: HuggingFaceSearch.File?) -> some View {
         let record = record(for: file, projector: projector)
         let installed = model.isInstalled(record)
-        let downloading = model.downloads[record.id] != nil
+        let downloading = model.transfer(for: record.id)?.isActive == true
 
         Button {
             // The fit number is a heuristic, so it warns rather than forbids —

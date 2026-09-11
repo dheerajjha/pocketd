@@ -126,7 +126,7 @@ struct ModelsView: View {
     private func row(for record: ModelRecord) -> some View {
         let fit = model.fit(for: record)
         let installed = model.isInstalled(record)
-        let progress = model.downloads[record.id]
+        let transfer = model.transfer(for: record.id)
 
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -162,13 +162,8 @@ struct ModelsView: View {
 
             fitExplanation(for: fit)
 
-            if let progress {
-                ProgressView(value: progress.fraction) {
-                    Text("\(format(progress.receivedBytes)) of \(format(progress.totalBytes))")
-                        .font(.caption)
-                }
-                Button("Cancel", role: .cancel) { model.cancelDownload(record) }
-                    .font(.caption)
+            if let transfer, transfer.isActive {
+                inFlight(transfer, record: record)
             } else if installed {
                 HStack {
                     if model.loadingModelID == record.id {
@@ -199,31 +194,125 @@ struct ModelsView: View {
                         .font(.caption)
                 }
             } else {
-                Button("Download") {
-                    // The estimate is a heuristic, so it warns rather than
-                    // forbids — but it makes the consequence explicit first.
-                    if fit.allowsDownload {
-                        model.download(record)
-                    } else {
-                        oversizedCandidate = record
-                    }
+                // "Resume" rather than "Download" when there are bytes on
+                // disk: the two do different things and the old label claimed
+                // the transfer was about to start over, which is the thing
+                // people cancel a download to avoid.
+                let resuming: Bool = if case .paused = transfer?.state { true } else { false }
+                if resuming {
+                    Button("Resume") { start(record, fit: fit) }
+                        .buttonStyle(.borderedProminent)
+                } else {
+                    Button("Download") { start(record, fit: fit) }
+                        .buttonStyle(.bordered)
                 }
-                .buttonStyle(.bordered)
             }
 
-            if let paused = model.downloadPaused[record.id] {
-                Text(paused).font(.caption2).foregroundStyle(.orange)
+            if let transfer, !transfer.isActive {
+                settled(transfer, record: record)
+            }
+
+            // A model that downloaded perfectly and then would not load. A
+            // different failure with a different fix, and it used to be
+            // written into the same slot as "the download failed".
+            if let error = model.loadErrors[record.id] {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// The estimate is a heuristic, so it warns rather than forbids — but it
+    /// makes the consequence explicit first.
+    private func start(_ record: ModelRecord, fit: DeviceBudget.Fit) {
+        if fit.allowsDownload {
+            model.download(record)
+        } else {
+            oversizedCandidate = record
+        }
+    }
+
+    /// Bytes moving, or about to.
+    @ViewBuilder
+    private func inFlight(_ transfer: ModelTransfer, record: ModelRecord) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            switch transfer.state {
+            case .waiting:
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Starting…").font(.caption).foregroundStyle(.secondary)
+                }
+                ProgressView().progressViewStyle(.linear)
+            default:
+                HStack {
+                    // Percent, rate and time remaining were all computed for
+                    // the banner and none of them reached this row, which is
+                    // the one place you come to when you want to act on a
+                    // download rather than glance at it.
+                    Text("\(Int((transfer.fraction * 100).rounded(.down)))%")
+                        .font(.caption.weight(.semibold))
+                        .monospacedDigit()
+                    Spacer()
+                    Text(paceLine(transfer))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                ProgressView(value: transfer.fraction).progressViewStyle(.linear)
+            }
+            Button("Cancel", role: .cancel) { model.cancelDownload(record) }
+                .font(.caption)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Finished, paused or failed — the three ends a transfer can come to.
+    @ViewBuilder
+    private func settled(_ transfer: ModelTransfer, record: ModelRecord) -> some View {
+        switch transfer.state {
+        case .finished:
+            Label("Downloaded", systemImage: "checkmark.circle.fill")
+                .font(.caption2)
+                .foregroundStyle(.green)
+        case let .paused(message):
+            VStack(alignment: .leading, spacing: 4) {
+                Label(message, systemImage: "pause.circle")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
                 Button("Discard partial download", role: .destructive) {
                     Task { await model.discardPartialDownload(record) }
                 }
                 .font(.caption2)
             }
-
-            if let error = model.downloadErrors[record.id] {
-                Text(error).font(.caption2).foregroundStyle(.red)
+        case let .failed(message):
+            VStack(alignment: .leading, spacing: 4) {
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                Button("Dismiss") { model.clearTransfer(transfer.id) }
+                    .font(.caption2)
             }
+        case .stopping:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Stopping — checking what can be kept…")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        case .waiting, .running:
+            EmptyView()
         }
-        .padding(.vertical, 4)
+    }
+
+    private func paceLine(_ transfer: ModelTransfer) -> String {
+        guard let progress = transfer.bytesSoFar else { return "" }
+        var line = "\(format(progress.receivedBytes)) of \(format(progress.totalBytes))"
+        if let pace = model.pace(for: transfer.id), pace.bytesPerSecond > 0 {
+            line += " · \(format(Int64(pace.bytesPerSecond)))/s"
+        }
+        return line
     }
 
     @ViewBuilder
