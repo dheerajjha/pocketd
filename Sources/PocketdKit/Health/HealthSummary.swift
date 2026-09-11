@@ -586,7 +586,27 @@ public enum HealthFormat {
         )
     }
 
+    /// A number the model can only read one way.
+    ///
+    /// Deliberately not locale-formatted, and the `locale` argument is ignored
+    /// rather than removed so callers keep passing the one they use for dates —
+    /// month names read better localised and a model handles them fine.
+    /// Grouped digits do not: on a German phone `.locale(locale)` renders 12000
+    /// steps as "12.000", and a 1.7B model reads that as twelve about as often
+    /// as as twelve thousand. French inserts U+202F inside the number, and
+    /// Arabic emits Arabic-Indic digits beside the ASCII ones this file's
+    /// duration formatter produces — two numeral systems in one sentence.
+    ///
+    /// This is the same hazard `duration` already documents for decimal hours
+    /// ("7.75 hours is a number nobody says out loud"). It was solved there and
+    /// reintroduced here, in the one payload where a misread number is a wrong
+    /// answer about somebody's body.
     static func number(_ value: Double, digits: Int, locale: Locale) -> String {
-        value.formatted(.number.precision(.fractionLength(digits)).locale(locale))
+        value.formatted(
+            .number
+                .precision(.fractionLength(digits))
+                .grouping(.never)
+                .locale(Locale(identifier: "en_US_POSIX"))
+        )
     }
 }

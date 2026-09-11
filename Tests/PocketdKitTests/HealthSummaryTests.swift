@@ -801,3 +801,27 @@ struct HealthSummaryWindowTests {
         #expect(covered == Set(HealthMetric.allCases))
     }
 }
+
+@Suite("Health numbers read the same in every locale")
+struct HealthNumberLocaleTests {
+    @Test("a count never carries a grouping separator or a non-ASCII digit")
+    func groupingNeverReachesTheModel() {
+        // The payload is read by a 1.7B model, not by a person. German renders
+        // 12000 as "12.000", which reads as twelve; French inserts U+202F
+        // inside the digits; Arabic emits a different numeral system entirely.
+        // One misread number here is a wrong answer about somebody's body.
+        for identifier in ["en_US", "de_DE", "fr_FR", "ar_EG", "hi_IN"] {
+            let rendered = HealthFormat.number(12000, digits: 0, locale: Locale(identifier: identifier))
+            // Computed outside the macro: `allSatisfy` is rethrows, and the
+            // expansion will not accept a possibly-throwing call.
+            let isASCII = rendered.unicodeScalars.allSatisfy { $0.isASCII }
+            #expect(rendered == "12000", "\(identifier) rendered \(rendered)")
+            #expect(isASCII, "\(identifier) emitted non-ASCII digits")
+        }
+    }
+
+    @Test("fractional precision still works")
+    func precisionSurvives() {
+        #expect(HealthFormat.number(72.46, digits: 1, locale: Locale(identifier: "de_DE")) == "72.5")
+    }
+}
