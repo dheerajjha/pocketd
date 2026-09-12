@@ -180,7 +180,7 @@ struct DataInspectorView: View {
         } header: {
             Text("What leaves this device")
         } footer: {
-            Text("Two connections, both to Hugging Face, both about model files. This list comes from reading every network call in the source; it is the one claim on this screen you cannot check from the phone itself.")
+            Text("Three connections. Two are to Hugging Face and are about model files; the third carries usage events. This list comes from reading every network call in the source — and the third one cannot be found that way, because those requests are made inside a dependency rather than by code in this repository. It is the one claim on this screen you cannot check from the phone itself.")
         }
     }
 
@@ -645,7 +645,7 @@ struct DataInspectorView: View {
             return "Frees \(bytes(area.tally.byteCount)). Any download you paused starts again from zero next time instead of resuming."
         case .networkCache:
             let area = audit.survey?.area(.networkCache) ?? StoredDataArea(kind: .networkCache)
-            return "Discards \(bytes(area.tally.byteCount)) of Hugging Face responses and cookies. iOS manages these files, so the number above may not drop all the way to zero straight away."
+            return "Discards \(bytes(area.tally.byteCount)) of cached responses and cookies, from Hugging Face and from the usage-event sender alike — they share the same HTTP machinery, so they leave their leftovers in the same place. iOS manages these files, so the number above may not drop all the way to zero straight away."
         case .apiKey:
             return "Every device already paired stops working and has to pair again. The old key cannot be recovered."
         case let .model(record):

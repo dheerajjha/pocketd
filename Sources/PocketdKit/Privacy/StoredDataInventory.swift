@@ -90,7 +90,12 @@ public enum StoredDataKind: String, Sendable, CaseIterable, Codable {
         case .preferences:
             "This app's own settings, including the API key other devices use to reach it."
         case .networkCache:
-            "What the system's HTTP client kept from talking to Hugging Face — search results, and any cookies its CDN set."
+            // Named for both callers rather than for Hugging Face alone. The
+            // analytics SDK reaches the network through the same URLSession
+            // machinery, so whatever it leaves behind is counted here too, and
+            // a sentence naming only the model search would be describing part
+            // of the bytes this screen is showing.
+            "What the system's HTTP client kept from the requests this app makes: Hugging Face search results and any cookies its CDN set, plus whatever the analytics SDK's own requests leave behind. Nothing you typed is in here."
         case .shaderCache:
             "Compiled GPU code for running a model on this phone's graphics hardware. It describes the app, not you."
         case .systemState:

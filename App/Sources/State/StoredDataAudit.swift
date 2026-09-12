@@ -165,13 +165,21 @@ final class StoredDataAudit {
 
     // MARK: - What leaves
 
-    /// Every outbound connection this app makes, from a grep of the whole
-    /// repository for `URLSession` and `URLRequest`. Two of them, both to
-    /// Hugging Face, both about model files. Inference never calls out — the
-    /// weights are a file on this phone. The HTTP server does: `GET
-    /// /api/search`, `POST /api/pull` and `POST /api/models/add` all reach
-    /// Hugging Face because a network peer asked them to, which is why both
-    /// rows below say "or when a paired device asks".
+    /// Every outbound connection this app makes.
+    ///
+    /// Two of the three come from a grep of the whole repository for
+    /// `URLSession` and `URLRequest`, both to Hugging Face, both about model
+    /// files. Inference never calls out — the weights are a file on this
+    /// phone. The HTTP server does: `GET /api/search`, `POST /api/pull` and
+    /// `POST /api/models/add` all reach Hugging Face because a network peer
+    /// asked them to, which is why both of those rows say "or when a paired
+    /// device asks".
+    ///
+    /// The third is the analytics SDK, and it is written out here precisely
+    /// because that grep cannot find it: the requests are made inside a
+    /// dependency, so nothing in this repository's own source would ever
+    /// mention them. A connection nobody remembered to type is exactly how
+    /// this list stopped being true the first time.
     ///
     /// Hardcoded rather than observed, and that is the weakness of this
     /// section: it is a claim about the source, checked when it was written.
@@ -188,13 +196,27 @@ final class StoredDataAudit {
             sends: "Which model file you are fetching, and this phone's IP address. No account, no token, no identifier of yours.",
             when: "Only while a model is downloading."
         ),
+        Destination(
+            host: "api.mixpanel.com",
+            sends: "Usage events, and only the fifteen listed in AnalyticsEvent.swift: the app opened, a model downloaded or loaded or failed to, a message sent, the server started or stopped, a client answered. Each carries a model id, a size, a duration, a bucketed RAM class or a failure reason, and an identifier for this install. Never a message of yours, never the model's reply, never a filename, an address, or anything from Health, Calendar or Reminders.",
+            when: "While you use the app. There is no setting that turns this off."
+        ),
     ]
 
     /// True of what leaves, and true of the things people assume leave.
+    ///
+    /// The third line used to promise that this app measured nothing, reported
+    /// nothing, and had no server anywhere to receive any of it. That was true
+    /// when it was written and stopped being true the day usage events
+    /// shipped, and a screen whose whole argument is that every sentence on it
+    /// can be checked cannot carry one that fails the check. What replaced it
+    /// is the part of the promise that survived, stated as narrowly as it is
+    /// actually kept.
     let assurances: [String] = [
         "Inference is local. Nothing you type in Chat, and nothing a paired device sends, is transmitted anywhere — it goes to a file of weights on this phone and comes back.",
-        "The HTTP server never calls out on its own initiative. The only requests it makes are the two above, and only when a paired device asks it to search Hugging Face or to pull a model.",
-        "There is no analytics, no crash reporting and no telemetry of any kind in this app. There is no server to receive it, because there is no account.",
+        "The HTTP server never calls out on its own initiative. The only requests it makes are the two to Hugging Face above, and only when a paired device asks it to search or to pull a model.",
+        "Your conversations, the model's replies and everything read from Health, Calendar and Reminders stay on this phone. Usage events are the one exception and they cannot carry any of it: AnalyticsSchema lists the property names an event may use, and a test refuses the build if one ever names a prompt, a file, an address or a health figure.",
+        "There is no crash reporting, and no account, so nothing sent is joined to anything you do anywhere else. Usage events are shared with Mixpanel, who process them for us — that is what the third row above means. Nothing is sold.",
     ]
 
     /// The awkward corners, which belong on a page like this more than the

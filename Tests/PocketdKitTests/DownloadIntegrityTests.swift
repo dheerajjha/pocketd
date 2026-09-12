@@ -9,7 +9,10 @@ import FlyingSocks
 /// over real HTTP against a real server, the same way `DownloadTests` does, and
 /// they check the one thing that used to be checked nowhere: that the bytes
 /// which arrived are the bytes that were promised.
-@Suite("Download integrity")
+///
+/// Serialized for the reason `DownloadTests` is: four concurrent background
+/// transfers is all the system will run at once.
+@Suite("Download integrity", .serialized)
 struct DownloadIntegrityTests {
 
     /// Deterministic filler. Byte-for-byte correctness is `DownloadTests`'

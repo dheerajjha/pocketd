@@ -108,10 +108,15 @@ final class AppModel {
         if !consent.permitsSending { analytics.stopAndForget() }
     }
 
-    /// Where events go. `NoAnalytics` until the SDK is wired, and `NoAnalytics`
-    /// forever in tests — a type that has no code capable of transmitting,
-    /// rather than a flag that says not to.
-    private(set) var analytics: any AnalyticsSink = NoAnalytics()
+    /// Where events go.
+    ///
+    /// Constructed here rather than injected because there is nothing left to
+    /// choose between: this is the app, and usage counts are part of it rather
+    /// than a setting inside it. `NoAnalytics` is still what every test sees,
+    /// and it is still a type with no code capable of transmitting rather than
+    /// a flag that says not to — which is why the package's suite cannot reach
+    /// a real project even by accident.
+    private(set) var analytics: any AnalyticsSink = MixpanelAnalytics()
 
 #if DEBUG
     /// Seeds transfer states for previews.
@@ -162,13 +167,26 @@ final class AppModel {
     private let bonjour = BonjourAdvertiser()
     private var governor: DeviceGovernor?
 
+    /// When the listener came up, for the served seconds `serverStopped`
+    /// carries. Nil whenever this app is not the one serving.
+    ///
+    /// Deliberately not "when the app was opened". iOS closes the socket on
+    /// suspend without telling anyone, so the two clocks differ by every minute
+    /// the phone spent in a pocket, and only one of them is about the product.
+    private var servingSince: Date?
+
     private enum Keys {
         static let loadedModel = "pocketd.loadedModel"
         static let systemPrompt = "pocketd.systemPrompt"
         static let serverShouldRun = "pocketd.serverShouldRun"
         static let autoOffloadInBackground = "pocketd.autoOffloadInBackground"
         static let idleOffloadSeconds = "pocketd.idleOffloadSeconds"
-        static let personalDataTools = "pocketd.personalDataTools"
+        static let calendarTools = "pocketd.calendarTools"
+        static let reminderTools = "pocketd.reminderTools"
+        /// The switch that governed both of the two above. Read once, at the
+        /// first launch of a build that has them, and removed on the spot —
+        /// nothing writes it any more. See `PersonalDataToolsMigration`.
+        static let legacyPersonalDataTools = "pocketd.personalDataTools"
         static let healthTools = "pocketd.healthTools"
         static let completedOnboarding = "pocketd.completedOnboarding"
         static let analyticsConsent = "pocketd.analyticsConsent"
@@ -204,16 +222,40 @@ final class AppModel {
                 ?? directory.appendingPathComponent("Conversations")
         )
 
-        // Read before the engine exists rather than from the stored property,
+        // Read before the engine exists rather than from the stored properties,
         // because property observers do not run during initialisation: reading
-        // `personalDataToolsEnabled` here would see its declared default and
-        // launch with the tools off for someone who turned them on.
-        let toolsEnabled = UserDefaults.standard.bool(forKey: Keys.personalDataTools)
-        let healthEnabled = UserDefaults.standard.bool(forKey: Keys.healthTools)
+        // `calendarToolsEnabled` here would see its declared default and launch
+        // with the tools off for someone who turned them on.
+        //
+        // `object(forKey:)` and not `bool(forKey:)` for the three that feed the
+        // migration: it needs "never written" and `false` to be different
+        // answers, and `bool(forKey:)` collapses them into one. Health is not
+        // in the migration and keeps the simpler read.
+        let defaults = UserDefaults.standard
+        let personalData = PersonalDataToolsMigration.resolve(
+            .init(
+                legacy: defaults.object(forKey: Keys.legacyPersonalDataTools) as? Bool,
+                calendar: defaults.object(forKey: Keys.calendarTools) as? Bool,
+                reminders: defaults.object(forKey: Keys.reminderTools) as? Bool
+            )
+        )
+        if personalData.shouldPersist {
+            // The removal last. Either write failing on its own leaves the old
+            // key as the answer, which is recoverable; losing it first leaves
+            // an upgraded user with no answer at all.
+            defaults.set(personalData.calendar, forKey: Keys.calendarTools)
+            defaults.set(personalData.reminders, forKey: Keys.reminderTools)
+            defaults.removeObject(forKey: Keys.legacyPersonalDataTools)
+        }
+        let healthEnabled = defaults.bool(forKey: Keys.healthTools)
         let engine = LlamaEngine(
             fileURL: { store.fileURL(for: $0) },
             projectorURL: { store.projectorURL(for: $0) },
-            tools: Self.registrations(personalData: toolsEnabled, health: healthEnabled),
+            tools: Self.registrations(
+                calendar: personalData.calendar,
+                reminders: personalData.reminders,
+                health: healthEnabled
+            ),
             exempt: Self.selfTestTools()
         )
         self.engine = engine
@@ -247,7 +289,8 @@ final class AppModel {
         // touched the switch.
         autoOffloadInBackground = UserDefaults.standard.object(forKey: Keys.autoOffloadInBackground) as? Bool ?? true
         idleOffloadSeconds = UserDefaults.standard.integer(forKey: Keys.idleOffloadSeconds)
-        personalDataToolsEnabled = toolsEnabled
+        calendarToolsEnabled = personalData.calendar
+        reminderToolsEnabled = personalData.reminders
         healthToolsEnabled = healthEnabled
     }
 
@@ -267,6 +310,15 @@ final class AppModel {
         await engine.updateDefaultSampling(configuration.sampling)
         installed = await store.installed()
         settleOnboardingForExistingInstall()
+
+        // After the onboarding flag has been settled, not before. That flag is
+        // the trace an earlier build leaves behind, and it is the only thing
+        // separating a genuinely new install from someone updating into the
+        // first version that had any analytics in it. Recorded a line earlier,
+        // every existing user reports a first launch on release day.
+        analytics.record(.appOpened(
+            isFirstLaunch: FirstLaunch.claim(evidenceOfPriorUse: hasCompletedOnboarding)
+        ))
 
         // Reopen what was on screen last time. Coming back to a blank Chat tab
         // after a force-quit reads as data loss even when the transcript is
@@ -342,6 +394,14 @@ final class AppModel {
         do {
             try await server.apply(configuration)
             try await server.start()
+            servingSince = Date()
+            // On this line and not at the top of the method, because a bind
+            // that fails throws above: a port already in use would otherwise be
+            // counted as the server having started. The count does include the
+            // restart after every suspension — iOS closes the socket without
+            // telling anyone and `reconcileAfterForeground` puts it back — and
+            // "the listener came up" is what this event honestly means.
+            analytics.record(.serverStarted)
             // A code is only worth showing until someone has used one. After
             // that the laptop has the key and the phone should stop displaying
             // six digits it no longer needs.
@@ -357,6 +417,16 @@ final class AppModel {
     func stopServer() async {
         serverShouldRun = false
         UserDefaults.standard.set(false, forKey: Keys.serverShouldRun)
+        // Only where this app is the one ending it. A suspension kills the
+        // listener without running this method, so a stop recorded later would
+        // be measured across hours of a phone in a pocket — app-open time,
+        // which `serverStopped` documents itself as deliberately not being.
+        // The price is that starts outnumber stops, and the difference is
+        // suspensions rather than anything anyone did.
+        if let since = servingSince {
+            analytics.record(.serverStopped(servedSeconds: Date().timeIntervalSince(since)))
+            servingSince = nil
+        }
         await server.stop()
         await server.closePairing()
         bonjour.stop()
@@ -501,6 +571,24 @@ final class AppModel {
 
     func download(_ model: ModelRecord, allowingOversized: Bool = false) {
         guard downloadTasks[model.id] == nil else { return }
+        // Both of these sit after the guard, so a second tap on a download
+        // already running is not a second download. A resume is one: it comes
+        // back through here, and the pause that preceded it was reported as a
+        // failure, so the two sides of the funnel count the same attempts.
+        //
+        // The override reads the argument rather than the transfer's own flag,
+        // which a resume inherits from the attempt before it. What is worth
+        // counting is the moment someone was told this model will not fit on
+        // their phone and said go ahead anyway, and that only ever arrives
+        // through the parameter.
+        if allowingOversized { analytics.record(.oversizeOverride(modelID: model.id)) }
+        // The total rather than the weights alone: the projector comes down
+        // with them, and a vision model without one is a text model. It is the
+        // figure `/api/pull` reports, for the same reason.
+        analytics.record(.modelDownloadStarted(
+            modelID: model.id,
+            sizeBytes: model.totalDownloadBytes
+        ))
         loadErrors[model.id] = nil
         // A banner hidden during the last attempt should not hide this one.
         dismissedDownloads.remove(model.id)
@@ -518,6 +606,11 @@ final class AppModel {
             allowingOversized: allowingOversized || transfers[model.id]?.allowingOversized == true
         )
 
+        // Monotonic, and scoped to this attempt. A resumed download measures
+        // only the leg that finished it, which is the honest number available:
+        // counting from the first attempt would include however long the phone
+        // spent switched off in between.
+        let started = ContinuousClock.now
         downloadTasks[model.id] = Task { [store] in
             do {
                 let permitted = await MainActor.run { self.transfers[model.id]?.allowingOversized ?? allowingOversized }
@@ -546,6 +639,14 @@ final class AppModel {
                         // with the bytes it kept; anything still calling itself
                         // active here ended for a reason nobody stated.
                         if self.transfers[model.id]?.isActive == true {
+                            // A reason nobody stated is still a failure, and it
+                            // is the one kind nothing else here can see: the
+                            // stream ended without throwing and the bytes are
+                            // not in the manifest. Stop has already moved the
+                            // transfer out of active by the time it lands here,
+                            // so a cancelled download is not also counted as a
+                            // failed one.
+                            self.analytics.record(.modelDownloadFailed(modelID: model.id, reason: .other))
                             self.transfers[model.id] = nil
                         }
                         self.downloadTasks[model.id] = nil
@@ -560,6 +661,14 @@ final class AppModel {
                     // download those were an API's claim until now.
                     self.transfers[model.id]?.record = list.first { $0.id == model.id } ?? model
                     self.transfers[model.id]?.advance(to: .finished(at: Date()))
+                    // On the far side of the manifest check above rather than
+                    // where the stream ended, for the reason that check exists:
+                    // a stream that finishes without throwing is not proof that
+                    // anything arrived.
+                    self.analytics.record(.modelDownloadCompleted(
+                        modelID: model.id,
+                        durationSeconds: started.duration(to: .now) / .seconds(1)
+                    ))
                     self.downloadTasks[model.id] = nil
                     self.clearSamples(model.id)
                     self.expireNotice(for: model.id)
@@ -587,6 +696,15 @@ final class AppModel {
                 }
             } catch {
                 await MainActor.run {
+                    // Through the mapping, which is the only bridge in this app
+                    // from an error to something transmittable. An interruption
+                    // counts as a failure here: `offline` and `timed_out` are
+                    // in the taxonomy because the Wi-Fi going is how this
+                    // usually fails, not because it is an edge case.
+                    self.analytics.record(.modelDownloadFailed(
+                        modelID: model.id,
+                        reason: AnalyticsMapping.downloadReason(for: error)
+                    ))
                     // Never String(describing:) a URL error here: its userInfo
                     // carries the signed CDN URL and the entire resume blob,
                     // and all of it landed on screen.
@@ -636,6 +754,14 @@ final class AppModel {
 
     func cancelDownload(_ model: ModelRecord) {
         let kept = transfers[model.id]?.bytesSoFar?.receivedBytes ?? 0
+        // Before the cancel, while the transfer still knows how far it got.
+        // A percentage rather than the byte count beside it: the question is
+        // how much of a download someone tolerated before giving up, and that
+        // is the same question whether the file was 300 MB or 3 GB.
+        analytics.record(.modelDownloadCancelled(
+            modelID: model.id,
+            percentComplete: Int((transfers[model.id]?.fraction ?? 0) * 100)
+        ))
         downloadTasks[model.id]?.cancel()
         downloadTasks[model.id] = nil
         guard kept > 0 else {
@@ -712,8 +838,21 @@ final class AppModel {
         isLoadingModel = true
         loadingModelID = model.id
         defer { isLoadingModel = false; loadingModelID = nil }
+        // Read once for both outcomes, because the question these two events
+        // exist to answer is asked along that axis — whether 4 GB phones can
+        // hold 3B models is not visible in any single device's failure.
+        let ramClass = AnalyticsMapping.ramClass(bytes: budget.physicalMemoryBytes)
+        // Monotonic rather than Date: a load is tens of seconds of memory
+        // pressure on a phone, and a clock correction during one would put a
+        // negative duration in a column that cannot mean anything by it.
+        let started = ContinuousClock.now
         do {
             try await engine.load(model: model)
+            analytics.record(.modelLoadSucceeded(
+                modelID: model.id,
+                ramClass: ramClass,
+                loadMilliseconds: Int(started.duration(to: .now) / .milliseconds(1))
+            ))
             syncLoadedModel(model.id)
             // This model is resident right now, so its estimate is no longer a
             // prediction — it is a measurement of what this device tolerates.
@@ -722,6 +861,16 @@ final class AppModel {
             await store.updateBudget(budget)
             if remember { UserDefaults.standard.set(model.id, forKey: Keys.loadedModel) }
         } catch {
+            // What this cannot see is the load that took the process with it:
+            // running out of memory on a phone usually presents as a kill
+            // rather than as a throw, so `out_of_memory` here undercounts and
+            // the missing cases are invisible by construction. See
+            // `AnalyticsMapping.loadReason`.
+            analytics.record(.modelLoadFailed(
+                modelID: model.id,
+                ramClass: ramClass,
+                reason: AnalyticsMapping.loadReason(for: error)
+            ))
             syncLoadedModel(nil)
             loadErrors[model.id] = (error as? LocalizedError)?.errorDescription
                 ?? "Could not load \(model.displayName)."
@@ -944,7 +1093,7 @@ final class AppModel {
 
     // MARK: - Assistant tools
 
-    /// Whether the calendar and reminder tools are registered with the engine.
+    /// Whether the calendar tool is registered with the engine.
     ///
     /// Off by default, and it has to be a decision rather than a nicety.
     /// Registering a tool does not wait to be useful: the library appends every
@@ -953,20 +1102,55 @@ final class AppModel {
     /// model was never going to open. `LlamaEngine.promptOverheadTokens`
     /// measures that and `ContextGuard` reserves it, which on a 4K window is a
     /// few hundred tokens of conversation the user no longer has.
-    var personalDataToolsEnabled = false {
+    ///
+    /// Split from `reminderToolsEnabled`, which it used to share a switch with.
+    /// Both halves of that were wrong: the cost above is charged per tool, so
+    /// somebody who only wanted their week read paid for a shopping list they
+    /// never asked about, and iOS asked them for both permissions to get one.
+    var calendarToolsEnabled = false {
         didSet {
-            guard personalDataToolsEnabled != oldValue else { return }
-            UserDefaults.standard.set(personalDataToolsEnabled, forKey: Keys.personalDataTools)
+            guard calendarToolsEnabled != oldValue else { return }
+            UserDefaults.standard.set(calendarToolsEnabled, forKey: Keys.calendarTools)
             Task { await applyPersonalDataTools() }
         }
     }
 
-    /// What the engine did with the switch, and why.
+    /// Whether the reminders tool is registered with the engine.
     ///
-    /// Settings needs this because the switch is one thing and the effect is
-    /// another: `personalDataToolsEnabled` says what the user asked for, and
-    /// this says what the model currently in memory will actually be given. The
-    /// two disagreed silently before, which is how a user ends up with a switch
+    /// Its own switch, its own key and its own iOS grant; the schema cost that
+    /// makes this a decision rather than a default is described on
+    /// `calendarToolsEnabled` and is charged separately here.
+    var reminderToolsEnabled = false {
+        didSet {
+            guard reminderToolsEnabled != oldValue else { return }
+            UserDefaults.standard.set(reminderToolsEnabled, forKey: Keys.reminderTools)
+            Task { await applyPersonalDataTools() }
+        }
+    }
+
+    /// Whether either of the two is on, for the callers that genuinely mean
+    /// "personal data at all" — a section header, or a notice that describes
+    /// the pair. Not a setting: nothing writes through it, because writing
+    /// through it is what made the two capabilities inseparable.
+    var anyPersonalDataToolEnabled: Bool { calendarToolsEnabled || reminderToolsEnabled }
+
+    /// The switch governing one entity, so that the loops over
+    /// `PersonalDataEntity.allCases` do not each carry their own `switch` over
+    /// which property holds which. Adding a third entity should break in one
+    /// place, not in three.
+    func isEnabled(_ entity: PersonalDataEntity) -> Bool {
+        switch entity {
+        case .calendar: calendarToolsEnabled
+        case .reminders: reminderToolsEnabled
+        }
+    }
+
+    /// What the engine did with the switches, and why.
+    ///
+    /// Settings needs this because a switch is one thing and the effect is
+    /// another: the switches above say what the user asked for, and this says
+    /// what the model currently in memory will actually be given. The two
+    /// disagreed silently before, which is how a user ends up with a switch
     /// that is on, a calendar that is never read, and no way to find out why.
     private(set) var personalDataToolGate: ToolGate.Decision = .noModelLoaded
 
@@ -1008,12 +1192,12 @@ final class AppModel {
     /// device with no Health store the tool is never registered at all, so
     /// there is no budget verdict to report and the notice would be describing
     /// the calendar pair beside a switch about sleep. The refusal below it is
-    /// only reached when the notice is absent — with the calendar switch on it
-    /// is already printing health's line, and printing it twice reads as two
-    /// separate problems.
+    /// only reached when the notice is absent — with either personal data
+    /// switch on it is already printing health's line, and printing it twice
+    /// reads as two separate problems.
     var healthCapabilityNote: String? {
         if let unavailable = healthAvailability.explanation { return unavailable }
-        guard !personalDataToolsEnabled else { return nil }
+        guard !anyPersonalDataToolEnabled else { return nil }
         return capabilityPlan?.shortfall(for: .health)
     }
 
@@ -1057,9 +1241,9 @@ final class AppModel {
     /// polling.
     private(set) var personalDataAuthorization: [PersonalDataEntity: PersonalDataAuthorization] = [:]
 
-    /// What gets registered for a given state of the switch.
+    /// What gets registered for a given state of the switches.
     ///
-    /// The self-test tool is independent of it: `-pocketd-selftest-tool`
+    /// The self-test tool is independent of them: `-pocketd-selftest-tool`
     /// exercises the tool-calling loop on a device without needing EventKit, a
     /// permission prompt or a calendar with anything in it, and it has to keep
     /// working whether or not the real tools are on.
@@ -1071,13 +1255,21 @@ final class AppModel {
     /// answers the question people actually ask most, and health is the largest
     /// schema of the three, so on a window too small for everything health is
     /// the one that goes.
+    ///
+    /// One parameter per tool rather than one for the pair. The budget has
+    /// always dropped these two independently — `CapabilityGroup` has separate
+    /// cases for exactly that reason — and it was only the switch above it that
+    /// could not express a calendar without reminders.
     private static func registrations(
-        personalData: Bool,
+        calendar: Bool,
+        reminders: Bool,
         health: Bool
     ) -> [(tool: any LLMTool, group: CapabilityGroup)] {
         var registered: [(tool: any LLMTool, group: CapabilityGroup)] = []
-        if personalData {
+        if calendar {
             registered.append((CalendarEventsTool(), .calendar))
+        }
+        if reminders {
             registered.append((RemindersTool(), .reminders))
         }
         // Availability-guarded so a device with no Health store never pays
@@ -1111,10 +1303,26 @@ final class AppModel {
     /// noticed. Asking twice costs nothing: iOS shows its prompt once, and
     /// every later call returns the standing answer without any UI.
     private func applyPersonalDataTools() async {
-        if personalDataToolsEnabled {
-            for entity in PersonalDataEntity.allCases {
-                personalDataAuthorization[entity] = await EventAccess.shared.requestReadAccess(to: entity)
+        // Only the entity whose switch is on, which is the point of there
+        // being two of them. The one switch asked iOS for both grants, so
+        // somebody who wanted their shopping list read got a calendar prompt
+        // too — and an app that asks for a permission nobody asked it to want
+        // is how it ends up denied the one it needed.
+        //
+        // An entity that is already settled is asked again on the way past,
+        // which costs nothing — iOS answers a settled question without any UI
+        // — and refreshes what Settings shows for it.
+        for entity in PersonalDataEntity.allCases {
+            guard isEnabled(entity) else {
+                // Dropped, not kept. These entries are what Settings turns into
+                // "Pocketd cannot read your calendar" warnings, and with two
+                // switches one of them can go off while the screen stays up:
+                // leaving the last answer behind means complaining about a
+                // permission for a capability the user has just switched off.
+                personalDataAuthorization[entity] = nil
+                continue
             }
+            personalDataAuthorization[entity] = await EventAccess.shared.requestReadAccess(to: entity)
         }
         // Not a reload. The engine records the new set and rebuilds its client
         // on the next request that needs one, so a user who flips the switch
@@ -1127,7 +1335,11 @@ final class AppModel {
             healthAvailability = await HealthAccess.shared.requestAllReadAccess()
         }
         await engine.updateTools(
-            Self.registrations(personalData: personalDataToolsEnabled, health: healthToolsEnabled),
+            Self.registrations(
+                calendar: calendarToolsEnabled,
+                reminders: reminderToolsEnabled,
+                health: healthToolsEnabled
+            ),
             exempt: Self.selfTestTools()
         )
         // The switch is what changed what the budget was asked to carry, so it
@@ -1143,9 +1355,10 @@ final class AppModel {
     /// a denied one is the user leaving for iOS Settings and coming back, and
     /// nothing about that trip tells this process anything.
     func refreshPersonalDataAuthorization() {
-        // The gate is re-read whether or not the switch is on: it is what the
-        // row shows to explain an inert switch, and the trip to iOS Settings is
-        // not the only thing that can have happened while this screen was away.
+        // The gate is re-read whether or not either switch is on: it is what
+        // the row shows to explain an inert switch, and the trip to iOS
+        // Settings is not the only thing that can have happened while this
+        // screen was away.
         Task { await refreshToolGate() }
         // A device with no Health store at all is a fact about the device, not
         // an answer iOS gave: it is true at launch, before anything has asked
@@ -1156,8 +1369,25 @@ final class AppModel {
         if healthToolsEnabled, !HealthAccess.isAvailable {
             healthAvailability = .noHealthData
         }
-        guard personalDataToolsEnabled else { return }
+        // Per entity, because the switches now are. Gating the whole loop on
+        // "is either of them on" would have been the smaller edit and it reads
+        // the wrong thing: with the calendar on and reminders off it fetches a
+        // reminders status nobody asked for, and this dictionary is what
+        // Settings turns into warnings.
+        //
+        // What the split does not fix is the entity whose own switch is off: it
+        // gets no entry, so its authorization is unknown for as long as it
+        // stays off. That behaviour is inherited from the single switch, not
+        // solved here. `EventAccess.authorization(for:)` prompts nobody and is
+        // cheap enough to run for both unconditionally, so the obstacle is not
+        // the read — it is that no screen can currently show a status for a
+        // capability that is off without it reading as a complaint. That is the
+        // capability hub's call, and it belongs in the change that builds it.
         for entity in PersonalDataEntity.allCases {
+            guard isEnabled(entity) else {
+                personalDataAuthorization[entity] = nil
+                continue
+            }
             personalDataAuthorization[entity] = EventAccess.authorization(for: entity)
         }
     }
@@ -1472,6 +1702,9 @@ final class AppModel {
         // A picture with no words is a question — "what is this" is implied —
         // so an empty draft is allowed once something is attached.
         guard !text.isEmpty || !attachments.isEmpty, !isGenerating, loadedModelID != nil else { return }
+        // After the guard rather than at the top of the method: a tap with an
+        // empty draft, or with nothing resident to answer it, sends no message.
+        analytics.record(.chatMessageSent(modelID: loadedModelID ?? ""))
         let images = attachments
         draft = ""
         attachments = []

@@ -18,24 +18,82 @@
 	  website. The app links no ATT framework and reads no advertising
 	  identifier, so there is nothing to gate. Present rather than omitted so a
 	  future reader can tell "declared empty" from "forgotten".
+
+	  The analytics endpoint below is not one of these. A domain belongs in this
+	  array when a request to it would be tracking as Apple defines it — linking
+	  the person to data gathered by another company for advertising or
+	  measurement, or sharing with a data broker. Usage events carry no
+	  advertising identifier, are joined to nothing from anywhere else, and go
+	  nowhere but the analytics project this app owns.
 	-->
 	<key>NSPrivacyTrackingDomains</key>
 	<array/>
 
 	<!--
-	  Empty because nothing is collected, in Apple's sense of the word: no data
-	  is transmitted off the device to this developer or anyone acting for
-	  them. There is no account, no analytics, no crash reporting and no
-	  telemetry, and no server of ours exists to receive any. Health, calendar
-	  and reminder data are read on-device to answer a question and are never
-	  transmitted — see docs/PRIVACY.md.
+	  Two types, both produced by the analytics events in
+	  Sources/PocketdKit/Analytics/AnalyticsEvent.swift. This array was empty
+	  and true until those shipped, and it is the most expensive thing in the
+	  file to leave stale: Apple compares the manifest against the answers given
+	  in App Store Connect, so an app transmitting usage events while this array
+	  sits empty is caught at review rather than at build.
 
-	  The two outbound requests the app does make, both to huggingface.co, carry
-	  a repository and file name and nothing about the person, so they are not
-	  collection of any declarable data type.
+	  Product Interaction covers the whole taxonomy. Every event is something
+	  the app did — opened, downloaded a model, loaded one, started the
+	  server, answered a client on the Wi-Fi — and every property one may
+	  carry is named in AnalyticsSchema.allowedProperties: a model id, a byte
+	  count, a duration, a bucketed RAM class, a closed-set failure reason, an
+	  API dialect. AnalyticsSchema.forbiddenProperties is why this is the only
+	  row of its kind: prompt, message, filename, address, and every health,
+	  calendar and reminder name are refused by a test, so there is no
+	  User Content, Health, Contacts, Location or Search History to declare.
+
+	  Device ID is the identifier the analytics SDK assigns so events can be
+	  counted per install instead of per event — the one AnalyticsSink's
+	  stopAndForget is required to discard rather than merely stop adding to.
+	  It is not the advertising identifier; the app links no ATT framework.
+
+	  Both are declared not linked to identity, which is a fact about this app
+	  rather than a preference: there is no account, no sign-in and no user id,
+	  so there is nothing for an event to be linked to. Both are declared not
+	  used for tracking, which has to agree with NSPrivacyTracking above — a
+	  true here against a false there is itself a rejection.
+
+	  What is still not collected, and the reason the policy can say so
+	  plainly: conversations, model output, and anything read from Health,
+	  Calendar or Reminders never leave the device at all. The origin gate in
+	  RequestOrigin.swift refuses personal data even to the chat page this
+	  phone serves. The published policy is docs/index.html.
+
+	  The requests to huggingface.co carry a repository and file name and
+	  nothing about the person, so they remain collection of no declarable type.
 	-->
 	<key>NSPrivacyCollectedDataTypes</key>
-	<array/>
+	<array>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeProductInteraction</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeDeviceID</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
+			</array>
+		</dict>
+	</array>
 
 	<key>NSPrivacyAccessedAPITypes</key>
 	<array>

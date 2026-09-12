@@ -9,7 +9,13 @@ import FlyingFox
 /// `URLSession.bytes` one `UInt8` at a time. It was correct, it compiled, it
 /// passed review, and it ran at 0.15 MB/s — 42 minutes for the smallest model in
 /// the catalogue. Nothing short of moving actual megabytes catches that.
-@Suite("Model downloads")
+///
+/// Serialized because these are real background transfers now. The system's
+/// transfer daemon runs four of them at a time and then staggers the rest by
+/// ten seconds and more, so fourteen download tests racing each other turned a
+/// twenty-second package run into a fifty-second one. Nothing here needs to run
+/// beside itself to be true.
+@Suite("Model downloads", .serialized)
 struct DownloadTests {
 
     /// Eight megabytes of deterministic bytes, served once.

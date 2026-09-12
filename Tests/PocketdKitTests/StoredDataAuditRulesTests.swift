@@ -396,4 +396,205 @@ struct StoredDataAuditRulesTests {
         #expect(isStoredAsBoolean(try #require(read["contextLength"])) == false)
         #expect(isStoredAsBoolean("a string") == false)
     }
+
+    // MARK: - What the app says about itself
+
+    /// The repository root, or nil when there is not one to read.
+    ///
+    /// Nil rather than a failure so that someone consuming PocketdKit as a
+    /// package dependency is not failed by a test about this app's README.
+    /// `ServerVersionTests` skips for the same reason.
+    private func repositoryRoot() -> URL? {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // PocketdKitTests
+            .deletingLastPathComponent()   // Tests
+            .deletingLastPathComponent()   // repository root
+        return FileManager.default.fileExists(atPath: root.appendingPathComponent("README.md").path)
+            ? root
+            : nil
+    }
+
+    /// Every place this project states, as a fact, what it does and does not
+    /// send. Two are read by users who will never open the source, one is the
+    /// text rendered on the app's own Data screen, and one is filed with Apple.
+    private static let claimFiles = [
+        "README.md",
+        "docs/index.html",
+        "App/Sources/State/StoredDataAudit.swift",
+        "App/Resources/PrivacyInfo.xcprivacy",
+    ]
+
+    /// Sentences that are false the moment a single analytics event exists.
+    ///
+    /// Lowercased substrings rather than anything cleverer, because the failure
+    /// being guarded against is not subtle: someone reaches for the old
+    /// reassuring phrasing, or restores a paragraph from before the events
+    /// shipped, and a promise the binary contradicts goes back on a public page.
+    private static let disprovenClaims = [
+        "no analytics",
+        "no telemetry",
+        "collects nothing",
+        "nothing is collected",
+        "no usage measurement",
+        "nothing leaving the network",
+        "collected data types empty",
+    ]
+
+    @Test("no public claim survives that the events in AnalyticsSchema disprove")
+    func noFalseTelemetryClaims() throws {
+        // Conditional on the taxonomy rather than unconditional: if every event
+        // is ever deleted, these sentences become true again and this test has
+        // no business failing them. It is the existence of events that makes
+        // them lies, so that is what it is asked about.
+        guard AnalyticsSchema.allowedProperties.isEmpty == false else { return }
+        guard let root = repositoryRoot() else { return }
+
+        for name in Self.claimFiles {
+            let path = root.appendingPathComponent(name)
+            guard let text = try? String(contentsOf: path, encoding: .utf8) else {
+                Issue.record("\(name) is missing; it is one of the four places this project promises something")
+                continue
+            }
+            let lowered = text.lowercased()
+            for claim in Self.disprovenClaims {
+                #expect(
+                    lowered.contains(claim) == false,
+                    "\(name) says \"\(claim)\" while AnalyticsSchema defines \(AnalyticsSchema.allowedProperties.count) events that are sent"
+                )
+            }
+        }
+    }
+
+    // MARK: - The manifest filed with Apple
+
+    /// Apple's complete vocabulary for `NSPrivacyCollectedDataType`,
+    /// transcribed from "Describing data use in privacy manifests".
+    ///
+    /// Here for the same reason the reason codes in the manifest carry their
+    /// own note: a data type that does not exist is accepted by the packager
+    /// and refused at review, so a typo surfaces days later as a rejection
+    /// rather than as a build error. The odd casing of
+    /// `NSPrivacyCollectedDataTypePhotosorVideos` is Apple's, not a slip.
+    private static let realCollectedDataTypes: Set<String> = [
+        "NSPrivacyCollectedDataTypeName",
+        "NSPrivacyCollectedDataTypeEmailAddress",
+        "NSPrivacyCollectedDataTypePhoneNumber",
+        "NSPrivacyCollectedDataTypePhysicalAddress",
+        "NSPrivacyCollectedDataTypeOtherUserContactInfo",
+        "NSPrivacyCollectedDataTypeHealth",
+        "NSPrivacyCollectedDataTypeFitness",
+        "NSPrivacyCollectedDataTypePaymentInfo",
+        "NSPrivacyCollectedDataTypeCreditInfo",
+        "NSPrivacyCollectedDataTypeOtherFinancialInfo",
+        "NSPrivacyCollectedDataTypePreciseLocation",
+        "NSPrivacyCollectedDataTypeCoarseLocation",
+        "NSPrivacyCollectedDataTypeSensitiveInfo",
+        "NSPrivacyCollectedDataTypeContacts",
+        "NSPrivacyCollectedDataTypeEmailsOrTextMessages",
+        "NSPrivacyCollectedDataTypePhotosorVideos",
+        "NSPrivacyCollectedDataTypeAudioData",
+        "NSPrivacyCollectedDataTypeGameplayContent",
+        "NSPrivacyCollectedDataTypeCustomerSupport",
+        "NSPrivacyCollectedDataTypeOtherUserContent",
+        "NSPrivacyCollectedDataTypeBrowsingHistory",
+        "NSPrivacyCollectedDataTypeSearchHistory",
+        "NSPrivacyCollectedDataTypeUserID",
+        "NSPrivacyCollectedDataTypeDeviceID",
+        "NSPrivacyCollectedDataTypePurchaseHistory",
+        "NSPrivacyCollectedDataTypeProductInteraction",
+        "NSPrivacyCollectedDataTypeAdvertisingData",
+        "NSPrivacyCollectedDataTypeOtherUsageData",
+        "NSPrivacyCollectedDataTypeCrashData",
+        "NSPrivacyCollectedDataTypePerformanceData",
+        "NSPrivacyCollectedDataTypeOtherDiagnosticData",
+        "NSPrivacyCollectedDataTypeEnvironmentScanning",
+        "NSPrivacyCollectedDataTypeHands",
+        "NSPrivacyCollectedDataTypeHead",
+        "NSPrivacyCollectedDataTypeOtherDataTypes",
+    ]
+
+    private static let realPurposes: Set<String> = [
+        "NSPrivacyCollectedDataTypePurposeThirdPartyAdvertising",
+        "NSPrivacyCollectedDataTypePurposeDeveloperAdvertising",
+        "NSPrivacyCollectedDataTypePurposeAnalytics",
+        "NSPrivacyCollectedDataTypePurposeProductPersonalization",
+        "NSPrivacyCollectedDataTypePurposeAppFunctionality",
+        "NSPrivacyCollectedDataTypePurposeOther",
+    ]
+
+    /// Types `AnalyticsSchema.forbiddenProperties` makes unsendable, so
+    /// declaring one would be a false statement in the other direction.
+    private static let unsendableDataTypes: Set<String> = [
+        "NSPrivacyCollectedDataTypeHealth",
+        "NSPrivacyCollectedDataTypeFitness",
+        "NSPrivacyCollectedDataTypeContacts",
+        "NSPrivacyCollectedDataTypeName",
+        "NSPrivacyCollectedDataTypeEmailAddress",
+        "NSPrivacyCollectedDataTypePhoneNumber",
+        "NSPrivacyCollectedDataTypePhysicalAddress",
+        "NSPrivacyCollectedDataTypePreciseLocation",
+        "NSPrivacyCollectedDataTypeCoarseLocation",
+        "NSPrivacyCollectedDataTypeSensitiveInfo",
+        "NSPrivacyCollectedDataTypeEmailsOrTextMessages",
+        "NSPrivacyCollectedDataTypeOtherUserContent",
+        "NSPrivacyCollectedDataTypeSearchHistory",
+        "NSPrivacyCollectedDataTypeBrowsingHistory",
+    ]
+
+    @Test("the manifest filed with Apple declares the events the app actually sends")
+    func privacyManifestMatchesTheTaxonomy() throws {
+        guard let root = repositoryRoot() else { return }
+        let manifest = try #require(
+            PropertyListSerialization.propertyList(
+                from: try Data(contentsOf: root.appendingPathComponent("App/Resources/PrivacyInfo.xcprivacy")),
+                format: nil
+            ) as? [String: Any],
+            "App/Resources/PrivacyInfo.xcprivacy must be readable; it is filed with Apple"
+        )
+        let collected = manifest["NSPrivacyCollectedDataTypes"] as? [[String: Any]] ?? []
+        let declared = Set(collected.compactMap { $0["NSPrivacyCollectedDataType"] as? String })
+
+        // The rejection this file's own header warns about, in its collection
+        // form: an app that transmits usage events while this array is empty is
+        // caught at review, days after the build passed.
+        if AnalyticsSchema.allowedProperties.isEmpty == false {
+            #expect(
+                declared.contains("NSPrivacyCollectedDataTypeProductInteraction"),
+                "AnalyticsSchema defines \(AnalyticsSchema.allowedProperties.count) events, so Product Interaction has to be declared"
+            )
+        }
+
+        for entry in collected {
+            let type = try #require(entry["NSPrivacyCollectedDataType"] as? String)
+            #expect(Self.realCollectedDataTypes.contains(type), "\(type) is not one of Apple's data types")
+            #expect(
+                Self.unsendableDataTypes.contains(type) == false,
+                "\(type) is declared, but AnalyticsSchema.forbiddenProperties makes it unsendable"
+            )
+
+            // Linked and Tracking are required booleans. A missing key is not a
+            // false one; the manifest is simply incomplete and review reads it
+            // that way.
+            #expect(entry["NSPrivacyCollectedDataTypeLinked"] as? Bool != nil, "\(type) does not say whether it is linked to identity")
+            let tracking = try #require(entry["NSPrivacyCollectedDataTypeTracking"] as? Bool, "\(type) does not say whether it is used for tracking")
+
+            // The consistency rule Apple enforces between the two keys. Setting
+            // one without the other is the easiest way to have this file
+            // contradict itself, and it contradicts itself silently.
+            if tracking {
+                #expect(manifest["NSPrivacyTracking"] as? Bool == true, "\(type) is tracking, so NSPrivacyTracking cannot be false")
+            }
+
+            let purposes = try #require(entry["NSPrivacyCollectedDataTypePurposes"] as? [String])
+            #expect(purposes.isEmpty == false, "\(type) is declared with no purpose")
+            for purpose in purposes {
+                #expect(Self.realPurposes.contains(purpose), "\(purpose) is not one of Apple's purposes")
+            }
+        }
+
+        // No row here is collected for advertising, and this manifest is where
+        // that would show up first if it ever changed.
+        #expect(manifest["NSPrivacyTracking"] as? Bool == false)
+        #expect((manifest["NSPrivacyTrackingDomains"] as? [String] ?? []).isEmpty)
+    }
 }

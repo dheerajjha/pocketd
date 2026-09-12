@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Privacy Policy · Pocketd</title>
-<meta name="description" content="Pocketd collects nothing. No account, no analytics, no crash reporting, no telemetry.">
+<meta name="description" content="Your conversations never leave your phone. Two hosts are contacted: Hugging Face for models, Mixpanel for a fixed list of usage events.">
 <style>
   :root {
     color-scheme: light dark;
@@ -74,40 +74,73 @@
 
 <h1>Privacy Policy</h1>
 
-<p class="meta"><strong>Pocketd</strong> · Last updated 11 September 2026</p>
+<p class="meta"><strong>Pocketd</strong> · Last updated 12 September 2026</p>
 
-<p>Pocketd collects nothing. There is no account, no analytics, no crash
-reporting and no telemetry, and no server belonging to this project exists to
-receive any. Nothing you type, and nothing the model says back, ever leaves
-your phone.</p>
+<p>Two kinds of request leave your phone: model searches and downloads, which go
+to Hugging Face, and a fixed list of usage events, which go to Mixpanel. Nothing
+else is sent anywhere. Your conversations, everything the model says back, and
+anything Pocketd reads from Health, Calendar or Reminders stay on the device and
+cannot appear in either kind of request.</p>
 
-<p>The rest of this page is the detail behind that sentence, including the parts
-that are less tidy than the sentence is.</p>
+<p>The rest of this page is the detail behind those two sentences, including the
+parts that are less tidy than the sentences are.</p>
 
 <h2>What Pocketd collects about you</h2>
 
-<p>Nothing. Specifically:</p>
+<p>Usage events, and nothing besides. There are fifteen of them and the complete
+list is one readable file, <a href="https://github.com/dheerajjha/pocketd/blob/main/Sources/PocketdKit/Analytics/AnalyticsEvent.swift"><code>AnalyticsEvent.swift</code></a>: the app was opened;
+the intro was finished or skipped; a model download started, finished, was
+cancelled or failed; a model loaded or failed to load; a message was sent; the
+server started or stopped; a client on your Wi-Fi was answered; a request was
+refused because the phone was too hot, too low on battery, or already busy.</p>
+
+<p>An event may carry a model's id, a file size in bytes, how long something
+took, a rounded memory class for the phone (<code>4gb</code>, <code>8gb</code>,
+<code>16gb_plus</code>), a reason drawn from a fixed list, and which of the two
+APIs a client spoke. Alongside those, the analytics SDK attaches an identifier
+for this installation of the app, the app version, the iOS version and the
+device model.</p>
+
+<p>These events are sent from every installation. There is no switch that turns
+them off.</p>
+
+<p>What an event cannot contain is not a matter of anyone's good intentions. The
+property names an event is permitted to use are written out by hand in
+<code>AnalyticsSchema</code>, next to a list of names that are banned outright —
+<code>prompt</code>, <code>message</code>, <code>transcript</code>, <code>response</code>,
+<code>url</code>, <code>filename</code>, <code>address</code>, <code>api_key</code>,
+<code>steps</code>, <code>heart_rate</code>, <code>sleep</code>, <code>calendar</code>,
+<code>reminder</code> and the rest — and a test in the repository fails the build if
+any event carries a banned name, or a name that appears on neither list.</p>
+
+<p>What is still true, and is most of why the rest of this page is worth
+reading:</p>
 
 <ul>
-  <li>No account, no sign-in, no email address, no identifier of you or your
-    device.</li>
-  <li>No analytics or usage measurement of any kind.</li>
+  <li>No account, no sign-in, no email address, no name.</li>
+  <li>Nothing you type, and nothing the model replies, is transmitted to anyone.
+    Inference happens on the phone.</li>
   <li>No crash reporting.</li>
-  <li>No advertising, no ad identifier, no tracking, and no data shared with
-    anyone for any purpose. Pocketd does not link an advertising framework and
-    never asks for permission to track, because there is nothing to track with.</li>
-  <li>No third-party SDK that collects anything. Pocketd links exactly two
-    outside components — an HTTP server (<a href="https://github.com/swhitty/FlyingFox">FlyingFox</a>) and the inference runtime
-    (<a href="https://github.com/tattn/LocalLLMClient">LocalLLMClient</a>, wrapping <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a>). Neither reports anything anywhere.</li>
+  <li>No advertising and no ad identifier. Pocketd does not link an advertising
+    framework and never asks for permission to track. Usage events are not
+    joined to anything you do in another app or on any website, and nothing is
+    sold or handed to a data broker.</li>
+  <li>Three outside components, and only one of them reports anything: an HTTP server
+    (<a href="https://github.com/swhitty/FlyingFox">FlyingFox</a>), the inference runtime (<a href="https://github.com/tattn/LocalLLMClient">LocalLLMClient</a>, wrapping
+    <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a>), and the analytics SDK (<a href="https://github.com/mixpanel/mixpanel-swift">Mixpanel</a>), which sends the events
+    above and nothing else.</li>
 </ul>
 
-<p>This is also what the app's <code>PrivacyInfo.xcprivacy</code> declares to Apple: tracking
-off, tracking domains empty, collected data types empty.</p>
+<p>The app's <code>PrivacyInfo.xcprivacy</code> says the same thing to Apple: tracking off,
+tracking domains empty, and two collected data types — Product Interaction and
+Device ID — both declared not linked to your identity, not used for tracking, and
+collected for analytics.</p>
 
 <h2>What leaves your phone</h2>
 
-<p>One host: <strong><code>huggingface.co</code></strong>, and the CDN that <code>huggingface.co</code> redirects
-downloads to. Only two things ever cause a request:</p>
+<p>Two hosts. <strong><code>huggingface.co</code></strong>, with the CDN it redirects downloads
+to, for models; and <strong><code>api.mixpanel.com</code></strong>, for the usage events above.
+Only these things cause a request:</p>
 
 <div class="table-wrap">
 <table>
@@ -118,6 +151,7 @@ downloads to. Only two things ever cause a request:</p>
     <tr><td>You search for a model</td><td>The text you typed, as a search term, and your phone's IP address</td></tr>
     <tr><td>You open a repository to see its files</td><td>The repository's name, and your phone's IP address</td></tr>
     <tr><td>You download a model</td><td>Which repository and file you are fetching, and your phone's IP address</td></tr>
+    <tr><td>You use the app</td><td>One of the fifteen usage events, the identifier for this installation, and your phone's IP address</td></tr>
   </tbody>
 </table>
 </div>
@@ -125,11 +159,14 @@ downloads to. Only two things ever cause a request:</p>
 <p>A paired device on your network can ask the phone to run a search or start a
 download on its behalf, which sends the same things and nothing more.</p>
 
-<p>No account, no token and no identifier of yours is attached to either. Every
-download address is assembled as <code>huggingface.co</code>, then a repository and a
-filename; the search API accepts a repository and a filename and never a host.
-The stored record for a model carries a field that could name a different
-address, and nothing in the app or its HTTP API ever sets it.</p>
+<p>Neither an account nor a token is attached to any of them, because Pocketd
+has neither to attach. The identifier in the last row is one the analytics SDK generates for
+the installation; it is not the advertising identifier and it is attached to
+nothing but those fifteen events. Every download address is assembled as
+<code>huggingface.co</code>, then a repository and a filename; the search API accepts a
+repository and a filename and never a host. The stored record for a model
+carries a field that could name a different address, and nothing in the app or
+its HTTP API ever sets it.</p>
 
 <p>Nothing else is contacted. Inference does not call out — the weights are a file
 on your phone, and answering a question reads that file. The web pages Pocketd
@@ -152,7 +189,11 @@ heart and sleep, your calendar and your reminders.</p>
     one. Only someone holding the phone and using the Chat tab can get an answer
     containing personal data.</li>
   <li><strong>Health data is never used for advertising or marketing, never sold, and
-    never disclosed to anyone.</strong> There is nowhere for it to go.</li>
+    never disclosed to anyone.</strong> It cannot ride out in a usage event either:
+    <code>steps</code>, <code>heart_rate</code>, <code>sleep</code>, <code>workout</code>,
+    <code>calendar</code>, <code>reminder</code> and <code>event_title</code> are on the
+    banned list a test enforces, and an event carrying a property name that is
+    not explicitly permitted fails the build.</li>
   <li><strong>Pocketd never writes to Health.</strong> The write permission string exists only
     because iOS requires one from any app that links HealthKit.</li>
   <li><strong>Health data stays out of iCloud.</strong> Conversation transcripts are excluded
@@ -176,6 +217,8 @@ is the only place with the answer.</p>
   <li><strong>Conversations</strong> — everything typed in the Chat tab and everything the
     model replied, as plain text, one file each.</li>
   <li><strong>Settings</strong>, including the API key other devices use to reach this phone.</li>
+  <li><strong>Queued usage events</strong>, held by the analytics SDK until they are sent
+    and deleted once they are.</li>
   <li>Caches iOS keeps on the app's behalf, and snapshots iOS takes of the app
     when you switch away.</li>
 </ul>
@@ -208,6 +251,14 @@ Wi-Fi.</p>
 privacy page usually leaves out:</p>
 
 <ul>
+  <li><strong>The usage events cannot be switched off.</strong> There is no toggle in
+    Settings and no prompt during the intro. The argument for that is honest
+    rather than flattering: the events describe what the app did, a schema and a
+    test stand between them and anything you typed, and an opt-out that only the
+    careful half of people find produces numbers that are wrong in a direction
+    nobody can correct for. If sending nothing at all is the condition, the app
+    is not for you, and this paragraph exists so you can find that out here
+    rather than afterwards.</li>
   <li><strong>Opening a model's page hands the address to Safari.</strong> What Safari sends
     from that point is Safari's business, with Safari's cookies, not Pocketd's.</li>
   <li><strong>Copying the API key or the server address puts it on the system
@@ -221,8 +272,11 @@ privacy page usually leaves out:</p>
 
 <h2>Children</h2>
 
-<p>Pocketd has no account, no sign-up and no social features, and collects nothing
-from anyone, of any age.</p>
+<p>Pocketd has no account, no sign-up and no social features, and asks nobody
+their age, because it has no reason to know it. The usage events above are sent
+from every installation and describe what the app did rather than who was
+holding it: no name, no email address, no age, no location, and nothing anyone
+typed.</p>
 
 <h2>Changes</h2>
 

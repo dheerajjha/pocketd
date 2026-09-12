@@ -7,7 +7,8 @@
 
 `pocketd` turns an iPhone into an inference server. Load a model, press Start,
 and every device on your Wi-Fi can talk to it through the OpenAI and Ollama
-APIs they already speak — no account, no cloud, nothing leaving the network.
+APIs they already speak — no account, and not one prompt or reply leaving
+your network.
 
 ```bash
 curl http://192.168.1.42:11434/v1/chat/completions \
@@ -342,11 +343,21 @@ published policy, and the URL App Store Connect points at. It is
 [`docs/index.html`](docs/index.html) in this repository: short, and checkable
 against this source tree rather than taken on trust.
 
-No account, no analytics, no crash reporting, no telemetry. One host is ever
-contacted, `huggingface.co`, and only to search for or download a model.
-Inference is local; the HTTP server only answers. Health, calendar and reminder
-data are read on-device and are refused to network callers — including the chat
-page the phone itself serves — by the origin gate in `RequestOrigin.swift`.
+Two hosts are ever contacted. `huggingface.co`, to search for or download a
+model. And `api.mixpanel.com`, which receives usage events — the app opened, a
+model downloaded or loaded, a message sent, the server started, a client
+answered. Those events ship on every install and there is no setting for them;
+the complete list is `AnalyticsEvent.swift`, which is fifteen cases long and is
+meant to be read in a minute.
+
+What stays is the part worth promising. Inference is local and the HTTP server
+only answers, so nothing you type and nothing the model says back is ever
+transmitted. Health, calendar and reminder data are read on-device and are
+refused to network callers — including the chat page the phone itself serves —
+by the origin gate in `RequestOrigin.swift`. No usage event can carry any of it
+either: `AnalyticsSchema` is an allow-list of property names beside a list of
+banned ones, and a test fails the build when an event names a prompt, a file, an
+address or a health figure. There is no crash reporting and no account.
 
 The page also spells out the parts that are less tidy: the Bonjour broadcast,
 the hand-off to Safari, and the system pasteboard. The app's own Data screen
