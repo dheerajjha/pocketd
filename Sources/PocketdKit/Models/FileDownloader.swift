@@ -309,8 +309,45 @@ final class BackgroundDownloadSession: NSObject, @unchecked Sendable {
     private var handlers: [Int: FileDownloader] = [:]
     private var eventsFinished: (@Sendable () -> Void)?
 
+    /// Whether this process is something iOS could ever relaunch.
+    ///
+    /// The same signal `defaultIdentifier` already uses, for the same reason
+    /// and now with a second consequence. No bundle identifier means no app —
+    /// a command-line tool or the test runner — and a background session
+    /// exists solely so the SYSTEM can continue a transfer and relaunch the
+    /// app to deliver it. Where there is no app to relaunch, all that
+    /// machinery buys nothing and costs the one thing a test needs, which is
+    /// that the work happens when you ask rather than when a daemon feels like
+    /// it.
+    ///
+    /// That cost was measured rather than assumed: the same suite on identical
+    /// code ran in 21 seconds, 86 seconds and 456 seconds on three consecutive
+    /// attempts, and a download test that passed in 3.2 seconds alone timed out
+    /// after 60 in company. Serialising the download suites against each other
+    /// did not fix it, because the queue was never ours — it was the system's.
+    static let processCanBeRelaunched = Bundle.main.bundleIdentifier != nil
+
+    /// The configuration choice, as a function of the one fact it depends on.
+    ///
+    /// Separated from `init` so both branches are testable from any process.
+    /// The guarantee worth protecting is that a real app gets a real background
+    /// session — and a test running inside a process that has deliberately
+    /// taken the other branch cannot check that by inspecting the session it
+    /// was given.
+    static func configuration(identifier: String, canBeRelaunched: Bool) -> URLSessionConfiguration {
+        guard canBeRelaunched else {
+            // Ephemeral rather than `.default`: nothing here should outlive the
+            // process that made it, which is the whole premise of this branch.
+            return .ephemeral
+        }
+        return .background(withIdentifier: identifier)
+    }
+
     private init(identifier: String) {
-        let configuration = URLSessionConfiguration.background(withIdentifier: identifier)
+        let configuration = Self.configuration(
+            identifier: identifier,
+            canBeRelaunched: Self.processCanBeRelaunched
+        )
         // The whole point is a multi-gigabyte transfer over a phone's Wi-Fi;
         // the default 60-second resource timeout would abort every one of them.
         configuration.timeoutIntervalForResource = 60 * 60 * 6

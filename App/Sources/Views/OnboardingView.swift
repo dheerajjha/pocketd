@@ -7,12 +7,28 @@ import PocketdKit
 /// with no model, a switch that could not usefully be turned on, and no
 /// statement anywhere of what the thing was for. The two questions a new
 /// person actually has — *what is this* and *what do I do now* — both went
-/// unanswered, and the answer to the second one is genuinely non-obvious here,
-/// because the interesting half of this product is on a different machine.
+/// unanswered.
 ///
-/// So it ends somewhere no other local-LLM app can end: with the address of
-/// this phone and something to paste into a laptop. PocketPal's intro finishes
-/// by handing you a chat, which is right for a companion app. This is not one.
+/// The first answer used to be "Your iPhone is the server." That is the
+/// developer's answer to a developer's question, and it only lands for someone
+/// who already owns a laptop they want to point at this phone. Everyone else
+/// was handed, as sentence one, a description of a product they have no use
+/// for — while the single thing here that a local-chat app cannot do, an
+/// assistant that can read your calendar, your reminders and your health, went
+/// unmentioned until Settings, where it sits behind three switches that default
+/// off. The differentiator was invisible and the plumbing was the headline.
+///
+/// So: assistant first, server second. What it is for, what it cannot do, where
+/// the words go, and only then that this phone is also a machine your laptop
+/// can talk to. The three abilities are *named* on the opening screen and not
+/// offered there — being told they exist is the whole fix, and a permission
+/// sheet before anyone has seen a single answer is not.
+///
+/// It still ends where no other local-LLM app can end: with the address of this
+/// phone and something to paste into a laptop. PocketPal's intro finishes by
+/// handing you a chat, which is right for a companion app. This is a companion
+/// app *and* a server, so the last screen offers both doors and lets the reader
+/// pick which half they came for.
 struct OnboardingView: View {
     @Environment(AppModel.self) private var model
     /// Where to leave the person standing. The intro's whole job is to end
@@ -22,7 +38,12 @@ struct OnboardingView: View {
     @State private var step = 0
     @State private var chosen: ModelRecord?
 
-    private var lastStep: Int { 4 }
+    /// Six screens. The count lives in one place because it used to live in
+    /// three that could disagree — the dots, their accessibility label, and the
+    /// footer's test for which screens bring their own buttons. Inserting the
+    /// server screen moved that boundary by one, and a hard-coded `step < 3`
+    /// left behind would have put a second prominent button under the download.
+    private var lastStep: Int { 5 }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -33,20 +54,32 @@ struct OnboardingView: View {
                     case 0: whatThisIs
                     case 1: honestLimits
                     case 2: privacyAndNetwork
-                    case 3: pickAModel
+                    case 3: serverReveal
+                    case 4: pickAModel
                     default: whereNext
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 24)
                 .padding(.top, 8)
-                // 24 was enough until the consent screen, which is the tallest
-                // in the intro: on a 4.7-inch phone its last rows ran into the
-                // page dots, leaving text half-drawn behind them. Enough room
-                // that the tail scrolls clear of the footer instead of fighting
-                // it. Measured on an iPhone SE rather than guessed — the
-                // toggle still sits above the fold there, which is the part
-                // that has to be true for an on-by-default switch to be honest.
+                // 24 was enough until the privacy screen, which is still the
+                // tallest in the intro: on a 4.7-inch phone its last rows ran
+                // into the page dots, leaving text half-drawn behind them.
+                // Enough room that the tail scrolls clear of the footer instead
+                // of fighting it.
+                //
+                // What has to stay above the fold on that screen is now the
+                // analytics disclosure rather than the toggle that used to
+                // stand there — a disclosure someone has to scroll to find is
+                // no better than no disclosure.
+                //
+                // An iPhone SE leaves this ScrollView 493 points once the
+                // status bar, header and footer are taken out, and the privacy
+                // copy as it stood wanted 526. That is why its two callouts and
+                // its lead paragraph are shorter than they read like they want
+                // to be: the 33 points came out of the sentences above the
+                // disclosure so that none of it came out of the disclosure.
+                // Anything added to that screen has to pay the same way.
                 .padding(.bottom, 56)
             }
             footer
@@ -89,8 +122,14 @@ struct OnboardingView: View {
             }
             .accessibilityLabel("Step \(step + 1) of \(lastStep + 1)")
 
-            if step < 3 {
-                Button(action: { advance() }) {
+            // The last two screens carry their own buttons — a download with a
+            // price on it, and the destination cards. A second prominent button
+            // under either one is a competing answer to a question the screen
+            // has already asked, so this counts back from the end rather than
+            // naming a step index that the next inserted screen would silently
+            // shift under it.
+            if step < lastStep - 1 {
+                Button(action: { step += 1 }) {
                     Text(continueTitle)
                         .frame(maxWidth: .infinity)
                 }
@@ -106,25 +145,48 @@ struct OnboardingView: View {
         switch step {
         case 0: "Show me"
         case 1: "Makes sense"
+        case 3: "Pick a model"
         default: "Got it"
         }
     }
 
     // MARK: Screens
 
+    /// Screen one, and the only place the three abilities are named before
+    /// somebody has to go looking for them.
+    ///
+    /// Named, not offered. The switches belong to the screen that can also show
+    /// what each one costs and what iOS said back; putting them here would put
+    /// three permission sheets in front of a person who has not yet seen this
+    /// app answer a single question, which is how you get three refusals and a
+    /// feature that then looks broken rather than off.
+    ///
+    /// The four windows in the Calendar row are exactly the four `CalendarRange`
+    /// accepts, and the Health row names metrics `HealthMetric` actually carries.
+    /// A friendlier superset here — "any date", "anything in Health" — would be
+    /// a promise the tool schema refuses, and the reader would meet the refusal
+    /// as the assistant's first answer.
     private var whatThisIs: some View {
         VStack(alignment: .leading, spacing: 16) {
             eyebrow("What this is")
-            title("Your iPhone is the server.")
+            // "that knows your day" was the punchier draft and it presumes the
+            // three switches are already on, which they are not and cannot be
+            // from here. "Can see" is the version that is still true when the
+            // next line says nothing is on yet.
+            title("An assistant that can see your day.")
             body("""
-            Language models run on this device. Then your laptop, your terminal, \
-            your editor — anything on the same network — can talk to them, the \
-            same way they would talk to a machine in a datacentre.
+            Ask what is on today, what is overdue, how you slept. It answers \
+            here, from your own data — no account, no cloud, and what you type \
+            never leaves the phone.
             """)
-            body("""
-            You can also just chat with the model here on the phone. Both work; \
-            the second one is what everything else does.
-            """)
+            // Tighter than the screen's own spacing: three rows that are one
+            // list, not three points.
+            VStack(alignment: .leading, spacing: 10) {
+                calloutRow(icon: "calendar", text: "**Calendar** — today, tomorrow, this week or next")
+                calloutRow(icon: "checklist", text: "**Reminders** — what is due, what is overdue")
+                calloutRow(icon: "heart", text: "**Health** — steps, sleep, heart rate")
+            }
+            body("None of it is on yet. You choose which of the three it can read.")
         }
     }
 
@@ -151,10 +213,12 @@ struct OnboardingView: View {
         }
     }
 
-    /// The promise, the exceptions to it, and the one control — in that order.
+    /// The promise, the two exceptions to it, and where the switch governing
+    /// the second exception lives — in that order.
     ///
-    /// Order is deliberate and the toggle is last on purpose: a switch above
-    /// the explanation makes people decide before they have read anything.
+    /// Order is deliberate and the analytics line is last on purpose: a claim
+    /// about telemetry above the explanation makes people decide before they
+    /// have read anything.
     ///
     /// The headline used to be "Nothing leaves this phone," which was already
     /// slightly overstated before analytics existed — model downloads come
@@ -171,10 +235,10 @@ struct OnboardingView: View {
             title("Your words never leave this phone.")
             body("""
             What you type, what the model says back, and anything it reads from \
-            your Health, Calendar or Reminders all stay on this device. The model \
-            runs here. There is no account and no cloud to sync to.
+            your Health, Calendar or Reminders all stay on this device. There is \
+            no account and no cloud to sync to.
             """)
-            body("Two things do use the network, and you can see both:")
+            body("Two things do use the network:")
 
             calloutRow(
                 icon: "arrow.down.circle",
@@ -185,22 +249,55 @@ struct OnboardingView: View {
             // tested across real hardware before shipping.
             calloutRow(
                 icon: "chart.bar",
-                text: "Anonymous usage counts tell us which features get opened and whether models load properly on real phones. Never your words, never the model's, never your location."
+                text: "Anonymous counts of which screens are opened and whether models load properly on real phones. Never your words, never the model's, never your location."
             )
 
-            // A statement, not a switch. Usage events are not optional in this
-            // build, and a toggle that cannot be turned off would be worse
-            // than saying so: it would dress a decision already taken as a
-            // choice.
+            // The sentence outlived the build it described. There was genuinely
+            // no way to turn these off when this screen was written, and saying
+            // so plainly was the honest thing then — but Settings has carried
+            // the switch since, and this text went on telling every new install
+            // that no setting existed. A false claim in the direction of *fewer*
+            // controls still costs trust, and it costs it on the one screen
+            // whose entire job is being believed.
             //
-            // The disclosure stays exactly where the control was. Someone has
-            // to be able to learn this before they start using the app rather
-            // than afterwards, and the honest form of "no opt-out" is to put
-            // it on the screen people actually read.
-            Text("These usage events are always on in this version. There is no setting to turn them off.")
+            // Still a statement rather than a second switch: the control is one
+            // scroll into Settings, and a consent toggle put in front of someone
+            // tapping through an intro is answered by the tapping, not by them.
+            Text("These are on by default. The switch that turns them off is at the bottom of Settings.")
                 .font(.subheadline.weight(.medium))
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 2)
+        }
+    }
+
+    /// The sentence this intro used to open with, demoted to where it earns its
+    /// place.
+    ///
+    /// Nothing about it was wrong — it is still the thing nothing else in this
+    /// category does. It was in the wrong position: it describes a job only
+    /// somebody with a second machine to point at this one has, so as screen one
+    /// it told most readers, in the first six words, that this app was built for
+    /// someone else. After three screens of what the assistant is for, the same
+    /// sentence reads as a bonus instead of an entry requirement.
+    ///
+    /// It comes *after* the privacy screen rather than before it because this is
+    /// the screen that first mentions other machines, and the reader's next
+    /// thought is whether those machines can see the calendar. The answer is on
+    /// screen with the question: `RequestOrigin` fails closed to `.network`, and
+    /// `mayReachPersonalData` is on-device chat only.
+    private var serverReveal: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            eyebrow("The other half")
+            title("Your phone is also a server.")
+            body("""
+            Models run on this device, so anything else on the same network — \
+            your laptop, your terminal, your editor — can talk to them the same \
+            way it would talk to a machine in a datacentre.
+            """)
+            calloutRow(
+                icon: "lock.shield",
+                text: "Other devices get the model and nothing else. Your calendar, reminders and health are readable only in the chat on this phone."
+            )
         }
     }
 
@@ -276,10 +373,14 @@ struct OnboardingView: View {
                 transferCard(transfer)
             }
 
+            // "Like any assistant app, except offline and private" was the old
+            // description, and it gives away the thing screen one just spent
+            // its whole height establishing: this is *not* like any assistant
+            // app, and the last screen is the worst place to say it is.
             destinationCard(
                 icon: "bubble.left.and.bubble.right.fill",
                 title: "Chat on this phone",
-                detail: "Like any assistant app, except offline and private.",
+                detail: "Private, offline, and the only place it can see your day.",
                 tab: .chat
             )
             destinationCard(
@@ -473,12 +574,6 @@ struct OnboardingView: View {
         case count - 1: return "Most capable"
         default: return "Balanced"
         }
-    }
-
-    /// Moves on, and commits the analytics decision when the screen carrying it
-    /// has actually been read past.
-    private func advance() {
-        step += 1
     }
 
     private func leave(to tab: AppTab) {

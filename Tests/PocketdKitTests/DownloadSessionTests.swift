@@ -37,7 +37,23 @@ struct DownloadSessionTests {
 
     /// Two paths with two different bodies, so a test can tell whose bytes
     /// landed where. Tests that move one file leave `second` alone.
+    /// Serialised against every other download suite. See DownloadSerialization.
     private func withServer(
+        first: Data,
+        second: Data = Data(),
+        _ body: (URL) async throws -> Void
+    ) async throws {
+        await DownloadSerialization.shared.acquire()
+        do {
+            try await unlockedWithServer(first: first, second: second, body)
+        } catch {
+            await DownloadSerialization.shared.release()
+            throw error
+        }
+        await DownloadSerialization.shared.release()
+    }
+
+    private func unlockedWithServer(
         first: Data,
         second: Data = Data(),
         _ body: (URL) async throws -> Void
@@ -180,7 +196,28 @@ struct DownloadSessionTests {
         // this is nil, and the transfer dies the moment iOS suspends the app —
         // which for a download that takes minutes is the ordinary case, not an
         // edge one.
-        #expect(session.urlSession.configuration.identifier == identifier)
+        // Asserted on the DECISION rather than on this process's session.
+        //
+        // This used to read the session it was handed, and that stopped being
+        // able to answer the question: a test runner has no bundle identifier,
+        // so nothing will ever relaunch it, so it deliberately gets an
+        // ephemeral session. Reading that session back proved only that the
+        // test process had taken the test-process branch.
+        //
+        // The guarantee that actually matters is that a real app gets a real
+        // background session, and that is what these two lines check.
+        #expect(
+            BackgroundDownloadSession
+                .configuration(identifier: identifier, canBeRelaunched: true)
+                .identifier == identifier,
+            "a process iOS can relaunch must get a background session"
+        )
+        #expect(
+            BackgroundDownloadSession
+                .configuration(identifier: identifier, canBeRelaunched: false)
+                .identifier == nil,
+            "a process nothing will relaunch must not wait on the system's queue"
+        )
     }
 
     @Test("two downloads sharing one session each get their own bytes")

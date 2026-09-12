@@ -56,7 +56,23 @@ struct DownloadIntegrityTests {
         }
     }
 
+    /// Serialised against every other download suite. See DownloadSerialization.
     private func withServer(
+        serving blob: Data,
+        announcingLength: Bool,
+        _ body: (URL) async throws -> Void
+    ) async throws {
+        await DownloadSerialization.shared.acquire()
+        do {
+            try await unlockedWithServer(serving: blob, announcingLength: announcingLength, body)
+        } catch {
+            await DownloadSerialization.shared.release()
+            throw error
+        }
+        await DownloadSerialization.shared.release()
+    }
+
+    private func unlockedWithServer(
         serving blob: Data,
         announcingLength: Bool,
         _ body: (URL) async throws -> Void

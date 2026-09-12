@@ -75,3 +75,55 @@ struct ToolCapabilityTests {
         #expect(record.toolSupport == .unknown)
     }
 }
+
+@Suite("A scheduled run is not a person")
+struct ScheduledOriginTests {
+    @Test("a scheduled task reaches personal data, deliberately")
+    func scheduledMayReachPersonalData() {
+        // The user wrote the prompt on this device and chose the time. This
+        // is a decision, not an inheritance, which is why it has its own case
+        // rather than borrowing one.
+        let origin = RequestOrigin.scheduledTask(id: UUID())
+        #expect(origin.mayReachPersonalData)
+        #expect(RequestOrigin.onDeviceChat.mayReachPersonalData)
+        #expect(RequestOrigin.network(host: "192.168.1.42", port: 51_000).mayReachPersonalData == false)
+    }
+
+    @Test("a scheduled run does not claim someone is watching")
+    func nobodyIsWatchingAScheduledRun() {
+        // The distinction that pays for the separate case. Anything that wants
+        // to prompt, confirm, or assume a person will read the answer has to
+        // ask this rather than mayReachPersonalData — and at 7am, nobody is.
+        #expect(RequestOrigin.scheduledTask(id: UUID()).hasSomeoneWatching == false)
+        #expect(RequestOrigin.onDeviceChat.hasSomeoneWatching)
+        #expect(RequestOrigin.network(host: "10.0.0.2", port: 1).hasSomeoneWatching == false)
+    }
+
+    @Test("a scheduled run never impersonates the chat tab")
+    func noForgery() {
+        // The regression this exists for was real and shipped for one commit:
+        // PromptHandoff set origin = .onDeviceChat so the personal-data tools
+        // would answer it. That works, and it silently converts
+        // mayReachPersonalData from a fact derived from the accepted socket
+        // into a claim the caller makes about itself — the exact forgeable
+        // property this enum was written to avoid.
+        //
+        // Nothing caught it. RequestOriginTests only asserted that .network is
+        // refused, so a case that wrongly claimed to be a person passed every
+        // test in the suite.
+        let id = UUID()
+        let handoff = PromptHandoff(taskID: id, title: "Morning briefing", prompt: "What is on today?", firing: Date())
+        #expect(handoff.origin != .onDeviceChat, "a scheduled run must not claim to be a human at the keyboard")
+        #expect(handoff.origin == .scheduledTask(id: id))
+        #expect(handoff.origin.hasSomeoneWatching == false)
+    }
+
+    @Test("the log says which scheduled task, without becoming a UUID")
+    func loggingIsReadable() {
+        let id = UUID()
+        let line = RequestOrigin.scheduledTask(id: id).loggingDescription
+        #expect(line.hasPrefix("scheduled "))
+        #expect(line.count < 24, "this lands in a request log a person reads")
+        #expect(line.contains(id.uuidString.prefix(8)))
+    }
+}
