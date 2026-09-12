@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The group, and deliberately nothing else. The extension reads one
+	     published JSON file; it has no business with HealthKit, the increased
+	     memory limit, or anything else the app holds. An extension inherits no
+	     entitlements from its host, so this short list is the whole of what the
+	     widget process can do. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.dev.pocketd.app</string>
+	</array>
+</dict>
+</plist>

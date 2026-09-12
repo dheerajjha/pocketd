@@ -46,6 +46,8 @@
 	<string>Pocketd serves the language model running on this device to other devices on your network. Everything stays on your local network.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Pocketd lets the AI assistant running on this iPhone answer questions about your reminders, such as what is overdue. Your reminders are read on this device only, are never uploaded, and are never sent to the other devices this app serves.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>

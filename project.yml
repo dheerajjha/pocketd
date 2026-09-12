@@ -30,12 +30,34 @@ packages:
     url: https://github.com/tattn/LocalLLMClient.git
     revision: edc39ef2ffc1cef9cf856b0788de8d331f776c2e
 
+# Project-wide, and it has to be project-wide rather than on the app target.
+#
+# `make device-install BUNDLE_ID=x` puts settings on the xcodebuild command
+# line, which applies them to EVERY target in the graph — so overriding
+# PRODUCT_BUNDLE_IDENTIFIER directly would build the app and its widget
+# extension as the same identifier. An extension's identifier must be prefixed
+# by its host's AND differ from it; two targets sharing one fails the build with
+# "Embedded binary's bundle identifier is not prefixed with the parent app's",
+# which names neither target.
+#
+# Defining it on the app target instead is the mistake this comment is here to
+# stop being made twice: the extension cannot see another target's settings, so
+# `$(POCKETD_BUNDLE_ID).Widgets` resolved to the literal string ".Widgets" and
+# failed with the same message for the opposite reason.
+settings:
+  base:
+    POCKETD_BUNDLE_ID: dev.pocketd.app
+
 targets:
   Pocketd:
     type: application
     platform: iOS
     sources:
       - path: App/Sources
+      # Compiled into this target AND into PocketdWidgets. The Live Activity's
+      # attributes have to be one type in both processes or the system cannot
+      # match the app's activity to the extension's UI for it.
+      - path: App/Shared
       # Named as one file rather than adding App/Resources wholesale. That
       # directory also holds Info.plist and the two .entitlements files, and
       # copying those in would ship the entitlements as a readable resource and
@@ -171,10 +193,23 @@ targets:
         # working everywhere it cannot be tested.
         BGTaskSchedulerPermittedIdentifiers:
           - dev.pocketd.app.schedule.refresh
+        # Live Activities. Declared for the model download, which is the one
+        # thing this app does that is long, user-started, and genuinely
+        # continues while the app is off screen — `FileDownloader` sets
+        # `sessionSendsLaunchEvents`, so the bytes really do keep arriving.
+        #
+        # Deliberately NOT declared for the server. A Live Activity saying
+        # SERVING would be false within seconds of leaving the app: iOS tears
+        # the listener down on suspend, which `AppModel.serverShouldRun` exists
+        # to paper over, and `autoOffloadInBackground` defaults true so the
+        # model is gone too. Desk Mode is already an on-screen view, so an
+        # Activity duplicating it would be a second copy of the screen you are
+        # looking at — and a lie the moment you look away.
+        NSSupportsLiveActivities: true
     settings:
       base:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        PRODUCT_BUNDLE_IDENTIFIER: dev.pocketd.app
+        PRODUCT_BUNDLE_IDENTIFIER: $(POCKETD_BUNDLE_ID)
         MARKETING_VERSION: "1.0.0"
         # The build number, overridden at archive time with a unix timestamp.
         # See CFBundleVersion above, which is what makes that override reach
@@ -219,6 +254,60 @@ targets:
         product: LocalLLMClient
       - package: LocalLLMClient
         product: LocalLLMClientLlama
+      # Embeds the widget. Without this the extension builds and is simply
+      # not in the .app, which looks exactly like a widget that does not appear
+      # in the gallery — a failure with no error attached to it.
+      - target: PocketdWidgets
+        embed: true
+
+  PocketdWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: App/Widgets
+      - path: App/Shared
+      # The two files the widget shares with the app, compiled in rather than
+      # linked. `PocketdKit` depends on FlyingFox, and an HTTP server has no
+      # business in a process with a ~30 MB ceiling whose entire job is to read
+      # one small JSON file. Both are Foundation-only for exactly this reason;
+      # see the note at the bottom of SchedulePublication.swift.
+      #
+      # Compiling a file into two targets makes two types with one name in two
+      # modules. That is fine here and only here, because these two never meet
+      # as types — they meet as JSON on disk, through the App Group.
+      - path: Sources/PocketdKit/Widgets/SchedulePublication.swift
+      - path: Sources/PocketdKit/Widgets/SchedulePublicationStore.swift
+    info:
+      path: App/Resources/Widgets-Info.plist
+      properties:
+        CFBundleDisplayName: Pocketd
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        # Nested under the host, and moving with it. See POCKETD_BUNDLE_ID.
+        PRODUCT_BUNDLE_IDENTIFIER: $(POCKETD_BUNDLE_ID).Widgets
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        DEVELOPMENT_TEAM: 83C822A4J3
+        CODE_SIGN_STYLE: Automatic
+        # Its own indirection, so `make device-install` can drop the group for
+        # a build with no portal capabilities without the extension failing to
+        # sign. The store treats a missing container as a quiet no.
+        POCKETD_WIDGET_ENTITLEMENTS: $(SRCROOT)/App/Resources/PocketdWidgets.entitlements
+        CODE_SIGN_ENTITLEMENTS: $(POCKETD_WIDGET_ENTITLEMENTS)
+        SWIFT_STRICT_CONCURRENCY: complete
+        # No objcxx here, deliberately. The app needs it because it links
+        # llama.cpp's C++ headers; this target links neither, and turning it on
+        # would import the whole ObjC surface under C++ rules for nothing —
+        # including the UNNotification quirk documented in NotificationCentre.
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
 
 # A shared scheme, on disk and in git's view of the world.
 #

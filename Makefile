@@ -43,12 +43,22 @@ smoke:
 #   make device-install DEVICE=<udid> BUNDLE_ID=<id from an existing profile>
 DEVICE ?=
 BUNDLE_ID ?=
+# BUNDLE_ID sets POCKETD_BUNDLE_ID, not PRODUCT_BUNDLE_IDENTIFIER.
+#
+# Settings on an xcodebuild command line apply to EVERY target in the graph, so
+# overriding PRODUCT_BUNDLE_IDENTIFIER directly would build the app and its
+# widget extension as the same identifier. An extension's must be prefixed by
+# its host's and must differ from it; the build fails with "Embedded binary's
+# bundle identifier is not prefixed with the parent app's", naming neither
+# target. The project defines PRODUCT_BUNDLE_IDENTIFIER for both in terms of
+# POCKETD_BUNDLE_ID, so moving that one variable moves both and keeps the
+# nesting. Same trick, and same reason, as POCKETD_ENTITLEMENTS below.
 device-install: app
 	xcodebuild -project Pocketd.xcodeproj -scheme Pocketd \
 		-destination 'platform=iOS,id=$(DEVICE)' \
 		-derivedDataPath .build/device -skipMacroValidation \
 		-allowProvisioningUpdates \
-		$(if $(BUNDLE_ID),PRODUCT_BUNDLE_IDENTIFIER=$(BUNDLE_ID),) \
+		$(if $(BUNDLE_ID),POCKETD_BUNDLE_ID=$(BUNDLE_ID),) \
 		POCKETD_ENTITLEMENTS='$(PWD)/App/Resources/Pocketd-NoMemoryLimit.entitlements' \
 		build
 	xcrun devicectl device install app --device $(DEVICE) \

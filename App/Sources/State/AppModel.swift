@@ -54,7 +54,13 @@ final class AppModel {
     /// Face has no such entry, so a search download was an id with no record,
     /// and every screen here builds its list out of records. The bytes moved
     /// for minutes and not one pixel changed.
-    private(set) var transfers: [String: ModelTransfer] = [:]
+    private(set) var transfers: [String: ModelTransfer] = [:] {
+        // One hook for the download's whole state machine. The seven sites that
+        // mutate this dictionary are start, progress, finish, pause, fail and
+        // two cancels; driving the Live Activity from each is how one of them
+        // gets forgotten and an activity outlives its download.
+        didSet { DownloadActivityController.sync(transfers) }
+    }
 
     /// A model that is on disk and would not load.
     ///
@@ -1209,6 +1215,11 @@ final class AppModel {
 
     func loadScheduledTasks() async {
         scheduledTasks = await tasks.all()
+        // The single funnel every edit, delete and sweep already passes
+        // through, which is why the widget is fed from here rather than from
+        // each of them. `publish` is a no-op when nothing a widget shows has
+        // changed, so the desk sweep's timer does not spend the reload budget.
+        SchedulePublisher.publish(scheduledTasks)
     }
 
     func saveScheduledTask(_ task: ScheduledTask) async {

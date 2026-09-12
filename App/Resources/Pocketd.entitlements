@@ -17,6 +17,17 @@
 	     This is the one entitlement that can break a device build on its own:
 	     automatic signing fails unless HealthKit is also enabled on the App ID
 	     in the developer portal. Simulator builds are unaffected. -->
+	<!-- The shared container a widget reads. A widget extension is a separate
+	     process with its own container and can see nothing of this app's without
+	     it. Like HealthKit above, this can break a device build on its own:
+	     automatic signing fails unless the group is registered on the App ID.
+	     `make device-install` builds without it, and `SchedulePublicationStore`
+	     treats a missing container as a quiet no — the widget shows its
+	     placeholder rather than the app failing to launch. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.dev.pocketd.app</string>
+	</array>
 	<key>com.apple.developer.healthkit</key>
 	<true/>
 	<key>com.apple.developer.healthkit.access</key>

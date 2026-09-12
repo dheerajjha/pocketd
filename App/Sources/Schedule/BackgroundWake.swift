@@ -186,6 +186,10 @@ enum BackgroundWake {
         // arming from the pre-settle copy would arm the firing just dealt with.
         let settled = await store.all()
         await NotificationCentre.shared.reconcile(settled, now: now, calendar: calendar)
+        // The other process that can change a task. A 07:00 watcher settled by
+        // a background wake must reach the widget, or the home screen keeps
+        // saying a thing is due that already ran.
+        SchedulePublisher.publish(settled, now: now)
         // Before `setTaskCompleted`, which the caller does immediately after
         // this returns: the process can be suspended the instant it is called.
         await submitRefresh(tasks: settled, now: now, calendar: calendar)
