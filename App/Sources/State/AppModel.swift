@@ -161,6 +161,44 @@ final class AppModel {
 
     var conversation: [ChatMessage] = []
     var draft = ""
+
+    /// An ability the last message would have used, if it were switched on.
+    ///
+    /// This is the answer to the app's biggest product problem, which is not
+    /// that the personal-data tools are off by default — that is correct, and
+    /// defaulting HealthKit on would be wrong — but that being off has meant
+    /// being invisible. A switch nobody finds is a feature nobody has.
+    ///
+    /// So the assistant says so at the only moment the offer is welcome: the
+    /// turn where the user just asked something it could have answered. Not a
+    /// message bubble and not an `AnswerCard` — the model did not say this, and
+    /// cards are written into the saved transcript, where an offer would still
+    /// be sitting months later next to an ability that has since been enabled.
+    private(set) var pendingToolOffer: ToolOffer?
+
+    func dismissToolOffer() { pendingToolOffer = nil }
+
+    /// Lets a view report an event without reaching into the sink.
+    ///
+    /// `analytics` stays private to this type so the taxonomy has one door: a
+    /// view holding the sink could call `record` with anything, and the whole
+    /// guarantee here is that the set of transmittable facts is the enum.
+    func record(_ event: AnalyticsEvent) { analytics.record(event) }
+
+    /// Turns the offered ability on, from the offer rather than from Settings.
+    func acceptToolOffer() {
+        guard let offer = pendingToolOffer else { return }
+        switch offer.ability {
+        case .calendar: calendarToolsEnabled = true
+        case .reminders: reminderToolsEnabled = true
+        case .health: healthToolsEnabled = true
+        // Not offered — the server is not a thing a question implies.
+        case .localServer: break
+        }
+        analytics.record(.abilityOfferAccepted(ability: offer.ability.rawValue))
+        analytics.record(.abilityEnabled(ability: offer.ability.rawValue, source: .chatOffer))
+        pendingToolOffer = nil
+    }
     private(set) var isGenerating = false
     var systemPrompt: String = "You are a helpful assistant." {
         didSet { UserDefaults.standard.set(systemPrompt, forKey: Keys.systemPrompt) }
@@ -993,6 +1031,10 @@ final class AppModel {
         await flushConversation()
         conversation.removeAll()
         draft = ""
+        // An offer belongs to the turn that prompted it; following the
+        // user into another conversation would make it look like the app
+        // had read something it has not.
+        pendingToolOffer = nil
         generationError = nil
         modelSwitchNotice = nil
         currentConversationID = UUID()
@@ -1038,6 +1080,10 @@ final class AppModel {
         if id == currentConversationID {
             conversation.removeAll()
             draft = ""
+            // An offer belongs to the turn that prompted it; following the
+            // user into another conversation would make it look like the app
+            // had read something it has not.
+            pendingToolOffer = nil
             currentConversationID = UUID()
             conversationStartedAt = Date()
         }
@@ -1388,21 +1434,32 @@ final class AppModel {
         // reminders status nobody asked for, and this dictionary is what
         // Settings turns into warnings.
         //
-        // What the split does not fix is the entity whose own switch is off: it
-        // gets no entry, so its authorization is unknown for as long as it
-        // stays off. That behaviour is inherited from the single switch, not
-        // solved here. `EventAccess.authorization(for:)` prompts nobody and is
-        // cheap enough to run for both unconditionally, so the obstacle is not
-        // the read — it is that no screen can currently show a status for a
-        // capability that is off without it reading as a complaint. That is the
-        // capability hub's call, and it belongs in the change that builds it.
+        // Every entity, switched on or not. This used to skip the ones that
+        // were off, and the comment here said the obstacle was never the read
+        // — `EventAccess.authorization(for:)` prompts nobody and is cheap — but
+        // that no screen could show a status for something that is off without
+        // it reading as a complaint. It said that was the capability hub's call.
+        //
+        // The hub exists now, and it is blind in precisely the state it was
+        // built for: a user arriving at Abilities with everything off is the
+        // common case, and the screen has to tell them whether turning a switch
+        // on will work or will need a trip to iOS Settings first. It cannot do
+        // that from an absent entry.
         for entity in PersonalDataEntity.allCases {
-            guard isEnabled(entity) else {
-                personalDataAuthorization[entity] = nil
-                continue
-            }
             personalDataAuthorization[entity] = EventAccess.authorization(for: entity)
         }
+    }
+
+    /// Asks iOS for an entity, from the one screen that should be asking.
+    ///
+    /// On AppModel rather than in the view because the answer belongs in
+    /// `personalDataAuthorization`, which is what every other surface reads —
+    /// a view calling `EventAccess` directly prompts correctly and then leaves
+    /// the rest of the app believing the old answer until something else
+    /// happens to refresh it.
+    func requestAccess(to entity: PersonalDataEntity) async {
+        personalDataAuthorization[entity] = await EventAccess.shared.requestReadAccess(to: entity)
+        await refreshToolGate()
     }
 
 
@@ -1718,6 +1775,32 @@ final class AppModel {
         // After the guard rather than at the top of the method: a tap with an
         // empty draft, or with nothing resident to answer it, sends no message.
         analytics.record(.chatMessageSent(modelID: loadedModelID ?? ""))
+
+        // Decided here, while `text` is still in hand and before `draft` is
+        // cleared. Only when the model is actually being given tools: on a
+        // model whose template cannot call one, turning an ability on would
+        // change nothing and the offer would be a lie about what happens next.
+        pendingToolOffer = personalDataToolGate.registersTools
+            ? ToolOffer.decide(
+                for: text,
+                enabled: .init(
+                    calendar: calendarToolsEnabled,
+                    reminders: reminderToolsEnabled,
+                    health: healthToolsEnabled
+                )
+            )
+            : nil
+        // A device with no Health store registers the tool and reads nothing,
+        // so offering that switch would be offering something that cannot
+        // work. HealthKit cannot tell "denied" from "no data", so the honest
+        // move is to say nothing rather than guess which one it is.
+        if pendingToolOffer?.ability == .health, healthAvailability != .available {
+            pendingToolOffer = nil
+        }
+        if let offered = pendingToolOffer {
+            analytics.record(.abilityOfferShown(ability: offered.ability.rawValue))
+        }
+
         let images = attachments
         draft = ""
         attachments = []

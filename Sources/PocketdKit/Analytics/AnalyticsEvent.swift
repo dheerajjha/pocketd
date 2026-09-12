@@ -63,6 +63,25 @@ public enum ClientDialect: String, Sendable, CaseIterable {
     case ollama
 }
 
+/// Where an ability was switched on from.
+///
+/// Closed, like every other reason in this file, because the whole taxonomy
+/// rests on a value being a case name rather than a string someone passes in.
+public enum AbilitySource: String, Sendable, CaseIterable {
+    case abilitiesScreen = "abilities_screen"
+    case settings
+    case chatOffer = "chat_offer"
+    case onboarding
+}
+
+/// Which half of the scheduling feature ran.
+public enum ScheduledKind: String, Sendable, CaseIterable {
+    /// Needs no model, so it genuinely runs in the background.
+    case watcher
+    /// Needs the model, so it can only run with the app in front.
+    case prompt
+}
+
 /// How someone left the intro.
 ///
 /// Split because `OnboardingView.leave(to:)` is called by Skip and by the
@@ -134,6 +153,34 @@ public enum AnalyticsEvent: Sendable, Equatable {
     case onDeviceClientConnected(dialect: ClientDialect)
     case generationRefused(reason: RefusalReason)
 
+    /// An ability was turned on or off, and where from.
+    ///
+    /// The measurement the Abilities screen exists to produce. Calendar,
+    /// reminders and health are this app's only real differentiator and they
+    /// default off, so the question is not "do people use them" but "does
+    /// anyone ever find them" — and the answer is this event or nothing.
+    ///
+    /// `source` separates the screen from the in-chat offer, which is the
+    /// comparison that says whether discovery-at-the-moment beats a list.
+    case abilityEnabled(ability: String, source: AbilitySource)
+    case abilityDisabled(ability: String)
+
+    /// The assistant noticed a disabled tool could have answered, and said so.
+    case abilityOfferShown(ability: String)
+    case abilityOfferAccepted(ability: String)
+
+    /// A scheduled task actually ran, and in which of the three contexts.
+    ///
+    /// This is the bet the whole scheduling design makes. Inference cannot run
+    /// while the app is closed, so a prompt task has to be collected in the
+    /// foreground — either the user taps the notification, or the phone is
+    /// sitting in Desk Mode on a charger. If `deskMode` and `foreground` are
+    /// both near zero while watchers run fine, the prompt half of the feature
+    /// is theatre and should be cut rather than explained.
+    case scheduledTaskRan(kind: ScheduledKind, context: String)
+    /// Its due moment passed with no way to run it.
+    case scheduledTaskLapsed(kind: ScheduledKind)
+
     public var name: String {
         switch self {
         case .appOpened: "app_opened"
@@ -151,6 +198,12 @@ public enum AnalyticsEvent: Sendable, Equatable {
         case .externalClientConnected: "external_client_connected"
         case .onDeviceClientConnected: "on_device_client_connected"
         case .generationRefused: "generation_refused"
+        case .abilityEnabled: "ability_enabled"
+        case .abilityDisabled: "ability_disabled"
+        case .abilityOfferShown: "ability_offer_shown"
+        case .abilityOfferAccepted: "ability_offer_accepted"
+        case .scheduledTaskRan: "scheduled_task_ran"
+        case .scheduledTaskLapsed: "scheduled_task_lapsed"
         }
     }
 
@@ -186,6 +239,18 @@ public enum AnalyticsEvent: Sendable, Equatable {
             ["dialect": .string(dialect.rawValue)]
         case let .generationRefused(reason):
             ["reason": .string(reason.rawValue)]
+        case let .abilityEnabled(ability, source):
+            ["ability": .string(ability), "source": .string(source.rawValue)]
+        case let .abilityDisabled(ability):
+            ["ability": .string(ability)]
+        case let .abilityOfferShown(ability):
+            ["ability": .string(ability)]
+        case let .abilityOfferAccepted(ability):
+            ["ability": .string(ability)]
+        case let .scheduledTaskRan(kind, context):
+            ["kind": .string(kind.rawValue), "context": .string(context)]
+        case let .scheduledTaskLapsed(kind):
+            ["kind": .string(kind.rawValue)]
         }
     }
 }
@@ -216,7 +281,13 @@ public enum AnalyticsSchema {
         "server_stopped": ["served_s"],
         "external_client_connected": ["dialect"],
         "on_device_client_connected": ["dialect"],
-        "generation_refused": ["reason"]
+        "generation_refused": ["reason"],
+        "ability_enabled": ["ability", "source"],
+        "ability_disabled": ["ability"],
+        "ability_offer_shown": ["ability"],
+        "ability_offer_accepted": ["ability"],
+        "scheduled_task_ran": ["kind", "context"],
+        "scheduled_task_lapsed": ["kind"]
     ]
 
     /// Property names that must never appear, whatever anyone adds later.

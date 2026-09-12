@@ -112,6 +112,7 @@ struct StoredDataAuditRulesTests {
             installedModelBytes: 1_000,
             orphanBytes: 100,
             conversationBytes: 10,
+            scheduledTaskBytes: 0,
             partialDownloadBytes: 3_000_000_000,
             networkCacheBytes: 1,
             downloadInFlight: true
@@ -126,6 +127,7 @@ struct StoredDataAuditRulesTests {
             installedModelBytes: 1_000,
             orphanBytes: 100,
             conversationBytes: 10,
+            scheduledTaskBytes: 0,
             partialDownloadBytes: 3_000_000_000,
             networkCacheBytes: 1,
             downloadInFlight: false
@@ -140,6 +142,7 @@ struct StoredDataAuditRulesTests {
             installedModelBytes: 4_000,
             orphanBytes: 0,
             conversationBytes: 300,
+            scheduledTaskBytes: 0,
             partialDownloadBytes: 0,
             networkCacheBytes: 20,
             downloadInFlight: false
@@ -154,6 +157,7 @@ struct StoredDataAuditRulesTests {
 
         let nothing = DeletionPlan.deleteEverything(
             installedModelBytes: 0, orphanBytes: 0, conversationBytes: 0,
+            scheduledTaskBytes: 0,
             partialDownloadBytes: 0, networkCacheBytes: 0, downloadInFlight: false
         )
         #expect(nothing.isEmpty)
@@ -166,6 +170,7 @@ struct StoredDataAuditRulesTests {
             installedModelBytes: 0,
             orphanBytes: 900,
             conversationBytes: 0,
+            scheduledTaskBytes: 0,
             partialDownloadBytes: 0,
             networkCacheBytes: 0,
             downloadInFlight: false
@@ -219,6 +224,7 @@ struct StoredDataAuditRulesTests {
         let sentences = DeletionNarrative.sentences(
             plan: .deleteEverything(
                 installedModelBytes: 1_000, orphanBytes: 0, conversationBytes: 0,
+                scheduledTaskBytes: 0,
                 partialDownloadBytes: 0, networkCacheBytes: 0, downloadInFlight: false
             ),
             measured: true,
@@ -244,6 +250,7 @@ struct StoredDataAuditRulesTests {
         let sentences = DeletionNarrative.sentences(
             plan: .deleteEverything(
                 installedModelBytes: 0, orphanBytes: 0, conversationBytes: 0,
+                scheduledTaskBytes: 0,
                 partialDownloadBytes: 0, networkCacheBytes: 0, downloadInFlight: false
             ),
             measured: true,
@@ -270,6 +277,7 @@ struct StoredDataAuditRulesTests {
         let sentences = DeletionNarrative.sentences(
             plan: .deleteEverything(
                 installedModelBytes: 0, orphanBytes: 0, conversationBytes: 0,
+                scheduledTaskBytes: 0,
                 partialDownloadBytes: 0, networkCacheBytes: 0, downloadInFlight: false
             ),
             measured: false,
@@ -286,6 +294,7 @@ struct StoredDataAuditRulesTests {
     func footerMatchesThePlan() {
         let plan = DeletionPlan.deleteEverything(
             installedModelBytes: 2_000_000, orphanBytes: 0, conversationBytes: 4_000,
+            scheduledTaskBytes: 0,
             partialDownloadBytes: 900_000, networkCacheBytes: 500,
             downloadInFlight: true
         )

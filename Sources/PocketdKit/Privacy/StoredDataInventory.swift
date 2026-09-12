@@ -50,6 +50,14 @@ public struct DirectoryTally: Sendable, Equatable {
 public enum StoredDataKind: String, Sendable, CaseIterable, Codable {
     case models
     case conversations
+    /// Tasks the user set up to run later, and what each run produced.
+    ///
+    /// Its own kind rather than folded into conversations, because the content
+    /// is different in the way that matters on this screen: a scheduled task
+    /// stores a prompt the user wrote AND the rendered result of reading their
+    /// calendar, reminders or health. A briefing that says "dentist at 11" is
+    /// personal data at rest, written by a run nobody watched.
+    case scheduledTasks
     /// The two halves of a download that stopped: the resume blob the app
     /// wrote, and the multi-gigabyte temporary file URLSession is holding for
     /// it. They are one thing to a user and are counted as one.
@@ -69,6 +77,7 @@ public enum StoredDataKind: String, Sendable, CaseIterable, Codable {
         switch self {
         case .models: "Models"
         case .conversations: "Conversations"
+        case .scheduledTasks: "Scheduled tasks"
         case .partialDownloads: "Unfinished downloads"
         case .preferences: "Settings and keys"
         case .networkCache: "Network cache"
@@ -85,6 +94,8 @@ public enum StoredDataKind: String, Sendable, CaseIterable, Codable {
             "The weights you downloaded, and the file listing them. Nothing here is about you."
         case .conversations:
             "Everything typed in the Chat tab and everything the model replied, one file per conversation, as plain text."
+        case .scheduledTasks:
+            "Each task you set to run later — its prompt or its rule — and what the last few runs produced. A run that read your calendar or your health stores the sentence it wrote about them, so this is personal data at rest even though no conversation exists for it."
         case .partialDownloads:
             "Bytes of a model that never finished arriving: the resume blob beside the weights, and the part-file URLSession parks in this app's own tmp folder. iOS empties tmp only when the disk comes under pressure, which is why there is a button for it here."
         case .preferences:
@@ -107,7 +118,7 @@ public enum StoredDataKind: String, Sendable, CaseIterable, Codable {
 
     public var disposal: Disposal {
         switch self {
-        case .models, .conversations, .partialDownloads:
+        case .models, .conversations, .partialDownloads, .scheduledTasks:
             .here
         case .networkCache:
             .here
@@ -306,6 +317,7 @@ public struct ContainerSurvey: Sendable, Equatable {
 
         if parts.starts(with: ["Library", "Application Support", "Models"]) { return .models }
         if parts.starts(with: ["Library", "Application Support", "Conversations"]) { return .conversations }
+        if parts.starts(with: ["Library", "Application Support", "ScheduledTasks"]) { return .scheduledTasks }
         if parts.starts(with: ["Library", "Preferences"]) { return .preferences }
         if parts.starts(with: ["Library", "Saved Application State"]) { return .systemState }
         if parts.starts(with: ["Library", "SplashBoard"]) { return .systemState }

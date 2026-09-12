@@ -132,6 +132,7 @@ public struct DeletionPlan: Sendable, Equatable {
         public static let models = "every model"
         public static let orphans = "model files nothing can load"
         public static let conversations = "every conversation"
+        public static let scheduledTasks = "every scheduled task and its results"
         public static let partialDownloads = "every unfinished download"
         public static let networkCache = "the network cache"
     }
@@ -174,6 +175,7 @@ public struct DeletionPlan: Sendable, Equatable {
         installedModelBytes: Int64,
         orphanBytes: Int64,
         conversationBytes: Int64,
+        scheduledTaskBytes: Int64,
         partialDownloadBytes: Int64,
         networkCacheBytes: Int64,
         downloadInFlight: Bool
@@ -182,6 +184,11 @@ public struct DeletionPlan: Sendable, Equatable {
             Entry(name: EntryName.models, byteCount: installedModelBytes),
             Entry(name: EntryName.orphans, byteCount: orphanBytes),
             Entry(name: EntryName.conversations, byteCount: conversationBytes),
+            // Beside conversations because it is the same kind of thing: text
+            // the user wrote, and text written about their calendar, reminders
+            // or health. A delete-everything that left these behind would be
+            // leaving personal data at rest under a button that says otherwise.
+            Entry(name: EntryName.scheduledTasks, byteCount: scheduledTaskBytes),
             Entry(
                 name: EntryName.partialDownloads,
                 byteCount: partialDownloadBytes,

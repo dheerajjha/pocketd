@@ -680,6 +680,11 @@ final class StoredDataAudit {
                 .filter { $0.isStillAbandoned(downloadingIDs: downloading) }
                 .reduce(0) { $0 + $1.file.byteCount },
             conversationBytes: conversations.byteCount,
+            // From the survey rather than a separate walk, so it counts the
+            // same bytes the Data screen shows in the Scheduled tasks row. Two
+            // numbers for one directory is how a dialog ends up quoting a
+            // figure the button does not free.
+            scheduledTaskBytes: survey?.area(.scheduledTasks).tally.byteCount ?? 0,
             partialDownloadBytes: survey?.area(.partialDownloads).tally.byteCount ?? 0,
             networkCacheBytes: survey?.area(.networkCache).tally.byteCount ?? 0,
             downloadInFlight: !downloading.isEmpty

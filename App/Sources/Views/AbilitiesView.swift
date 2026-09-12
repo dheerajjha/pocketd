@@ -269,6 +269,17 @@ struct AbilitiesView: View {
     }
 
     private func setEnabled(_ on: Bool, _ ability: Ability) {
+        // Recorded here and not in AppModel, because the question this answers
+        // is whether THIS SCREEN works — the same setter is reachable from the
+        // in-chat offer and from Settings, and a single event with no source
+        // could not tell them apart.
+        if ability != .localServer {
+            model.record(
+                on
+                ? .abilityEnabled(ability: ability.rawValue, source: .abilitiesScreen)
+                : .abilityDisabled(ability: ability.rawValue)
+            )
+        }
         switch ability {
         // Setting these is what asks iOS: `AppModel` puts the prompt at the
         // switch rather than at first tool use, because first use is
@@ -290,8 +301,12 @@ struct AbilitiesView: View {
     /// the standing answer without any UI.
     private func askAgain(_ ability: Ability) {
         guard let entity = ability.entity else { return }
+        // Through AppModel rather than EventAccess directly: the answer has to
+        // land in `personalDataAuthorization`, which every other surface reads.
+        // Asking here and refreshing afterwards prompts correctly and leaves a
+        // window where the rest of the app still believes the old answer.
         Task {
-            _ = await EventAccess.shared.requestReadAccess(to: entity)
+            await model.requestAccess(to: entity)
             refresh()
         }
     }

@@ -120,6 +120,10 @@ struct ChatView: View {
                     .padding(.vertical, 6)
                 }
 
+                if let offer = model.pendingToolOffer {
+                    toolOffer(offer)
+                }
+
                 ChatComposer(isFocused: $isComposerFocused)
             }
             .sensoryFeedback(.success, trigger: copyTick)
@@ -336,6 +340,47 @@ struct ChatView: View {
 ///
 /// Keeping the draft in here means a keystroke invalidates a bar, not a
 /// transcript.
+private extension ChatView {
+    /// The offer to turn on an ability the last question would have used.
+    ///
+    /// Deliberately not a message bubble and not an `AnswerCard`. The model
+    /// did not say this — the app did — and a card would be written into the
+    /// saved transcript, where it would still be offering months later beside
+    /// an ability that has long since been switched on.
+    ///
+    /// Above the composer rather than inside the scroll view, so it cannot be
+    /// scrolled away from and forgotten while the user waits for a reply that
+    /// was never going to contain the answer.
+    @ViewBuilder
+    func toolOffer(_ offer: ToolOffer) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Image(systemName: offer.ability.symbolName)
+                .foregroundStyle(.tint)
+                .accessibilityHidden(true)
+
+            Text(offer.sentence)
+                .font(.footnote)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button("Not now") { model.dismissToolOffer() }
+                .font(.caption)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+
+            Button("Turn on") { model.acceptToolOffer() }
+                .font(.caption.weight(.medium))
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.regularMaterial)
+        .overlay(alignment: .top) { Divider() }
+        .accessibilityElement(children: .contain)
+    }
+}
+
 private struct ChatComposer: View {
     @Environment(AppModel.self) private var model
     @FocusState.Binding var isFocused: Bool

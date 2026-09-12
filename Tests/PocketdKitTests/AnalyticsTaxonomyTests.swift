@@ -28,7 +28,13 @@ struct AnalyticsTaxonomyTests {
         .serverStopped(servedSeconds: 742.5),
         .externalClientConnected(dialect: .openai),
         .onDeviceClientConnected(dialect: .ollama),
-        .generationRefused(reason: .thermal)
+        .generationRefused(reason: .thermal),
+        .abilityEnabled(ability: "calendar", source: .chatOffer),
+        .abilityDisabled(ability: "health"),
+        .abilityOfferShown(ability: "reminders"),
+        .abilityOfferAccepted(ability: "reminders"),
+        .scheduledTaskRan(kind: .watcher, context: "background"),
+        .scheduledTaskLapsed(kind: .prompt)
     ]
 
     @Test("every event's properties match the schema exactly")
@@ -72,7 +78,7 @@ struct AnalyticsTaxonomyTests {
         // other test in this file silently stops covering it. The count is
         // hand-maintained on purpose: bumping it is the moment you notice you
         // must also add a sample.
-        #expect(Self.sample.count == 15)
+        #expect(Self.sample.count == 21)
         #expect(Set(Self.sample.map(\.name)).count == Self.sample.count, "duplicate event in sample")
         #expect(Set(Self.sample.map(\.name)) == Set(AnalyticsSchema.allowedProperties.keys),
                 "sample and schema disagree about which events exist")
@@ -87,7 +93,9 @@ struct AnalyticsTaxonomyTests {
         #expect(DownloadFailureReason.allCases.isEmpty == false)
         #expect(LoadFailureReason.allCases.isEmpty == false)
         #expect(RefusalReason.allCases.count == 3)
-        for raw in DownloadFailureReason.allCases.map(\.rawValue)
+        for raw in AbilitySource.allCases.map(\.rawValue)
+            + ScheduledKind.allCases.map(\.rawValue)
+            + DownloadFailureReason.allCases.map(\.rawValue)
             + LoadFailureReason.allCases.map(\.rawValue)
             + RefusalReason.allCases.map(\.rawValue)
             + ClientDialect.allCases.map(\.rawValue) {
