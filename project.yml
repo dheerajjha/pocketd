@@ -29,6 +29,16 @@ packages:
   LocalLLMClient:
     url: https://github.com/tattn/LocalLLMClient.git
     revision: edc39ef2ffc1cef9cf856b0788de8d331f776c2e
+  # Linked in EVERY configuration, including Debug, even though a Debug build
+  # sends nothing. The alternative — linking only for Release — would mean the
+  # transmitting code path is never compiled by anyone working on the app, and
+  # the first build that compiles it would be the archive. MixpanelAnalytics.swift
+  # makes the same argument about the `canImport` branch it already had:
+  # wiring is the part that rots, and wiring compiled in both configurations
+  # cannot. What Debug does instead is not CONSTRUCT it — see AnalyticsForBuild.
+  Mixpanel:
+    url: https://github.com/mixpanel/mixpanel-swift.git
+    exactVersion: 4.4.0
 
 # Project-wide, and it has to be project-wide rather than on the app target.
 #
@@ -254,6 +264,8 @@ targets:
         product: LocalLLMClient
       - package: LocalLLMClient
         product: LocalLLMClientLlama
+      - package: Mixpanel
+        product: Mixpanel
       # Embeds the widget. Without this the extension builds and is simply
       # not in the .app, which looks exactly like a widget that does not appear
       # in the gallery — a failure with no error attached to it.

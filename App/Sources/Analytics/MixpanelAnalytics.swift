@@ -193,3 +193,39 @@ struct MixpanelAnalytics: AnalyticsSink {
 typealias MixpanelAnalytics = NoAnalytics
 
 #endif
+
+/// Which sink this build gets.
+///
+/// The one place that decides, and it decides by CONFIGURATION rather than by
+/// linkage. The SDK is now in every build, Debug included, so the transmitting
+/// code above is compiled by everyone working on the app — the alternative is
+/// that the first build to compile it is the archive, which is the failure the
+/// `#if canImport` branch was already written to avoid. What Debug changes is
+/// that it never constructs it.
+///
+/// A Debug build must not send, and the reason is not privacy — it is that the
+/// numbers would be wrong in a way nothing downstream could correct. A
+/// developer tapping through onboarding forty times to check a layout arrives
+/// as forty first launches, against a real install base small enough that it
+/// moves every rate on the dashboard. Mixpanel has no notion of "ignore this
+/// device", so the filtering has to happen here or not at all. The same applies
+/// to `make device-install`, which is a Debug build on real hardware and the
+/// most convincing fake user of the lot.
+///
+/// Release is unconditional, which is what "compulsory" means: there is no
+/// build setting, launch argument or hidden default that turns a shipped build
+/// silent. Whether a *user* is counted is `AnalyticsConsent`'s question, and it
+/// is asked on the far side of this — the switch at the bottom of Settings
+/// still works exactly as it did.
+enum AnalyticsForBuild {
+    static func make() -> any AnalyticsSink {
+        #if DEBUG
+        // `MixpanelAnalytics` is still compiled in this configuration; it is
+        // simply not the thing that gets built. If that ever stops being true,
+        // the type-checker stops covering it and this comment is the warning.
+        return NoAnalytics()
+        #else
+        return MixpanelAnalytics()
+        #endif
+    }
+}

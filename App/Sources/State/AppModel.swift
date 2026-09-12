@@ -145,7 +145,7 @@ final class AppModel {
     /// and it is still a type with no code capable of transmitting rather than
     /// a flag that says not to — which is why the package's suite cannot reach
     /// a real project even by accident.
-    private(set) var analytics: any AnalyticsSink = MixpanelAnalytics()
+    private(set) var analytics: any AnalyticsSink = AnalyticsForBuild.make()
 
 #if DEBUG
     /// Seeds transfer states for previews.
