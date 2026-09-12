@@ -20,7 +20,17 @@ final class AppModel {
     /// and the home indicator, so restoring it on launch means the app opens on
     /// a black screen with no visible way out — and force-quitting, the one
     /// recovery every user knows, lands you straight back in it.
-    var deskMode = false
+    ///
+    /// It is also the switch that arms scheduled prompt tasks. See
+    /// `restartDeskSweep`: this is the app's only unattended state where a model
+    /// may legally run, so turning it on starts a sweep and leaving it on keeps
+    /// one on a timer.
+    var deskMode = false {
+        didSet {
+            guard deskMode != oldValue else { return }
+            restartDeskSweep()
+        }
+    }
     var configuration: ServerConfiguration {
         didSet { persistConfiguration() }
     }
@@ -273,6 +283,20 @@ final class AppModel {
                 ?? directory.appendingPathComponent("Conversations")
         )
 
+        // Built exactly as the line above builds the transcripts, including the
+        // fallback, and for the same reason on both counts.
+        // `ScheduledTaskStore.defaultDirectory()` is the call that creates the
+        // folder and marks it excluded from iCloud Backup — a stored run record
+        // holds the rendered contents of the user's calendar or reminders, so
+        // these files are personal data at rest in exactly the way a transcript
+        // is — and it is re-applied on every launch rather than at creation,
+        // because an install that already has the directory would otherwise
+        // keep backing it up forever.
+        self.tasks = ScheduledTaskStore(
+            directory: (try? ScheduledTaskStore.defaultDirectory())
+                ?? directory.appendingPathComponent("ScheduledTasks")
+        )
+
         // Read before the engine exists rather than from the stored properties,
         // because property observers do not run during initialisation: reading
         // `calendarToolsEnabled` here would see its declared default and launch
@@ -343,6 +367,50 @@ final class AppModel {
         calendarToolsEnabled = personalData.calendar
         reminderToolsEnabled = personalData.reminders
         healthToolsEnabled = healthEnabled
+
+        // Last, because it is the only thing here that needs `self`: the four
+        // answers in `Host` are all reads of this object, and Swift only lets
+        // them be captured once every stored property has a value.
+        scheduleRunner = ScheduleRunner(
+            store: tasks,
+            engine: engine,
+            // Through `authorization(for:)` first, and never straight into
+            // `requestReadAccess`. That call is what puts iOS's modal on
+            // screen, and a sweep happens with nobody expecting one — on the
+            // return to the foreground, or once a minute on a phone lying
+            // face-down on a charger in Desk Mode. A permission alert nobody
+            // asked for, with no visible connection to anything, is not a
+            // decision the user gets to make properly, and it is the same
+            // reasoning `applyPersonalDataTools` gives for asking at the switch
+            // rather than at first tool use.
+            //
+            // The Abilities switches are deliberately NOT consulted. Those
+            // decide what the *model* is handed on every prompt and what that
+            // costs in context; a watcher is the user's own standing
+            // instruction, written into a task they created, and iOS's grant is
+            // the thing that says whether it may be honoured.
+            readEvents: { window in
+                let authorization = EventAccess.authorization(for: .calendar)
+                guard authorization.canRead else { return .unauthorized(authorization) }
+                return await EventAccess.shared.events(in: window)
+            },
+            readReminders: { window in
+                let authorization = EventAccess.authorization(for: .reminders)
+                guard authorization.canRead else { return .unauthorized(authorization) }
+                return await EventAccess.shared.reminders(in: window)
+            },
+            host: ScheduleRunner.Host(
+                isUserGenerating: { [weak self] in
+                    // Fails closed. A model that has gone is not a model that
+                    // is idle, and starting an unattended generation against
+                    // whatever is left is the wrong way to be wrong.
+                    self?.isGenerating ?? true
+                },
+                systemPrompt: { [weak self] in self?.systemPrompt ?? "" },
+                maxTokens: { [weak self] in self?.configuration.maxContextTokens },
+                record: { [weak self] event in self?.record(event) }
+            )
+        )
     }
 
     func bootstrap() async {
@@ -434,6 +502,18 @@ final class AppModel {
         if serverShouldRun {
             await startServer()
         }
+
+        await loadScheduledTasks()
+        // Swept here rather than left to the scene phase, because there is no
+        // scene-phase change to hang a cold launch on: SwiftUI's
+        // `onChange(of:)` does not fire for the value a scene already has, so an
+        // app launched straight into `.active` never reaches
+        // `handleScenePhase`. Without this line a task that came due while the
+        // app was closed waits for the user to background it and come back.
+        //
+        // `.foreground` unconditionally: `deskMode` is deliberately not
+        // persisted, so it is false at this point on every launch.
+        sweepSchedule(in: .foreground)
     }
 
     // MARK: - Server control
@@ -861,6 +941,9 @@ final class AppModel {
 
     func delete(_ model: ModelRecord) async {
         if loadedModelID == model.id {
+            // The file is about to go, not just the memory. A scheduled run
+            // reading through it would be decoding from a deleted mapping.
+            await cancelScheduleSweep()
             await engine.unload()
             syncLoadedModel(nil)
             await recalibrateAfterUnload()
@@ -878,6 +961,12 @@ final class AppModel {
     private(set) var loadingModelID: String?
 
     func loadModel(_ model: ModelRecord, remember: Bool = true) async {
+        // The same argument as the reply below, for the run nobody can see. A
+        // scheduled generation holds the engine's gate exactly as a chat one
+        // does, so a load issued under it blocks for as long as it takes — and
+        // it is decoding against weights this call is about to unmap. Awaited,
+        // so the gate is genuinely free by the time `engine.load` asks for it.
+        await cancelScheduleSweep()
         // The engine serialises everything that touches the llama context,
         // so a load issued mid-generation simply blocked — for minutes, with
         // every button greyed and nothing on screen explaining why. Cancel
@@ -941,6 +1030,10 @@ final class AppModel {
     /// resign from serving.
     func offloadModel() async {
         guard loadedModelID != nil else { return }
+        // Freeing the memory means unmapping weights a scheduled run may be
+        // decoding through. Same reason as the reply below, and the same
+        // reason `loadModel` does it.
+        await cancelScheduleSweep()
         if isGenerating {
             stopGenerating()
             generationError = "Stopped the reply to offload the model."
@@ -1094,6 +1187,194 @@ final class AppModel {
         found.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         try? await conversations.save(found)
         history = await conversations.all()
+    }
+
+    // MARK: - Schedule
+
+    private let tasks: ScheduledTaskStore
+
+    /// Runs what is due. Never nil after `init`; optional only because its
+    /// `Host` closures read this object, and Swift will not let them be
+    /// captured until every stored property has a value.
+    private var scheduleRunner: ScheduleRunner?
+
+    /// Every scheduled task, newest first. Kept in memory the way `history` is,
+    /// so a list is instant; the store is the source of truth on disk.
+    ///
+    /// Refreshed after every sweep, because a sweep is the one thing that
+    /// changes a task without anybody touching the screen — that is the whole
+    /// point of it — and a schedule view reading a snapshot taken at launch
+    /// would show this morning's briefing as never having run.
+    private(set) var scheduledTasks: [ScheduledTask] = []
+
+    func loadScheduledTasks() async {
+        scheduledTasks = await tasks.all()
+    }
+
+    func saveScheduledTask(_ task: ScheduledTask) async {
+        // Asked here, at the save of the first task, and nowhere else. This app
+        // opens without a single permission prompt — which is unusual enough
+        // that people comment on it — and the moment somebody schedules
+        // something is the one moment a notification permission is obviously
+        // about what they just did. `NotificationCentre` documents the rule; the
+        // call has to live wherever the save is, which is here.
+        let isFirst = scheduledTasks.isEmpty
+        try? await tasks.save(task)
+        await loadScheduledTasks()
+        if isFirst { _ = await NotificationCentre.shared.requestAuthorization() }
+        // A new or edited task has a different next firing, and an edited one
+        // may have a pending request armed for a firing that no longer exists.
+        await NotificationCentre.shared.reconcile(scheduledTasks)
+    }
+
+    func deleteScheduledTask(_ id: UUID) async {
+        await tasks.delete(id)
+        await loadScheduledTasks()
+        // Or iOS delivers a notification at 07:00 for a task the user deleted
+        // on Tuesday: a pending request outlives the file it was armed from.
+        await NotificationCentre.shared.reconcile(scheduledTasks)
+    }
+
+    /// For the Data screen's delete-everything, which has to reach the files it
+    /// counts. Goes through the store rather than the in-memory list for the
+    /// reason `deleteAllConversations` gives: `all()` skips a file it cannot
+    /// decode, so deleting only what the list knows about would leave real
+    /// tasks on disk and report success.
+    func deleteAllScheduledTasks() async {
+        await cancelScheduleSweep()
+        await tasks.deleteAll()
+        await loadScheduledTasks()
+        await NotificationCentre.shared.reconcile(scheduledTasks)
+    }
+
+    /// One sweep at a time, in flight.
+    ///
+    /// Held rather than fired and forgotten because everything that tears the
+    /// llama context down has to be able to stop it: a scheduled generation
+    /// that outlives a model load is decoding against weights that are being
+    /// unmapped underneath it.
+    private var scheduleSweep: Task<Void, Never>?
+
+    /// The repeating sweep Desk Mode runs on.
+    ///
+    /// Managed exactly like `idleWatch`: cancelled and rebuilt from one place,
+    /// so there is never a second loop nobody is holding a handle to.
+    private var deskSweep: Task<Void, Never>?
+
+    /// How often Desk Mode looks.
+    ///
+    /// A minute, because that is the resolution the schedule itself has —
+    /// `TimeOfDay` is two numbers off a clock face — so a task due at 09:00 runs
+    /// by 09:01 at worst and nothing finer would be visible. It is also the
+    /// interval `DeskModeView` already drifts its content on, and a phone left
+    /// on a charger for eight hours should not be waking up more often than the
+    /// screen it is drawing.
+    private static let deskSweepSeconds = 60
+
+    /// Runs whatever this context allows, once.
+    ///
+    /// Deliberately not `async`: the callers are scene-phase changes and a
+    /// timer, none of which can wait out a sixty-second generation, and a sweep
+    /// that blocked the transition would make the app look hung on the way back
+    /// from the app switcher.
+    func sweepSchedule(in context: ExecutionContext) {
+        guard scheduleSweep == nil, scheduleRunner != nil else { return }
+        scheduleSweep = Task { [weak self] in
+            defer { self?.scheduleSweep = nil }
+            guard let self, let runner = self.scheduleRunner else { return }
+            // The same suppression a generation in Chat takes, and for the same
+            // reason: `releaseIfIdle` would otherwise unload the model out from
+            // under an unattended run — which is exactly the state Desk Mode is
+            // in, idle by every measure this app has, for hours.
+            self.suppressAutoRelease("scheduled")
+            defer { self.resumeAutoRelease("scheduled") }
+            let completions = await runner.sweep(in: context)
+            await self.loadScheduledTasks()
+            await self.announceSchedule(completions)
+        }
+    }
+
+    /// Says what a sweep produced, and re-arms what comes next.
+    ///
+    /// Announced from here rather than from inside `ScheduleRunner` so that both
+    /// halves of this app's scheduling — `BackgroundWake`'s refresh and this
+    /// foreground sweep — post through the one type that knows how loudly to do
+    /// it. `NotificationCentre` is what decides between an alert and a silent
+    /// update for a firing the user has already been buzzed about, and that
+    /// decision is only right if every announcement goes through it.
+    ///
+    /// `reconcile` runs whether or not anything ran, which is the half that is
+    /// easy to forget: a notification trigger is spent once it fires, so a task
+    /// that has just been collected needs its *next* firing armed or it never
+    /// notifies again — and a task disabled or deleted since the last sweep
+    /// needs its pending request withdrawn.
+    private func announceSchedule(_ completions: [ScheduleRunner.Completion]) async {
+        for completion in completions {
+            if let watched = completion.watched {
+                await NotificationCentre.shared.announce(
+                    watched,
+                    of: completion.task,
+                    firing: completion.run.firing,
+                    notifyWhenEmpty: completion.notifyWhenEmpty
+                )
+            } else if completion.run.isAwaitingForeground {
+                await NotificationCentre.shared.announceAwaitingForeground(
+                    completion.task,
+                    firing: completion.run.firing
+                )
+            }
+        }
+        // From the store's own answer rather than from the completions above:
+        // settling changed the tasks, and arming from the pre-settle copy would
+        // arm the firing that has just been dealt with.
+        await NotificationCentre.shared.reconcile(scheduledTasks)
+    }
+
+    /// Stops a scheduled run and waits for it to finish unwinding.
+    ///
+    /// Awaited rather than fired and forgotten, for the reason
+    /// `releaseForBackground` flushes the conversation before doing anything
+    /// else: suspension is the last moment this process is guaranteed to run,
+    /// and the run record for the generation being cancelled is written on the
+    /// way out of it.
+    ///
+    /// The slot is cleared by the task's own `defer` rather than here, so a
+    /// sweep started while the previous one is still unwinding cannot end up
+    /// holding a handle that something else already nilled.
+    private func cancelScheduleSweep() async {
+        guard let sweep = scheduleSweep else { return }
+        sweep.cancel()
+        await sweep.value
+    }
+
+    /// Starts, restarts or tears down the Desk Mode sweep.
+    ///
+    /// Desk Mode is the only unattended state in this app where a model may
+    /// legally run — the app is in the foreground so Metal answers, nobody is
+    /// waiting so a thirty-second generation costs nothing, and the phone is on
+    /// a charger so the battery argument does not apply — which makes this
+    /// timer the place the prompt half of scheduling actually lives.
+    ///
+    /// Shaped like `restartIdleWatch`, down to the cancellation check on both
+    /// sides of the sleep: a `Task.sleep` that is cancelled returns rather than
+    /// throwing into the loop, and without the second check the body runs once
+    /// more after the handle has been dropped.
+    private func restartDeskSweep() {
+        deskSweep?.cancel()
+        guard deskMode else { deskSweep = nil; return }
+        deskSweep = Task { [weak self] in
+            // Immediately, before the first sleep. Putting the phone on the
+            // charger is itself the event: waiting a minute to notice a task
+            // that has been due since breakfast would make the feature look
+            // broken in exactly the moment somebody is watching it start.
+            self?.sweepSchedule(in: .deskMode)
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.deskSweepSeconds))
+                if Task.isCancelled { return }
+                guard let self else { return }
+                self.sweepSchedule(in: .deskMode)
+            }
+        }
     }
 
     // MARK: - Download rate
@@ -1652,6 +1933,19 @@ final class AppModel {
         case .active:
             await reconcileAfterForeground()
             await restoreAutoReleasedModel()
+            // After the model is back, and not before: a prompt task swept
+            // first would find nothing resident and file a `.noModelLoaded` run
+            // against a phone that had the weights on disk the whole time.
+            //
+            // Desk Mode wins wherever it is on. It is the stronger context —
+            // the same GPU access, and nobody watching — and sweeping
+            // `.foreground` here as well would run one firing twice under two
+            // different names.
+            if deskMode {
+                restartDeskSweep()
+            } else {
+                sweepSchedule(in: .foreground)
+            }
         case .inactive:
             break
         @unknown default:
@@ -1663,6 +1957,17 @@ final class AppModel {
         // Before anything else: suspension is the last moment this process is
         // guaranteed to run again, and the debounced save may still be pending.
         await flushConversation()
+
+        // The timer first, then the run it may have started. A `.deskMode`
+        // sweep asserts that a model may run here, and in the background that
+        // assertion is false — Metal refuses a backgrounded app's command
+        // buffers, so an unattended generation does not get slower, it fails.
+        // Cancelling turns that into a firing that stays owed and is retried on
+        // the way back, rather than a dead run nothing explains; and it is
+        // awaited so the record lands before the process is suspended.
+        deskSweep?.cancel()
+        deskSweep = nil
+        await cancelScheduleSweep()
 
         guard autoOffloadInBackground, releaseSuppressions.isEmpty else { return }
         guard let resident = loadedModelID else { return }
@@ -1772,6 +2077,20 @@ final class AppModel {
         // A picture with no words is a question — "what is this" is implied —
         // so an empty draft is allowed once something is attached.
         guard !text.isEmpty || !attachments.isEmpty, !isGenerating, loadedModelID != nil else { return }
+        // A person typing outranks a task thinking on its own. The engine's
+        // gate would serialise the two on its own, but the order it would pick
+        // is the wrong one: this message would queue behind an unattended
+        // briefing the user cannot see and did not start, and the Chat tab
+        // would sit on an empty reply bubble for the length of it.
+        //
+        // Not awaited, and it does not need to be. An interrupted prompt run is
+        // deliberately left unsettled — see `ScheduleRunner.runPrompt` — so
+        // there is no record to lose by walking away from it, and the firing is
+        // picked up again by the next sweep.
+        //
+        // After the guard, like the event below: a tap with an empty draft must
+        // not cost somebody their morning briefing.
+        scheduleSweep?.cancel()
         // After the guard rather than at the top of the method: a tap with an
         // empty draft, or with nothing resident to answer it, sends no message.
         analytics.record(.chatMessageSent(modelID: loadedModelID ?? ""))

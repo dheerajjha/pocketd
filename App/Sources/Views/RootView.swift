@@ -5,6 +5,17 @@ import SwiftUI
 /// destination with no way to reach it is the definition of feeling stuck.
 enum AppTab: Hashable {
     case abilities, server, models, chat, settings
+
+    /// Scheduled tasks, which is a destination and **not** a tab — `route(to:)`
+    /// presents it rather than selecting it.
+    ///
+    /// It lives in this enum anyway, and that is the point: every screen in the
+    /// app already takes a `(AppTab) -> Void`, so the schedule is one line away
+    /// for any of them without a second routing type or a second closure
+    /// threaded through views this change does not own. The Abilities list is
+    /// where the permanent row for it belongs — see the handoff — and until that
+    /// lands, `ScheduleBar` carries the entry point.
+    case schedules
 }
 
 struct RootView: View {
@@ -29,12 +40,14 @@ struct RootView: View {
     /// which picks its own destination.
     @State private var tab: AppTab = .abilities
 
+    @State private var showingSchedules = false
+
     var body: some View {
         if model.needsOnboarding {
             // Ahead of desk mode and the tabs both: there is nothing useful
             // behind this yet, and a tab bar under an intro invites someone to
             // tap into a screen the intro is about to explain.
-            OnboardingView(finish: { tab = $0 })
+            OnboardingView(finish: { route(to: $0) })
                 .transition(.opacity)
         } else if model.deskMode {
             DeskModeView()
@@ -43,7 +56,7 @@ struct RootView: View {
             // Above the tabs rather than inside one of them: a download is the
             // one thing here that outlives the screen that started it.
             VStack(spacing: 0) {
-                DownloadBanner(goTo: { tab = $0 })
+                DownloadBanner(goTo: { route(to: $0) })
                 TabView(selection: $tab) {
                     // A fifth tab, and not casually. iOS collapses a tab bar at
                     // five, so this is paid for rather than free, and the two
@@ -66,18 +79,81 @@ struct RootView: View {
                     // bar, and what this app is, is the assistant that can read
                     // what is on your phone.
                     Tab("Abilities", systemImage: "sparkles", value: AppTab.abilities) {
-                        AbilitiesView(goTo: { tab = $0 })
+                        AbilitiesView(goTo: { route(to: $0) })
+                            // Scheduled tasks hang off Abilities, and as a bar
+                            // rather than as a sixth tab.
+                            //
+                            // Five is the hard limit: iOS folds everything past
+                            // the fifth tab into More, so a sixth does not cost
+                            // a slot, it costs Settings — buried behind a
+                            // disclosure list to make room for a screen most
+                            // people visit weekly. The argument above for the
+                            // fifth tab already spent the last one that was
+                            // going.
+                            //
+                            // Abilities rather than Chat because the sentence
+                            // this screen exists to say is "what the assistant
+                            // on this phone can do", and running on a schedule
+                            // is one of those things — Chat is the same
+                            // assistant answering *now*, and a schedule is not
+                            // a conversation. It also puts the bar on the tab a
+                            // returning launch lands on, which is what makes it
+                            // discoverable at all.
+                            //
+                            // A bar and not a plain link because it carries
+                            // state the user cannot get anywhere else: the next
+                            // firing, and a count of prompt-task results
+                            // waiting to be written because the app was closed
+                            // when they came due. That last one is the fact
+                            // this whole feature has to keep visible.
+                            //
+                            // The row belongs inside the Abilities list itself;
+                            // that file is another change's, so the handoff
+                            // names the line. When it lands, this modifier and
+                            // `ScheduleBar` both go.
+                            .safeAreaInset(edge: .bottom) {
+                                ScheduleBar { showingSchedules = true }
+                            }
                     }
                     Tab("Server", systemImage: "network", value: AppTab.server) {
-                        ServerView(goTo: { tab = $0 })
+                        ServerView(goTo: { route(to: $0) })
                     }
                     Tab("Models", systemImage: "shippingbox", value: AppTab.models) { ModelsView() }
                     Tab("Chat", systemImage: "bubble.left.and.bubble.right", value: AppTab.chat) {
-                        ChatView(goTo: { tab = $0 })
+                        ChatView(goTo: { route(to: $0) })
                     }
                     Tab("Settings", systemImage: "gearshape", value: AppTab.settings) { SettingsView() }
                 }
             }
+            // On the container rather than on the Abilities tab, so that a route
+            // to the schedule from anywhere — the bar today, an Abilities row or
+            // a notification tap later — presents the same sheet and does not
+            // tear it down when the selected tab changes underneath it.
+            .sheet(isPresented: $showingSchedules) {
+                SchedulesView(goTo: { destination in
+                    showingSchedules = false
+                    route(to: destination)
+                })
+            }
+        }
+    }
+
+    /// Sends the app somewhere, whether or not that somewhere is a tab.
+    ///
+    /// Switched exhaustively rather than defaulted, so that a destination added
+    /// to `AppTab` later has to say here how it is reached instead of silently
+    /// selecting a tab that does not exist — which `TabView` renders as a blank
+    /// screen with no way back.
+    private func route(to destination: AppTab) {
+        switch destination {
+        case .schedules:
+            showingSchedules = true
+        case .abilities, .server, .models, .chat, .settings:
+            // Dismissed first: a tab change behind a sheet moves a screen the
+            // user cannot see, which is the shape of every "the button did
+            // nothing" report.
+            showingSchedules = false
+            tab = destination
         }
     }
 }

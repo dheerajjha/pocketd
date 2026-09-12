@@ -138,6 +138,39 @@ targets:
         NSLocalNetworkUsageDescription: >-
           Pocketd serves the language model running on this device to other
           devices on your network. Everything stays on your local network.
+        # Background refresh, and an honest account of what it buys.
+        #
+        # Without `fetch` here, BGTaskScheduler refuses the app outright:
+        # `submit` fails with BGTaskSchedulerErrorCodeNotPermitted and nothing
+        # ever wakes. There is no crash and no log — the schedule simply never
+        # runs, which is the hardest kind of broken to notice.
+        #
+        # What it buys is seconds of CPU and no GPU at all. That is enough for
+        # a watcher, which is a sort and a template over EventKit rows, and it
+        # is not enough for a prompt task and cannot be made so: a backgrounded
+        # app's Metal command buffers come back notPermitted on every iPhone,
+        # so no value in this array will ever let the model think while the app
+        # is closed. `processing` is deliberately absent for that reason — it
+        # grants minutes instead of seconds, which is minutes of a GPU nobody
+        # is allowed to touch. A prompt task's due moment is kept by a
+        # notification trigger, which needs no background execution whatsoever.
+        UIBackgroundModes:
+          - fetch
+        # The one identifier, written out rather than derived, and the literal
+        # has to match `BackgroundWake.refreshIdentifier` exactly.
+        #
+        # `register` returns false for an identifier that is not in this array
+        # and reports nothing else; the app then launches normally, shows a
+        # schedule, and never wakes for it. So the string is the contract, and
+        # the tempting version of it — $(PRODUCT_BUNDLE_IDENTIFIER).schedule.
+        # refresh — is the trap: `make device-install BUNDLE_ID=…` overrides
+        # the bundle identifier on the exact build that goes on real hardware,
+        # which is also the only place background refresh runs at all (the
+        # simulator never fires one). The plist would move, the Swift constant
+        # would not, and background refresh would be dead on devices while
+        # working everywhere it cannot be tested.
+        BGTaskSchedulerPermittedIdentifiers:
+          - dev.pocketd.app.schedule.refresh
     settings:
       base:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

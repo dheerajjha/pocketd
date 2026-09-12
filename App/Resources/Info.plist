@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>dev.pocketd.app.schedule.refresh</string>
+	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
@@ -42,6 +46,10 @@
 	<string>Pocketd serves the language model running on this device to other devices on your network. Everything stays on your local network.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Pocketd lets the AI assistant running on this iPhone answer questions about your reminders, such as what is overdue. Your reminders are read on this device only, are never uploaded, and are never sent to the other devices this app serves.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
