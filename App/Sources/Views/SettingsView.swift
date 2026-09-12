@@ -286,6 +286,22 @@ struct SettingsView: View {
                     Text("Off, the assistant answers from the conversation alone. On, it can say what is on today or what is overdue — and every other reply has less room, because each tool you enable is described to the model before it reads a word you typed, whether or not the answer needs it. On a small model with a 4K window that is a few hundred words of conversation gone per tool. Requests from other devices never reach this data either way.")
                 }
 
+                // Deliberately the last thing on the screen, below every
+                // control someone came here to change. On by default, and
+                // findable by anyone who goes looking — which is the whole
+                // bargain: most people will never scroll this far, and the
+                // ones who care will.
+                Section {
+                    Toggle("Share usage events", isOn: Binding(
+                        get: { model.analyticsConsent.permitsSending },
+                        set: { model.setAnalyticsConsent($0 ? .granted : .refused) }
+                    ))
+                } header: {
+                    Text("Usage")
+                } footer: {
+                    Text("Sent: which screens are opened, which models are downloaded and whether they load, how fast generation runs, and whether another device connected. Never sent: anything you type, anything the model says, anything read from Health, Calendar or Reminders, your files, your network addresses or your location. Turning this off stops it and discards anything queued but not yet sent.")
+                }
+
                 Section {
                     Button("Apply") {
                         // Guarded by portProblem, so the silent fallback that

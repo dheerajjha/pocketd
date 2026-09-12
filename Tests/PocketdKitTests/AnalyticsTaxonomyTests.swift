@@ -152,3 +152,38 @@ struct AnalyticsConsentTests {
         // a stronger guarantee than a flag.
     }
 }
+
+@Suite("Consent is reversible")
+struct ConsentReversibilityTests {
+    @Test("a refused sink can be turned back on")
+    func refusalIsNotAOneWayDoor() {
+        // The failure this prevents is invisible from inside the app: the SDK
+        // persists an opt-out across launches, so a switch that only knew how
+        // to stop would turn off once and then render a control that does
+        // nothing, forever, while still looking like a choice.
+        let sink = RecordingAnalytics()
+        sink.record(.serverStarted)
+        #expect(sink.events.count == 1)
+
+        sink.stopAndForget()
+        sink.record(.serverStarted)
+        #expect(sink.events.isEmpty, "a stopped sink records nothing")
+
+        sink.resume()
+        sink.record(.serverStarted)
+        #expect(sink.events.count == 1, "resume must actually reopen the tap")
+        #expect(sink.wasStopped == false)
+    }
+
+    @Test("resuming does not resurrect what was discarded")
+    func resumeIsNotUndo() {
+        // Turning it back on must not recover events the person had already
+        // been told were thrown away.
+        let sink = RecordingAnalytics()
+        sink.record(.serverStarted)
+        sink.record(.chatMessageSent(modelID: "smollm2-360m"))
+        sink.stopAndForget()
+        sink.resume()
+        #expect(sink.events.isEmpty)
+    }
+}

@@ -19,6 +19,16 @@ public protocol AnalyticsSink: Sendable {
     /// drop anything queued and discard the identifier, not merely stop
     /// adding to the queue.
     func stopAndForget()
+
+    /// Start again, after a `stopAndForget`.
+    ///
+    /// Its own method because stopping is not symmetrical with starting and
+    /// the asymmetry is the bug it exists to prevent: an SDK that persists an
+    /// opt-out across launches makes refusal a one-way door unless something
+    /// explicitly opens it again. A switch that turns off and cannot turn back
+    /// on is worse than no switch, because the person believes they still have
+    /// the choice they no longer have.
+    func resume()
 }
 
 /// The default, and what every test sees.
@@ -26,6 +36,7 @@ public struct NoAnalytics: AnalyticsSink {
     public init() {}
     public func record(_ event: AnalyticsEvent) {}
     public func stopAndForget() {}
+    public func resume() {}
 }
 
 /// Remembers what it was asked to send, so tests can assert on the taxonomy
@@ -60,6 +71,11 @@ public final class RecordingAnalytics: AnalyticsSink, @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         _stopped = true
         _events.removeAll()
+    }
+
+    public func resume() {
+        lock.lock(); defer { lock.unlock() }
+        _stopped = false
     }
 }
 

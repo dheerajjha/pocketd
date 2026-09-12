@@ -122,6 +122,16 @@ struct MixpanelAnalytics: AnalyticsSink {
         instance.reset()
     }
 
+    /// Undoes `stopAndForget`, which the SDK makes durable.
+    ///
+    /// `optOutTracking()` ends by persisting the flag, so without this the
+    /// switch in Settings would turn off once and never turn back on — across
+    /// relaunches, with the UI still showing a control that does nothing.
+    /// `optInTracking()` clears it and issues a fresh identifier.
+    func resume() {
+        Mixpanel.mainInstance().optInTracking()
+    }
+
     /// Flattens an event's properties into what the SDK takes.
     ///
     /// Exhaustive over `AnalyticsValue` by construction, which is the reason

@@ -96,7 +96,12 @@ final class AppModel {
     /// outcome even though it costs us the data.
     private(set) var analyticsConsent: AnalyticsConsent = {
         let stored = UserDefaults.standard.string(forKey: Keys.analyticsConsent)
-        return stored.flatMap(AnalyticsConsent.init(rawValue:)) ?? .undecided
+        // Absent means on. Usage events are on by default and stay on unless
+        // someone goes and turns them off, so "never answered" has to resolve
+        // to the default rather than to silence — an absent key used to mean
+        // .undecided, which sent nothing, and would now mean a fresh install
+        // reports nothing at all.
+        return stored.flatMap(AnalyticsConsent.init(rawValue:)) ?? .granted
     }()
 
     func setAnalyticsConsent(_ consent: AnalyticsConsent) {
@@ -105,7 +110,15 @@ final class AppModel {
         UserDefaults.standard.set(consent.rawValue, forKey: Keys.analyticsConsent)
         // Refusing has to do more than stop the tap. Anything queued and not
         // yet flushed goes, and the identifier with it.
-        if !consent.permitsSending { analytics.stopAndForget() }
+        // Both directions. Refusing has to discard rather than merely stop,
+        // and granting has to undo that — the SDK persists an opt-out across
+        // launches, so a switch that only knew how to turn off would turn off
+        // once and then show a control that does nothing forever.
+        if consent.permitsSending {
+            analytics.resume()
+        } else {
+            analytics.stopAndForget()
+        }
     }
 
     /// Where events go.
