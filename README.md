@@ -346,9 +346,10 @@ against this source tree rather than taken on trust.
 Two hosts are ever contacted. `huggingface.co`, to search for or download a
 model. And `api.mixpanel.com`, which receives usage events — the app opened, a
 model downloaded or loaded, a message sent, the server started, a client
-answered. They are on by default and a switch in Settings turns them off; the
-complete list is `AnalyticsEvent.swift`, which is fifteen cases long and is
-meant to be read in a minute.
+answered, an ability switched on, a scheduled task run. They are on by default
+and a switch in Settings turns them off; the complete list is
+`AnalyticsEvent.swift`, which is twenty-one cases long and is meant to be read
+in a minute.
 
 What stays is the part worth promising. Inference is local and the HTTP server
 only answers, so nothing you type and nothing the model says back is ever
