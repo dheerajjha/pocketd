@@ -600,6 +600,22 @@ final class StoredDataAudit {
     func deleteEverythingDeletable(_ model: AppModel) async {
         let before = survey?.totalBytes ?? 0
         await deleteAllConversations(model)
+        // `deletionPlan` above has always counted these bytes — the comment
+        // beside `scheduledTaskBytes` says why, that a dialog must not quote a
+        // figure the button does not free — and until now nothing here removed
+        // them. `deleteAllScheduledTasks` existed with no caller, so the
+        // counting half shipped and the deleting half did not: "delete
+        // everything" left every scheduled prompt and its run history on disk
+        // while reporting the bytes as freed.
+        //
+        // Through the model rather than by removing the directory, and that is
+        // not tidiness. The store is an actor a background refresh also writes
+        // to; going around it races a wake-up that is mid-settle. It also
+        // cancels the sweep and reconciles notifications, which is the half a
+        // directory delete cannot do — otherwise iOS still fires the 07:00
+        // banner for a task the user erased on Tuesday, a pending request
+        // having outlived the file it was armed from.
+        await model.deleteAllScheduledTasks()
         for row in models { await model.delete(row.record) }
         // The same guard the single-file delete uses, for the same reason: an
         // unmanifested `<id>.gguf` is what a vision model looks like while its
