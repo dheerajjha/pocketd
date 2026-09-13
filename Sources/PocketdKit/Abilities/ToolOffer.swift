@@ -208,12 +208,25 @@ private extension ToolOffer {
     /// Imperatives, and only in first position. Mid-sentence they are ordinary
     /// verbs: "read me a story before I sleep" is not a request for HealthKit.
     ///
-    /// `remind` is deliberately absent, here and from every cue list. The
-    /// reminders tool reads incomplete reminders and cannot write one, so
-    /// "remind me to buy milk" is a request this offer could not honour — and
-    /// leaving the verb out is also what makes "remind me of the time we met"
-    /// silent without needing a rule to make it so.
-    static let imperatives: Set<String> = ["check", "show", "tell", "list", "look"]
+    /// `remind` was deliberately absent from this list and from every cue list,
+    /// for a reason that has since stopped being true: the reminders tool could
+    /// only read, so "remind me to buy milk" was a request the offer could not
+    /// honour. It can now — `ReminderAction.create` — and an app that can file
+    /// a reminder while staying silent when somebody asks it to is the same
+    /// invisible-differentiator problem the Abilities screen exists to fix.
+    ///
+    /// The half of the old comment that was doing real work is preserved by a
+    /// phrase cue rather than by an omission: "remind me TO" is a task and
+    /// "remind me OF" is a memory. See `phraseCues`, where only the first is
+    /// listed, and `ToolOfferTests.nearMisses`, which still requires "remind me
+    /// of the time we met" to say nothing.
+    /// `set` and `add` are here for "set a reminder to…" and "add lunch with
+    /// Sam to my calendar", and they are safe despite being two of the commonest
+    /// verbs anybody types at a model. `isAsk` only decides whether a sentence
+    /// is addressed to the assistant at all; a cue is still required. "Set the
+    /// port to 8080" and "add these numbers" pass this test and match nothing,
+    /// which is exactly the intended outcome.
+    static let imperatives: Set<String> = ["check", "show", "tell", "list", "look", "remind", "set", "add"]
 
     /// What makes a sentence about the asker rather than about the world.
     ///
@@ -264,6 +277,10 @@ private extension ToolOffer {
             "am i free", "am i busy", "my day", "my week"
         ]),
         .reminders: split([
+            // "remind me to buy milk" is a task; "remind me of the time we met"
+            // is a memory, and the preposition is the whole difference. Only
+            // the first is here, which is why the second stays silent.
+            "remind me to", "reminder to",
             "to do list", "task list", "shopping list", "grocery list",
             "my tasks", "tasks left", "tasks are left", "tasks do i have",
             "due today", "due tomorrow", "due tonight", "due this week", "due soon"
@@ -326,7 +343,12 @@ private extension ToolOffer {
     /// nothing and is the cheapest guard it could have.
     static let selfEvident: [Ability: [[String]]] = [
         .calendar: split(scheduleOpeners.flatMap { opener in days.map { "\(opener) \($0)" } }),
+        // "set a reminder" names the noun outright, so it carries its own
+        // "whose" the way "what's on tomorrow" carries its own "when". Without
+        // this it would need a possessive — and nobody types "set a reminder
+        // for me to take the bins out".
         .reminders: split(dueOpeners.flatMap { opener in days.map { "\(opener) \($0)" } })
+            + split(["set a reminder", "add a reminder", "set a new reminder", "put a reminder"])
     ]
 
     /// Phrases that cancel a cue.

@@ -349,7 +349,7 @@ struct AnswerCardView: View {
 // MARK: - Previews
 
 private let sampleEvents = AnswerCard(
-    source: "get_calendar_events",
+    source: "calendar",
     symbol: "calendar",
     title: "Today",
     sections: [

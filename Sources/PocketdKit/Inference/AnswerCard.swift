@@ -461,15 +461,15 @@ public struct AnswerCardCatalogue: Sendable {
 
 /// The names the three real tools are registered under.
 ///
-/// Repeated from `@Tool("get_calendar_events")` in `App/Sources/Tools/`, which
+/// Repeated from `@Tool("calendar")` in `App/Sources/Tools/`, which
 /// the kit cannot see and which needs a string literal because the macro reads
 /// one. Two copies of a name is a thing that drifts, so the copy that matters —
 /// the one the engine dispatches on — is the app's, and a card that stops
 /// appearing is the symptom of this file falling behind it. `everyToolRenders`
 /// reads the app's literals back out of the source to catch exactly that.
 public enum PersonalDataToolNames {
-    public static let calendar = "get_calendar_events"
-    public static let reminders = "get_reminders"
+    public static let calendar = "calendar"
+    public static let reminders = "reminders"
     /// Health belongs in this enum by the codebase's own test of what personal
     /// data is: `HealthSummary.payload` opens with the same
     /// `origin.mayReachPersonalData` gate the other two do.

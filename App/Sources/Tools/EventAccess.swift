@@ -108,12 +108,19 @@ actor EventAccess {
             case .reminders: _ = try await store.requestFullAccessToReminders()
             }
         } catch {
+            DiagnosticLog.record(.failure(area: .eventKit, code: "permission_request_failed"))
             // A throw here means the request could not be put to the user at
             // all — no prompt, no decision. Whatever the status says now is
             // still the truth, and it is not this function's job to turn a
             // permission question into a dead generation.
         }
-        return Self.authorization(for: entity)
+        // After the prompt rather than before it, because the interesting value
+        // is what the user just decided. Only on the path that actually asked:
+        // the early return above is a settled answer being re-read, and logging
+        // that would put a line in for every tool call.
+        let settled = Self.authorization(for: entity)
+        DiagnosticLog.record(.permission(entity: entity.noun, status: String(describing: settled)))
+        return settled
     }
 
     // MARK: - Reads
@@ -202,10 +209,112 @@ actor EventAccess {
                         // A date-only reminder has no hour. Formatting it with
                         // one would invent a deadline the user never set.
                         dueHasTime: components?.hour != nil,
-                        priority: reminder.priority
+                        priority: reminder.priority,
+                        // Read inside the callback with everything else, so no
+                        // `EKReminder` escapes onto the actor.
+                        identifier: reminder.calendarItemIdentifier
                     )
                 })
             }
+        }
+    }
+
+    // MARK: - Writes
+
+    /// Files a new reminder.
+    ///
+    /// Requires full access rather than `canWrite`, and the reason is the
+    /// caller's rather than EventKit's: `PersonalDataWrites.createReminder`
+    /// reads the open reminders first to avoid filing the same thing twice, so
+    /// a write-only grant would produce a duplicate check that silently saw
+    /// nothing and a list that slowly filled with copies.
+    func createReminder(_ new: NewReminder) async -> WriteResult {
+        let authorization = await requestReadAccess(to: .reminders)
+        guard authorization.canRead else { return .unauthorised(authorization) }
+
+        guard let list = store.defaultCalendarForNewReminders() else {
+            // Real, and not an error state anyone causes deliberately: a phone
+            // whose Reminders lists are all iCloud-disabled has nowhere to put
+            // one. Reported rather than crashed on.
+            DiagnosticLog.record(.failure(area: .eventKit, code: "no_default_reminder_list"))
+            return .failed
+        }
+
+        let reminder = EKReminder(eventStore: store)
+        reminder.title = new.title
+        reminder.calendar = list
+        if let due = new.due {
+            // Date-only stays date-only. Adding hour and minute to a reminder
+            // the user gave a day for turns "sometime Friday" into an alarm at
+            // midnight.
+            let fields: Set<Calendar.Component> = new.dueHasTime
+                ? [.year, .month, .day, .hour, .minute]
+                : [.year, .month, .day]
+            reminder.dueDateComponents = Calendar.current.dateComponents(fields, from: due)
+        }
+
+        do {
+            try store.save(reminder, commit: true)
+            return .written
+        } catch {
+            DiagnosticLog.record(.failure(area: .eventKit, code: "reminder_save_failed"))
+            return .failed
+        }
+    }
+
+    /// Ticks one off, by identifier.
+    ///
+    /// By identifier and not by title, so that the reminder completed is the
+    /// one the caller looked at. Re-running a title search here would leave a
+    /// window in which a second matching reminder appeared and got ticked off
+    /// instead — rare, and the kind of wrong nobody discovers until they need
+    /// the thing they thought was still outstanding.
+    func completeReminder(identifier: String) async -> WriteResult {
+        let authorization = await requestReadAccess(to: .reminders)
+        guard authorization.canRead else { return .unauthorised(authorization) }
+
+        guard let item = store.calendarItem(withIdentifier: identifier) as? EKReminder else {
+            return .failed
+        }
+        item.isCompleted = true
+        do {
+            try store.save(item, commit: true)
+            return .written
+        } catch {
+            DiagnosticLog.record(.failure(area: .eventKit, code: "reminder_complete_failed"))
+            return .failed
+        }
+    }
+
+    /// Adds an event.
+    ///
+    /// `canWrite` rather than `canRead`, because an add genuinely works under
+    /// the iOS 17 write-only grant and refusing it would turn a permission the
+    /// user deliberately gave into a dead feature.
+    func createEvent(_ new: NewEvent) async -> WriteResult {
+        let authorization = await requestReadAccess(to: .calendar)
+        guard authorization.canWrite else { return .unauthorised(authorization) }
+
+        guard let calendar = store.defaultCalendarForNewEvents else {
+            DiagnosticLog.record(.failure(area: .eventKit, code: "no_default_calendar"))
+            return .failed
+        }
+
+        let event = EKEvent(eventStore: store)
+        event.title = new.title
+        event.startDate = new.start
+        event.endDate = new.end
+        event.calendar = calendar
+
+        do {
+            // `.thisEvent` because nothing here creates a recurring event —
+            // `MomentPhrase` refuses repeating phrases outright — so there is
+            // no series for a span to mean anything about.
+            try store.save(event, span: .thisEvent, commit: true)
+            return .written
+        } catch {
+            DiagnosticLog.record(.failure(area: .eventKit, code: "event_save_failed"))
+            return .failed
         }
     }
 

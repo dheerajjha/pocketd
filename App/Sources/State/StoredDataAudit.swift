@@ -198,7 +198,7 @@ final class StoredDataAudit {
         ),
         Destination(
             host: "api.mixpanel.com",
-            sends: "Usage events, and only the fifteen listed in AnalyticsEvent.swift: the app opened, a model downloaded or loaded or failed to, a message sent, the server started or stopped, a client answered. Each carries a model id, a size, a duration, a bucketed RAM class or a failure reason, and an identifier for this install. Never a message of yours, never the model's reply, never a filename, an address, or anything from Health, Calendar or Reminders.",
+            sends: "Usage events, and only the \(Self.analyticsEventCount) listed in AnalyticsEvent.swift: the app opened, a model downloaded or loaded or failed to, a message sent, the server started or stopped, a client answered. Each carries a model id, a size, a duration, a bucketed RAM class or a failure reason, and an identifier for this install. Never a message of yours, never the model's reply, never a filename, an address, or anything from Health, Calendar or Reminders.",
             when: "While you use the app, unless you have turned Usage events off in Settings. It is on by default."
         ),
     ]
@@ -215,7 +215,7 @@ final class StoredDataAudit {
     let assurances: [String] = [
         "Inference is local. Nothing you type in Chat, and nothing a paired device sends, is transmitted anywhere — it goes to a file of weights on this phone and comes back.",
         "The HTTP server never calls out on its own initiative. The only requests it makes are the two to Hugging Face above, and only when a paired device asks it to search or to pull a model.",
-        "Your conversations, the model's replies and everything read from Health, Calendar and Reminders stay on this phone. Usage events are the one exception and they cannot carry any of it: AnalyticsSchema lists the property names an event may use, and a test refuses the build if one ever names a prompt, a file, an address or a health figure.",
+        "Your conversations, the model's replies and everything read from — or written to — Health, Calendar and Reminders stay on this phone. Usage events are the one exception and they cannot carry any of it: AnalyticsSchema lists the property names an event may use, and a test refuses the build if one ever names a prompt, a file, an address or a health figure.",
         "There is no crash reporting, and no account, so nothing sent is joined to anything you do anywhere else. Usage events are shared with Mixpanel, who process them for us — that is what the third row above means. Nothing is sold.",
     ]
 
@@ -736,5 +736,31 @@ final class StoredDataAudit {
         guard let survey else { return [] }
         return (systemOwnedAreas + unnamedAreas + [survey.area(.preferences)])
             .filter { !$0.tally.isEmpty }
+    }
+}
+
+extension StoredDataAudit {
+    /// How many usage events exist, spelled out, for the disclosure above.
+    ///
+    /// Derived rather than typed, because this number has now gone stale twice
+    /// in two different files. The README said "fifteen" when there were
+    /// twenty-one and was corrected; this screen — which is the app's own
+    /// answer to "what do you send about me", and therefore the copy that
+    /// matters most — said fifteen too, and nothing anywhere failed.
+    ///
+    /// Counted off `AnalyticsSchema.allowedProperties`, which is the list every
+    /// event must appear in: `AnalyticsTaxonomyTests.propertiesMatchSchema`
+    /// fails the build for an event with no entry, so this cannot drift below
+    /// the truth, and `everyCaseIsSampled` stops it drifting above.
+    ///
+    /// `en_GB` explicitly. A spelled-out number follows the device's language,
+    /// and an English sentence with "einundzwanzig" in the middle of it is a
+    /// worse outcome than the digits would have been.
+    static var analyticsEventCount: String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .spellOut
+        formatter.locale = Locale(identifier: "en_GB")
+        let count = AnalyticsSchema.allowedProperties.count
+        return formatter.string(from: NSNumber(value: count)) ?? "\(count)"
     }
 }

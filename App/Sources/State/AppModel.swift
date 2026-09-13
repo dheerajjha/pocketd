@@ -1618,7 +1618,7 @@ final class AppModel {
     ) -> [(tool: any LLMTool, group: CapabilityGroup)] {
         var registered: [(tool: any LLMTool, group: CapabilityGroup)] = []
         if calendar {
-            registered.append((CalendarEventsTool(), .calendar))
+            registered.append((CalendarTool(), .calendar))
         }
         if reminders {
             registered.append((RemindersTool(), .reminders))

@@ -40,9 +40,9 @@ public enum Ability: String, Sendable, Equatable, CaseIterable, Identifiable, Co
     public var summary: String {
         switch self {
         case .calendar:
-            "Ask what is on today, when your next meeting is, or whether Thursday is free."
+            "Ask what is on today or whether Thursday is free — and have new events added when you ask."
         case .reminders:
-            "Ask what is overdue, what is due today, or what is still on a list."
+            "Ask what is overdue or due today, set new reminders, and tick them off when they are done."
         case .health:
             "Ask how you slept, how active you have been, or whether your resting heart rate has moved."
         case .localServer:
@@ -127,4 +127,4 @@ public enum Ability: String, Sendable, Equatable, CaseIterable, Identifiable, Co
 /// `RequestOrigin.mayReachPersonalData`, and a claim about code belongs next to
 /// something that can be tested against it.
 public let abilityNetworkExclusionNote =
-    "Requests that arrive over the network never reach your calendar, reminders or health data. Only the assistant on this phone can."
+    "Requests that arrive over the network never reach your calendar, reminders or health data, and can never change them. Only the assistant on this phone can, and only while you are using it — scheduled tasks read but never write."

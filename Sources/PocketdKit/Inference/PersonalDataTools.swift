@@ -57,12 +57,29 @@ public struct ReminderRow: Sendable, Equatable {
     public var dueHasTime: Bool
     /// EventKit's scale: 1 highest, 9 lowest, 0 meaning the user set none.
     public var priority: Int
+    /// EventKit's own handle on this reminder, when the row came from EventKit.
+    ///
+    /// Carried so that ticking one off addresses the reminder the user meant
+    /// rather than re-running the title search and hoping it lands on the same
+    /// one. It is an opaque store identifier, not content: it says nothing
+    /// about what the reminder is, which is why it can sit on a row whose title
+    /// is `Untrusted`.
+    ///
+    /// Optional because the rows in tests and previews were never in a store.
+    public var identifier: String?
 
-    public init(title: String, due: Date? = nil, dueHasTime: Bool = false, priority: Int = 0) {
+    public init(
+        title: String,
+        due: Date? = nil,
+        dueHasTime: Bool = false,
+        priority: Int = 0,
+        identifier: String? = nil
+    ) {
         self.title = Untrusted(title)
         self.due = due
         self.dueHasTime = dueHasTime
         self.priority = priority
+        self.identifier = identifier
     }
 }
 

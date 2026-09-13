@@ -355,7 +355,12 @@ What stays is the part worth promising. Inference is local and the HTTP server
 only answers, so nothing you type and nothing the model says back is ever
 transmitted. Health, calendar and reminder data are read on-device and are
 refused to network callers — including the chat page the phone itself serves —
-by the origin gate in `RequestOrigin.swift`. No usage event can carry any of it
+by the origin gate in `RequestOrigin.swift`. The assistant can also add events
+and reminders, behind a second and stricter gate in the same file:
+`mayWritePersonalData` admits only the chat tab, so a network client cannot
+change anything and neither can a scheduled run, which reads at an hour when
+nobody is watching and shares its context with calendar titles that strangers
+wrote. No usage event can carry any of it
 either: `AnalyticsSchema` is an allow-list of property names beside a list of
 banned ones, and a test fails the build when an event names a prompt, a file, an
 address or a health figure. There is no crash reporting and no account.

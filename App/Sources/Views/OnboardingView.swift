@@ -175,18 +175,21 @@ struct OnboardingView: View {
             // next line says nothing is on yet.
             title("An assistant that can see your day.")
             body("""
-            Ask what is on today, what is overdue, how you slept. It answers \
-            here, from your own data — no account, no cloud, and what you type \
-            never leaves the phone.
+            Ask what is on today, what is overdue, how you slept — or ask it to \
+            set a reminder. It answers here, from your own data — no account, no \
+            cloud, and what you type never leaves the phone.
             """)
             // Tighter than the screen's own spacing: three rows that are one
             // list, not three points.
             VStack(alignment: .leading, spacing: 10) {
-                calloutRow(icon: "calendar", text: "**Calendar** — today, tomorrow, this week or next")
-                calloutRow(icon: "checklist", text: "**Reminders** — what is due, what is overdue")
+                calloutRow(icon: "calendar", text: "**Calendar** — today, tomorrow, this week or next, and adding events")
+                calloutRow(icon: "checklist", text: "**Reminders** — what is due, what is overdue, and setting new ones")
                 calloutRow(icon: "heart", text: "**Health** — steps, sleep, heart rate")
             }
-            body("None of it is on yet. You choose which of the three it can read.")
+            // "read" was accurate while all three tools were `get_`. Calendar
+            // and reminders can now be written to as well, so the sentence a
+            // person is shown before they grant anything has to say so.
+            body("None of it is on yet. You choose which of the three it can use.")
         }
     }
 
@@ -296,7 +299,7 @@ struct OnboardingView: View {
             """)
             calloutRow(
                 icon: "lock.shield",
-                text: "Other devices get the model and nothing else. Your calendar, reminders and health are readable only in the chat on this phone."
+                text: "Other devices get the model and nothing else. Your calendar, reminders and health can only be read — or changed — in the chat on this phone."
             )
         }
     }

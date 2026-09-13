@@ -27,7 +27,7 @@ struct CapabilityNoticeTests {
         // The arithmetic the sentence rests on, restated so this test fails if
         // the fixture stops reproducing the report rather than passing on a
         // configuration that no longer refuses anything.
-        #expect(plan.registered.map(\.name) == [PersonalDataToolNames.calendar])
+        #expect(plan.registered.map(\.name) == [CapabilityFixture.calendarName])
         #expect(plan.droppedGroups == [.reminders])
 
         let notice = try #require(CapabilityNotice.decide(

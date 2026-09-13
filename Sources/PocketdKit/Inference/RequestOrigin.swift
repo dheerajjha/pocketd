@@ -52,6 +52,41 @@ public enum RequestOrigin: Sendable, Equatable {
         }
     }
 
+    /// Whether personal data may be *changed* for this caller.
+    ///
+    /// A separate question from `mayReachPersonalData`, and a stricter answer:
+    /// only the chat tab. Its own exhaustive switch rather than
+    /// `hasSomeoneWatching` spelled differently, for the reason the comment
+    /// above gives — the next person adding a case has to answer this one too,
+    /// and an alias would answer it for them.
+    ///
+    /// A scheduled run reads and does not write, which is the interesting half
+    /// of this. It is not a grudging restriction on a caller we half-trust; it
+    /// falls out of two facts that happen to point the same way.
+    ///
+    /// The first is that it loses almost nothing. A scheduled task already ends
+    /// in a notification — reminding the user IS the feature — so a run that
+    /// also filed a reminder would mostly be telling them the same thing twice.
+    ///
+    /// The second is that it is the one origin where nobody is watching AND the
+    /// context contains text this app does not trust. `CalendarEventRow.title`
+    /// is `Untrusted` because a meeting invite is written by a stranger, and a
+    /// 7am briefing reads the calendar by design. Reading more calendar in
+    /// response to an injected line is harmless; *writing* because of one is
+    /// not, and at 7am there is no one to notice. The chat tab has the same
+    /// attacker-controlled text in play and a person looking at the screen who
+    /// can see the card and undo it, which is the whole difference.
+    ///
+    /// Deleting is not on the far side of this gate for anybody: see
+    /// `PersonalDataWrites` for why the tools can add and tick off but not
+    /// destroy.
+    public var mayWritePersonalData: Bool {
+        switch self {
+        case .onDeviceChat: true
+        case .scheduledTask, .network: false
+        }
+    }
+
     /// True only when a person is actually present to read the answer.
     ///
     /// Not the same question as `mayReachPersonalData`, and the difference is
@@ -92,4 +127,25 @@ public enum ToolContext {
     /// What a tool returns to a caller that may not have it. Phrased as a
     /// sentence because the model repeats it to the user verbatim.
     public static let refusal = "Personal data is not available to network clients. Ask on the iPhone itself."
+
+    /// What a write tool returns to a caller that may not change anything.
+    ///
+    /// Two sentences rather than one because the two refusals it covers have
+    /// different remedies and a model handed one generic line invents the
+    /// wrong one. A network client should be told to use the phone; a
+    /// scheduled run should be told to say the thing rather than do it, since
+    /// saying it is what a scheduled task is for.
+    public static func writeRefusal(for origin: RequestOrigin) -> String {
+        switch origin {
+        case .network:
+            "Changing calendars and reminders is not available to network clients. Ask on the iPhone itself."
+        case .scheduledTask:
+            "A scheduled run can read but cannot change anything. Say what needs doing and the person can act on it."
+        case .onDeviceChat:
+            // Unreachable through the gate, and a value rather than a
+            // precondition: a tool body that got here anyway must still return
+            // a sentence, because throwing ends the generation mid-stream.
+            "That change could not be made."
+        }
+    }
 }

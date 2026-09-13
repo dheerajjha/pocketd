@@ -199,7 +199,15 @@ struct AnswerCardSeamTests {
             AnswerCard(title: "Timer", lede: data["remaining"] as? String)
         }
 
-        #expect(catalogue.toolNames == ["get_calendar_events", "get_health_summary", "get_reminders", "get_timer"])
+        // Derived from the constants rather than spelled out, so that renaming
+        // a tool is a one-line change in `PersonalDataToolNames` instead of a
+        // hunt through the tests for the places its old name was typed.
+        #expect(catalogue.toolNames == [
+            PersonalDataToolNames.calendar,
+            PersonalDataToolNames.health,
+            PersonalDataToolNames.reminders,
+            "get_timer"
+        ].sorted())
         #expect(catalogue.card(for: "get_timer", arguments: "{}", data: ["remaining": "4 minutes"])?.lede == "4 minutes")
         // The two that were there are still there.
         #expect(catalogue.card(

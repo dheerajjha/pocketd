@@ -153,6 +153,38 @@ struct ToolOfferTests {
         #expect(offer("What's on my calendar today?")?.ability == .calendar)
     }
 
+    @Test("asking to be reminded of something offers reminders, now that it can file one")
+    func remindMeTo() {
+        // `remind` was kept out of every cue list while the tool could only
+        // read, because offering an ability that could not honour the request
+        // was worse than silence. It can file one now, so the silence became
+        // the bug: the app could do exactly what was asked and said nothing.
+        for message in [
+            "Remind me to buy milk",
+            "remind me to call mum at 6",
+            "Set a reminder to take the bins out",
+            "Add a reminder to book the dentist"
+        ] {
+            #expect(offer(message)?.ability == .reminders, "\(message)")
+        }
+    }
+
+    @Test("remind me OF is a memory, not a task, and still says nothing")
+    func remindMeOf() {
+        // The preposition is the whole difference, and it is the half of the
+        // old "remind is absent everywhere" rule that was doing real work.
+        // These are also in `nearMisses` above; they are repeated here because
+        // that list would still pass if the cue were removed altogether, and
+        // this one fails if the distinction is lost in either direction.
+        for message in [
+            "Remind me of the time we met",
+            "Can you remind me of the time we went to Paris?",
+            "Remind me of that song"
+        ] {
+            #expect(offer(message) == nil, "\(message)")
+        }
+    }
+
     @Test("an ability that is already on is never offered")
     func neverOffersWhatIsOn() {
         #expect(offer("What's on tomorrow?", calendar: true) == nil)

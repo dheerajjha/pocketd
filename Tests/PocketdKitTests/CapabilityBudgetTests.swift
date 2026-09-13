@@ -7,12 +7,31 @@ import Testing
 /// Every schema here is built with `JSONSerialization` in the shape
 /// `AnyLLMTool.toOAICompatJSON` produces and serialised with `options: []`, the
 /// same options `LlamaEngine.derive` passes — so these are not invented lengths
-/// standing in for real ones. The two that exist carry their real names,
-/// descriptions and argument lists, read out of `CalendarEventsTool`,
-/// `RemindersTool`, `CalendarRange` and `ReminderFilter`. That the first two of
-/// them come to exactly the 537 tokens this workstream was briefed with is the
-/// check that the fixture is honest rather than convenient.
+/// standing in for real ones. The two that exist were copied from the real
+/// `get_calendar_events` and `get_reminders` when those were the shipping
+/// tools, and the first two of them coming to exactly the 537 tokens this
+/// workstream was briefed with is the check that the fixture is honest rather
+/// than convenient.
+///
+/// The names below are PINNED as literals rather than read from
+/// `PersonalDataToolNames`, and the pinning is deliberate. What this file tests
+/// is the budget's arithmetic — cost, fit, priority, routing, shortfall — over
+/// a realistic inventory that includes two capabilities the app has never
+/// shipped. Wiring the inventory to whatever the tools happen to be called
+/// today made every calibrated number in it a hostage to a rename: merging the
+/// read and write tools into `reminders` and `calendar` shortened two strings
+/// by fifteen characters and broke thirty assertions that have nothing to do
+/// with either tool.
+///
+/// What that coupling was genuinely buying — "the tools this app actually ships
+/// still fit the window it actually defaults to" — is a different question, and
+/// `ShippingToolBudgetTests` at the bottom of this file asks it directly
+/// instead.
 enum CapabilityFixture {
+
+    /// The names this fixture's arithmetic was calibrated against. See above.
+    static let calendarName = "get_calendar_events"
+    static let remindersName = "get_reminders"
 
     static func schema(
         name: String,
@@ -69,15 +88,15 @@ enum CapabilityFixture {
     /// comparison against `ContextGuard` runs on the real text rather than on
     /// something the same length as it.
     static let schemas: [String: String] = [
-        PersonalDataToolNames.calendar: schema(
-            name: PersonalDataToolNames.calendar,
+        calendarName: schema(
+            name: calendarName,
             description: "List the user's calendar events (meetings, appointments) for a range of days.",
             argument: "range",
             argumentDescription: "Which days to list.",
             values: CalendarRange.allCases.map(\.rawValue)
         ),
-        PersonalDataToolNames.reminders: schema(
-            name: PersonalDataToolNames.reminders,
+        remindersName: schema(
+            name: remindersName,
             description: "List the user's reminders (to-dos) that are not completed yet.",
             argument: "filter",
             argumentDescription: "Which reminders to list.",
@@ -129,8 +148,8 @@ enum CapabilityFixture {
         CapabilityTool(name: name, group: group, priority: priority, schema: schemas[name] ?? "")
     }
 
-    static let calendar = tool(PersonalDataToolNames.calendar, .calendar, 1)
-    static let reminders = tool(PersonalDataToolNames.reminders, .reminders, 2)
+    static let calendar = tool(calendarName, .calendar, 1)
+    static let reminders = tool(remindersName, .reminders, 2)
     static let activity = tool("get_activity_summary", .health, 3)
     static let sleep = tool("get_sleep_summary", .health, 4)
     static let listAlarms = tool("get_alarms", .alarms, 5)
@@ -477,7 +496,7 @@ struct CapabilityBudgetTests {
         #expect(largest.cost(of: [CapabilityFixture.everyTimeZone]) > largest.ceilingTokens)
 
         let plan = Self.native.admit([CapabilityFixture.calendar, CapabilityFixture.everyTimeZone])
-        #expect(plan.registered.map(\.name) == [PersonalDataToolNames.calendar])
+        #expect(plan.registered.map(\.name) == [CapabilityFixture.calendarName])
 
         let refused = try #require(plan.dropped.first { $0.group == .timers })
         #expect(refused.reason == .overBudget)
@@ -583,5 +602,160 @@ struct CapabilityBudgetTests {
         // context allows. Nothing about that improves by adding to it.
         #expect(plan.everythingTokens == 1713)
         #expect(plan.everythingTokens > Self.native.ceilingTokens)
+    }
+}
+
+/// Whether the tools this app actually ships still fit the window it actually
+/// defaults to.
+///
+/// This is the question `CapabilityFixture` used to answer by accident, by
+/// borrowing the live tool names, and answered badly: it coupled thirty
+/// assertions about arithmetic to two string literals while never once checking
+/// the thing that matters.
+///
+/// The thing that matters is specific and was nearly got wrong. Tool schemas
+/// are frozen into the client when the model loads — `LlamaEngine.mustRebuild`
+/// treats a changed `toolsJSON` as a reason to reload the weights, which is why
+/// `CapabilityBudget.plan(for:from:)`, the per-question router, has never had a
+/// production caller. So every registered tool is charged against every prompt
+/// for as long as the model is resident, the ceiling is a third of the window,
+/// and a tool-native template like Qwen3's renders every schema twice. Three
+/// read tools cost 785 tokens of a 1,344 ceiling. Adding three separate write
+/// tools would have taken it to 1,469 — over the ceiling, at which point the
+/// budget starts dropping capabilities by priority and the newest feature
+/// silently does not exist on the default configuration.
+///
+/// Reading the declarations out of the app's own source, the way
+/// `AnswerCardTests.everyToolRenders` does, because the alternative is a copy
+/// of the tool list in a test that goes stale the first time anybody adds one.
+@Suite("Shipping tool budget")
+struct ShippingToolBudgetTests {
+
+    /// The app's default, from `LlamaEngine.init(contextTokens:)`.
+    static let defaultContext = 4096
+
+    /// Qwen3's template is tool-native, and it is the smallest model in the
+    /// catalogue observed to complete a tool call end to end — so it is the
+    /// configuration to be sure about, not the comfortable one.
+    static let budget = CapabilityBudget(contextTokens: defaultContext, templateIsToolNative: true)
+
+    /// Everything `@Tool` declares under `App/Sources`, with its description.
+    /// The repository root, from this file. A local copy because the one in
+    /// `AnswerCardTests` is file-private, and a shared test helper header is a
+    /// bigger change than one four-line function.
+    private func repositoryRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // PocketdKitTests
+            .deletingLastPathComponent()   // Tests
+            .deletingLastPathComponent()   // repository root
+    }
+
+    private func declaredTools() throws -> [(name: String, description: String, arguments: [(String, String)])] {
+        let root = repositoryRoot().appendingPathComponent("App/Sources/Tools")
+        let files = try #require(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
+        var found: [(String, String, [(String, String)])] = []
+
+        for case let url as URL in files where url.pathExtension == "swift" {
+            let source = try String(contentsOf: url, encoding: .utf8)
+            guard let name = between(source, "@Tool(\"", "\")") else { continue }
+            let description = between(source, "let description = \"", "\"") ?? ""
+            // Every `@ToolArgument("…")` line, paired with the property under it.
+            var arguments: [(String, String)] = []
+            let lines = source.components(separatedBy: "\n")
+            for (index, line) in lines.enumerated() where line.contains("@ToolArgument(\"") {
+                guard let text = between(line, "@ToolArgument(\"", "\")"), index + 1 < lines.count else { continue }
+                let declaration = lines[index + 1]
+                guard let variable = between(declaration, "var ", ":") else { continue }
+                arguments.append((variable.trimmingCharacters(in: .whitespaces), text))
+            }
+            found.append((name, description, arguments))
+        }
+        return found
+    }
+
+    private func between(_ text: String, _ open: String, _ close: String) -> String? {
+        guard let start = text.range(of: open) else { return nil }
+        let rest = text[start.upperBound...]
+        guard let end = rest.range(of: close) else { return nil }
+        return String(rest[..<end.lowerBound])
+    }
+
+    /// The enum values each argument offers, which are a real part of the cost.
+    private func values(for argument: String) -> [String] {
+        switch argument {
+        case "action": return ReminderAction.allCases.map(\.rawValue) + CalendarAction.allCases.map(\.rawValue)
+        case "filter": return ReminderFilter.allCases.map(\.rawValue)
+        case "range": return CalendarRange.allCases.map(\.rawValue)
+        default: return []
+        }
+    }
+
+    private func priced() throws -> [CapabilityTool] {
+        try declaredTools().enumerated().map { offset, tool in
+            let properties = tool.arguments.reduce(into: [String: any Sendable]()) { store, argument in
+                var property: [String: any Sendable] = ["type": "string", "description": argument.1]
+                let options = values(for: argument.0)
+                if !options.isEmpty { property["enum"] = options }
+                store[argument.0] = property
+            }
+            let object: [String: any Sendable] = [
+                "type": "function",
+                "function": [
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": [
+                        "type": "object",
+                        "properties": properties,
+                        "required": tool.arguments.isEmpty ? [String]() : [tool.arguments[0].0]
+                    ] as [String: any Sendable]
+                ] as [String: any Sendable]
+            ]
+            let data = (try? JSONSerialization.data(withJSONObject: object, options: [])) ?? Data()
+            return CapabilityTool(
+                name: tool.name,
+                group: .calendar,
+                priority: offset,
+                schema: String(decoding: data, as: UTF8.self)
+            )
+        }
+    }
+
+    @Test("the tools the app ships are the ones the card catalogue knows about")
+    func theShippingSet() throws {
+        let names = Set(try declaredTools().map(\.name))
+        // `EchoTool` is the self-test and lives outside App/Sources/Tools, so
+        // it is correctly absent here.
+        #expect(names == [
+            PersonalDataToolNames.calendar,
+            PersonalDataToolNames.reminders,
+            PersonalDataToolNames.health
+        ], "found \(names.sorted())")
+    }
+
+    @Test("every shipping tool fits the default 4,096-token window")
+    func theyAllFit() throws {
+        let tools = try priced()
+        let cost = Self.budget.cost(of: tools)
+        let plan = Self.budget.admit(tools)
+
+        #expect(plan.registered.count == tools.count, "the budget dropped one: \(plan.droppedGroups)")
+        #expect(cost <= Self.budget.ceilingTokens, "\(cost) tokens against a \(Self.budget.ceilingTokens) ceiling")
+        #expect(Self.budget.fit(of: tools).allowsRegistration)
+    }
+
+    @Test("and there is not much room left, which is the point")
+    func theCeilingIsClose() throws {
+        // The assertion that would have caught the design this workstream
+        // nearly shipped. A fourth tool of the same size as the average of
+        // these three does not fit, so "just add another tool" is not a free
+        // action here and a future reader finds that out from a red test rather
+        // than from a capability that quietly stopped being registered.
+        let tools = try priced()
+        let average = tools.map(\.schemaCharacters).reduce(0, +) / max(1, tools.count)
+        let oneMore = tools + [CapabilityTool(name: "hypothetical", group: .timers, priority: 99, schemaCharacters: average)]
+        #expect(
+            Self.budget.fit(of: oneMore) == .willNotFit,
+            "a fourth tool now fits — the window, the template or the schemas changed, and the merged tool design may no longer be necessary"
+        )
     }
 }

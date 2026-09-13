@@ -130,23 +130,32 @@ targets:
         # not in the simulator.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
-        # Full access, not write-only: these tools read and never write. On
-        # iOS 17+ a calendar read with only NSCalendarsWriteOnlyAccessUsage-
-        # Description present returns an empty list rather than an error, which
-        # looks exactly like a free day.
+        # Full access rather than write-only, and now for both halves of the
+        # word: these tools read AND write. On iOS 17+ a calendar read with only
+        # NSCalendarsWriteOnlyAccessUsageDescription present returns an empty
+        # list rather than an error, which looks exactly like a free day — so
+        # full access was always what the reads needed, and the writes that
+        # arrived later need no additional grant.
+        #
+        # The strings below say "add" explicitly. A purpose string that promised
+        # only reading while the app created events would be false in the one
+        # place a user is most entitled to a straight answer, and it is the
+        # string App Review reads first.
         # The wording says where the data goes because that is the honest and
         # unusual part of this app: the model doing the reading is a file on
         # this phone, and no request leaves the device to answer.
         NSCalendarsFullAccessUsageDescription: >-
           Pocketd lets the AI assistant running on this iPhone answer questions
-          about your schedule, such as what is on today. Your events are read on
-          this device only, are never uploaded, and are never sent to the other
-          devices this app serves.
+          about your schedule, such as what is on today, and add events when you
+          ask it to. Your events are read and written on this device only, are
+          never uploaded, and are never sent to the other devices this app
+          serves.
         NSRemindersFullAccessUsageDescription: >-
           Pocketd lets the AI assistant running on this iPhone answer questions
-          about your reminders, such as what is overdue. Your reminders are read
-          on this device only, are never uploaded, and are never sent to the
-          other devices this app serves.
+          about your reminders, such as what is overdue, and add or tick off
+          reminders when you ask it to. Your reminders are read and written on
+          this device only, are never uploaded, and are never sent to the other
+          devices this app serves.
         # Both are required, and the app crashes on requestAuthorization if
         # either is missing — not a warning, a termination. The write string is
         # present because HealthKit demands it whenever the framework is linked,
