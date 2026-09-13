@@ -399,6 +399,21 @@ actor LlamaEngine: InferenceEngine {
         let priced = Self.descriptors(for: allowed)
         let plan = budget.admit(priced)
         capabilityPlan = allowed.isEmpty ? nil : plan
+        // The two questions somebody debugging "it did not use the tool" has to
+        // answer in order, and neither is visible from the outside: a model the
+        // gate refuses is handed nothing and simply talks like a chatbot about
+        // it, and a capability the budget drops looks identical to one that is
+        // broken. Recorded here, where both answers exist at once.
+        DiagnosticLog.record(.toolGate(decision: String(describing: toolGate), modelID: model?.id))
+        if !allowed.isEmpty {
+            DiagnosticLog.record(.toolPlan(
+                admitted: plan.toolNames,
+                dropped: plan.droppedGroups.map(\.rawValue),
+                tokens: plan.tokens,
+                ceiling: plan.ceilingTokens,
+                fit: String(describing: plan.fit)
+            ))
+        }
         let admitted = Set(plan.toolNames)
         let granted = zip(allowed, priced)
             .filter { admitted.contains($0.1.name) }
@@ -972,22 +987,47 @@ actor LlamaEngine: InferenceEngine {
     /// Here every failure — unknown name, undecodable arguments, a tool that
     /// threw — becomes a short line the model can read and work around.
     private func execute(_ call: LLMToolCall, using tools: [String: AnyLLMTool]) async -> ToolResult.Rendered {
+        // Never `call.arguments`. This is the one place in the app holding both
+        // a diagnostic sink and the model's own words about somebody's
+        // reminders, and the arguments are exactly the thing `DiagnosticEvent`
+        // has no field for.
+        let started = Date()
+        func elapsed() -> Int { Int(Date().timeIntervalSince(started) * 1000) }
+
         guard let tool = tools[call.name] else {
+            DiagnosticLog.record(.toolCall(name: call.name, outcome: .badArguments, milliseconds: elapsed()))
             return ToolResult.Rendered(prompt: ToolResult.unknownTool(named: call.name))
         }
         do {
+            let data = try await tool.call(argumentsJSON: call.arguments).data
+            DiagnosticLog.record(.toolCall(name: call.name, outcome: Self.outcome(of: data), milliseconds: elapsed()))
             return ToolResult.render(
-                try await tool.call(argumentsJSON: call.arguments).data,
+                data,
                 from: call.name,
                 arguments: call.arguments
             )
         } catch {
+            DiagnosticLog.record(.toolCall(name: call.name, outcome: .failed, milliseconds: elapsed()))
             // Deliberately not `error.localizedDescription`: the model repeats
             // what it reads, and a decoding error's description is a paragraph
             // of Swift type names aimed at us, not at whoever asked the
             // question.
             return ToolResult.Rendered(prompt: ToolResult.failed(tool: call.name))
         }
+    }
+
+    /// Which of the tool outcomes a payload represents.
+    ///
+    /// Read off the payload rather than reported by each tool, because these
+    /// tools deliberately never throw — every refusal is a `text` value the
+    /// model reads — so there is no error to classify and the sentence is the
+    /// only evidence there is. Compared against the constants the sentences are
+    /// built from, so a reworded refusal moves both at once.
+    private static func outcome(of data: [String: any Sendable]) -> DiagnosticEvent.ToolOutcome {
+        guard let text = data["text"] as? String else { return .ok }
+        if text == ToolContext.refusal { return .refusedByOrigin }
+        if PersonalDataAuthorization.isRefusalSentence(text) { return .unauthorised }
+        return .empty
     }
 }
 

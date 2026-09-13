@@ -49,6 +49,18 @@ public enum PersonalDataAuthorization: Sendable, Equatable, CaseIterable {
     /// yields nothing until it is.
     public var canRead: Bool { self == .granted }
 
+    /// Whether this app may *add* to the store.
+    ///
+    /// `.writeOnly` is a real iOS 17 state and a genuine grant: the user said
+    /// "you may put things in my calendar, you may not read it". Adding an
+    /// event is therefore allowed where reading one is not, and conflating the
+    /// two would refuse a write the user explicitly permitted.
+    ///
+    /// A reminder create still needs `.granted` in practice, because the
+    /// duplicate check reads first — but that is the caller's requirement and
+    /// is stated there rather than smuggled into this property.
+    public var canWrite: Bool { self == .granted || self == .writeOnly }
+
     /// What the tool returns in place of data.
     ///
     /// A sentence, because the model repeats it to the user more or less
@@ -68,5 +80,24 @@ public enum PersonalDataAuthorization: Sendable, Equatable, CaseIterable {
         case .writeOnly:
             "Pocketd can only add to your \(entity.noun), not read it. Change the permission to Full Access in \(entity.settingsPath)."
         }
+    }
+}
+
+public extension PersonalDataAuthorization {
+    /// Whether `text` is one of the sentences a refused permission produces.
+    ///
+    /// Exists for the diagnostic log, which has to tell "iOS said no" apart
+    /// from "there was nothing to report" — two outcomes that look identical
+    /// to a caller, because these tools deliberately never throw and answer
+    /// both with a sentence. Derived from `explanation(for:)` rather than
+    /// matched against copies of the wording, so rewording a refusal cannot
+    /// quietly reclassify it as an empty result.
+    static func isRefusalSentence(_ text: String) -> Bool {
+        for entity in PersonalDataEntity.allCases {
+            for authorization in PersonalDataAuthorization.allCases where !authorization.canRead {
+                if authorization.explanation(for: entity) == text { return true }
+            }
+        }
+        return false
     }
 }

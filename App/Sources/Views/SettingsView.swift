@@ -189,6 +189,14 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    NavigationLink("Diagnostics") {
+                        DiagnosticsView()
+                    }
+                } footer: {
+                    Text("A short log of what the app has been doing — model loads, which tools the assistant was given, permission answers, failures. Copy it out if something is going wrong and you want to show somebody. It holds nothing you typed and nothing of your calendar, reminders or health data.")
+                }
+
+                Section {
                     Button("Show the introduction again") {
                         model.replayOnboarding()
                     }
