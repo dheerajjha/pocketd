@@ -334,3 +334,77 @@ struct PersonalDataWriteTests {
         #expect(text(payload).contains("single event"))
     }
 }
+
+/// A write produces a payload too, and the payload has to draw a card.
+///
+/// The failure this guards is the one `AnswerCardTests.everyToolRenders` was
+/// written for, one level down: the card catalogue is keyed by TOOL name, so
+/// merging the read and write halves into one tool means the existing entry
+/// keeps matching and nothing fails — while every confirmation the assistant
+/// gives is unrendered prose about a payload the card layer never saw.
+@Suite("Write answers draw cards")
+struct WriteAnswerCardTests {
+
+    private func card(_ tool: String, _ arguments: String, _ data: [String: any Sendable]) -> AnswerCard? {
+        AnswerCardCatalogue.standard.card(for: tool, arguments: arguments, data: data)
+    }
+
+    @Test("a reminder confirmation renders")
+    func reminderCreated() throws {
+        let drawn = try #require(card(
+            PersonalDataToolNames.reminders,
+            #"{"action":"create","title":"Take the bins out","when":"2am today"}"#,
+            ["text": "Reminder set: \"Take the bins out\" for Sun 14 Sep, 02:00.", "created": true]
+        ))
+        // The time the tool actually set has to reach the screen, because
+        // reading it back is how a misparse gets caught.
+        #expect(drawn.transcript.contains("02:00"))
+        #expect(drawn.source == PersonalDataToolNames.reminders)
+    }
+
+    @Test("a confirmation is not mistaken for an empty result")
+    func createIsNotNothingFound() throws {
+        // `isNothingFound` greys the card and reads as "there was nothing".
+        // A reminder that was just filed is the opposite of nothing.
+        let drawn = try #require(card(
+            PersonalDataToolNames.reminders,
+            #"{"action":"create"}"#,
+            ["text": "Reminder added: \"Call mum\", with no due date.", "created": true]
+        ))
+        guard case let .empty(body)? = drawn.sections.first else { return }
+        Issue.record("a successful write drew an empty-state card: \(body)")
+    }
+
+    @Test("a refusal renders rather than vanishing")
+    func refusalRenders() throws {
+        // The sentence a network caller gets. If this drew nothing, the user
+        // would see the model paraphrasing a refusal with no card to anchor it.
+        let drawn = try #require(card(
+            PersonalDataToolNames.reminders,
+            #"{"action":"create","title":"x"}"#,
+            ["text": ToolContext.writeRefusal(for: .network(host: "h", port: 1))]
+        ))
+        #expect(drawn.transcript.contains("network clients"))
+    }
+
+    @Test("a calendar confirmation renders under the calendar tool")
+    func eventCreated() throws {
+        let drawn = try #require(card(
+            PersonalDataToolNames.calendar,
+            #"{"action":"create","title":"Lunch with Sam","start":"tomorrow at 1pm"}"#,
+            ["text": "Added \"Lunch with Sam\" to your calendar for Mon 15 Sep, 13:00.", "created": true]
+        ))
+        #expect(drawn.source == PersonalDataToolNames.calendar)
+        #expect(drawn.transcript.contains("Lunch with Sam"))
+    }
+
+    @Test("a list call still renders rows, so the merge did not cost the read")
+    func listStillWorks() throws {
+        let drawn = try #require(card(
+            PersonalDataToolNames.reminders,
+            #"{"action":"list","filter":"today"}"#,
+            ["reminders": [["title": "Call mum", "due": "Sun 14 Sep, 09:00"] as [String: any Sendable]]]
+        ))
+        #expect(drawn.transcript.contains("Call mum"))
+    }
+}

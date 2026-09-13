@@ -432,14 +432,19 @@ final class StoredDataAudit {
                     title: "Calendar",
                     infoKey: key,
                     state: state(for: EventAccess.authorization(for: .calendar)),
-                    note: "Read only, only for the assistant on this phone, and never for a request that arrived over the network."
+                    // "Read only" was true of all three permissions until the
+                    // assistant could add an event. It is the wrong sentence to
+                    // leave standing on the one screen whose whole purpose is
+                    // being believed, so this one says what changed and who is
+                    // allowed to change it.
+                    note: "Read, and add events when you ask — only for the assistant on this phone, never for a request that arrived over the network, and never for a scheduled task running without you."
                 ))
             case "NSRemindersFullAccessUsageDescription":
                 rows.append(PermissionRow(
                     title: "Reminders",
                     infoKey: key,
                     state: state(for: EventAccess.authorization(for: .reminders)),
-                    note: "Read only, only for the assistant on this phone, and never for a request that arrived over the network."
+                    note: "Read, and add or tick off reminders when you ask — only for the assistant on this phone, never for a request that arrived over the network, and never for a scheduled task running without you. Nothing is ever deleted."
                 ))
             case "NSHealthShareUsageDescription":
                 rows.append(PermissionRow(
