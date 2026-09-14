@@ -119,12 +119,56 @@ struct PersonalDataWriteTests {
 
     // MARK: - Times that must not be invented
 
-    @Test("a repeating phrase writes nothing and points at the feature that does it")
-    func recurringIsRefused() async {
+    @Test("a repeating phrase files one repeating reminder, not one reminder")
+    func recurrenceIsFiled() async {
+        // "at 9" goes through the bare-clock parser, which uses the calendar it
+        // is handed, so the hour here is deterministic — unlike anything that
+        // reaches NSDataDetector, which resolves in the system zone.
         let spy = WriteSpy()
-        let payload = await create(when: "every day at 7am", spy: spy)
-        #expect(!spy.touched, "one reminder is not what was asked for")
-        #expect(text(payload).contains("Scheduled task"))
+        let payload = await create(when: "every day at 9", spy: spy)
+        let filed = spy.reminders.first
+        #expect(filed?.repeats == .daily)
+        #expect(calendar.component(.hour, from: filed?.due ?? now) == 9)
+        // The pattern is read back for the same reason the time is: "every
+        // weekday" and "every week" are one misparse apart and only the user
+        // can tell which they meant.
+        #expect(text(payload).contains("repeating every day"), "\(text(payload))")
+    }
+
+    @Test("every weekday is its own pattern, not a weekly one")
+    func weekdayPattern() async {
+        let spy = WriteSpy()
+        _ = await create(when: "every weekday at 8am", spy: spy)
+        #expect(spy.reminders.first?.repeats == .weekdays)
+    }
+
+    @Test("a repeating phrase with no time is still refused")
+    func unreadableRecurrenceRefused() async {
+        // The half of the old blanket refusal worth keeping. "every day" with
+        // no hour is half a reminder, and filing it at whatever o'clock is the
+        // failure the user discovers on the second morning.
+        let spy = WriteSpy()
+        let payload = await create(when: "every day", spy: spy)
+        #expect(!spy.touched)
+        #expect(text(payload).contains("how often and at what time"))
+    }
+
+    @Test("a daily reminder and a one-off at the same hour are different reminders")
+    func recurrenceIsPartOfIdentity() async {
+        // Filing the one-off over the daily — or declining to file the daily
+        // because a one-off already matched — silently drops the repetition
+        // that was the whole request.
+        let nine = calendar.date(from: DateComponents(year: 2026, month: 9, day: 14, hour: 9, minute: 0))!
+        let oneOff = ReminderRow(title: "Take the bins out", due: nine, dueHasTime: true, identifier: "x")
+        let spy = WriteSpy()
+        _ = await create(when: "every day at 9", open: [oneOff], spy: spy)
+        #expect(spy.reminders.first?.repeats == .daily, "the daily one should still be filed")
+
+        // And the same daily reminder asked for twice is still filed once.
+        let daily = ReminderRow(title: "Take the bins out", due: nine, dueHasTime: true, identifier: "y", repeats: .daily)
+        let again = WriteSpy()
+        _ = await create(when: "every day at 9", open: [daily], spy: again)
+        #expect(!again.touched)
     }
 
     @Test("an unreadable time writes nothing and asks")
@@ -326,12 +370,22 @@ struct PersonalDataWriteTests {
         #expect(!spy.touched)
     }
 
-    @Test("a repeating event is refused rather than added once")
-    func recurringEventsRefused() async {
+    @Test("a repeating event becomes a series rather than being refused")
+    func recurringEvents() async {
+        // Reminders repeating while calendar events refused would be an odd
+        // seam to leave in, and the parsing is already shared.
         let spy = WriteSpy()
         let payload = await event(start: "every Tuesday at 6pm", spy: spy)
+        #expect(spy.events.first?.repeats == .weekly)
+        #expect(text(payload).contains("repeating every week"), "\(text(payload))")
+    }
+
+    @Test("a repeating event with no readable time is refused")
+    func unreadableRecurringEvent() async {
+        let spy = WriteSpy()
+        let payload = await event(start: "every so often", spy: spy)
         #expect(!spy.touched)
-        #expect(text(payload).contains("single event"))
+        #expect(text(payload).contains("how often and at what time"))
     }
 }
 

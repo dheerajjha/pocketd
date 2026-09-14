@@ -33,29 +33,115 @@ struct MomentPhraseTests {
 
     // MARK: - The refusal that matters most
 
-    @Test("a repeating phrase is refused, never flattened to one occurrence")
-    func recurrenceIsRefused() {
+    /// Resolved against the real clock and the real calendar.
+    ///
+    /// `NSDataDetector` anchors relative phrases to the SYSTEM time zone and
+    /// offers no way to inject one, so a fixture calendar in Europe/London and
+    /// a machine in another zone disagree by the offset — which looks exactly
+    /// like a parsing bug and is not one. Anything that reaches the detector is
+    /// therefore asserted on the hour, against `.current`, never on an absolute
+    /// date.
+    private func live(_ phrase: String) -> MomentPhrase.Resolution {
+        MomentPhrase.resolve(phrase, now: Date(), calendar: .current)
+    }
+
+    @Test("a repeating phrase becomes a pattern and a first occurrence")
+    func recurrenceIsRead() {
         // NSDataDetector reads "every day at 7am" as *today* at 7am: one
-        // reminder, no repetition, and no error anywhere. The user asked for a
-        // daily reminder, watched the app agree, and finds out on the second
-        // morning. Refusing is a worse demo and an honest one.
-        for phrase in [
-            "every day at 7am",
-            "each morning",
-            "daily at 9",
-            "every Tuesday at 6pm",
-            "repeat weekly",
-            "every weekday at 8"
-        ] {
-            #expect(resolve(phrase, stub: now) == .recurring, "\(phrase)")
+        // reminder, no repetition, no error — so the user asked for a daily
+        // reminder, watched the app agree, and found out on the second morning.
+        // The pattern is pulled out first and the rest resolved as an ordinary
+        // time, which is why "at 7am" still gets the roll-forward and the
+        // refusal to guess that every other phrase does.
+        let expected: [(String, ReminderRepeat, Int)] = [
+            ("every day at 7am", .daily, 7),
+            ("each day at 9am", .daily, 9),
+            ("daily at 9am", .daily, 9),
+            ("every weekday at 8am", .weekdays, 8),
+            ("every week at 10am", .weekly, 10),
+            ("weekly at 10am", .weekly, 10),
+            ("every month at 11am", .monthly, 11),
+            ("every year at 6pm", .yearly, 18),
+            // The shapes NSDataDetector returns NO MATCH for — a bare hour with
+            // no am or pm. Left to it, "daily at 9" would be refused, which is
+            // among the commonest ways anybody asks for this.
+            ("every morning at 7", .daily, 7),
+            ("every evening at 9", .daily, 21)
+        ]
+        for (phrase, pattern, hour) in expected {
+            guard case let .repeating(read, first, hasTime) = live(phrase) else {
+                Issue.record("\(phrase) did not resolve to a pattern"); continue
+            }
+            #expect(read == pattern, "\(phrase)")
+            #expect(hasTime, "\(phrase)")
+            #expect(Calendar.current.component(.hour, from: first) == hour, "\(phrase)")
         }
     }
 
-    @Test("recurrence is checked before anything else can resolve it")
+    @Test("a bare hour with no am or pm takes the next one round")
+    func bareHours() {
+        // The detector matches "at 7am" and returns nothing at all for "at 9",
+        // so without this the feature works in the morning and not after lunch.
+        // Deterministic because `bareClockTime` uses the calendar it is given
+        // rather than the detector's system zone.
+        let nineAM = calendar.date(from: DateComponents(year: 2026, month: 9, day: 14, hour: 9, minute: 0))!
+        // 01:45, so the next nine o'clock is this morning.
+        guard case let .moment(morning, _) = resolve("at 9") else {
+            Issue.record("at 9 did not resolve"); return
+        }
+        #expect(morning == nineAM)
+
+        // From half past nine in the morning, the next one is half nine at night.
+        let lateMorning = calendar.date(from: DateComponents(year: 2026, month: 9, day: 14, hour: 9, minute: 30))!
+        guard case let .moment(evening, _) = MomentPhrase.resolve("at 9", now: lateMorning, calendar: calendar, detector: { _ in nil }) else {
+            Issue.record("did not resolve"); return
+        }
+        #expect(parts(evening).hour == 21)
+
+        // An explicit 24-hour clock is never second-guessed.
+        guard case let .moment(exact, _) = resolve("17:30") else {
+            Issue.record("17:30 did not resolve"); return
+        }
+        #expect(parts(exact).hour == 17 && parts(exact).minute == 30)
+    }
+
+    @Test("every Tuesday is weekly, and the weekday survives to place the first one")
+    func namedWeekdayRepeats() {
+        // "Tuesday" is stripped from the pattern's point of view and kept from
+        // the date's: weekly says how often, and the word is the only thing
+        // that says which Tuesday.
+        guard case let .repeating(pattern, first, _) = live("every Tuesday at 6pm") else {
+            Issue.record("did not resolve"); return
+        }
+        #expect(pattern == .weekly)
+        #expect(Calendar.current.component(.hour, from: first) == 18)
+        #expect(Calendar.current.component(.weekday, from: first) == 3, "should land on a Tuesday")
+    }
+
+    @Test("a repeating phrase with no readable pattern or no time is still refused")
+    func unreadableRecurrenceIsRefused() {
+        // The half of the old blanket refusal that was doing real work. Filing
+        // one reminder for something asked for "every so often" is the failure
+        // this whole area exists to avoid, and "every day" with no hour in it
+        // is half a reminder rather than a daily one.
+        //
+        // "every morning" is here rather than resolving to nine o'clock. The
+        // detector would happily read "Monday morning" as 09:00, and adopting
+        // that convention for a repeating alarm is exactly the invented hour
+        // this file refuses everywhere else.
+        for phrase in ["every so often", "every now and then", "every day", "every weekday", "every morning", "repeat", "always"] {
+            #expect(live(phrase) == .recurring, "\(phrase)")
+        }
+    }
+
+    @Test("recurrence is read before anything else can resolve it")
     func recurrenceBeatsAWorkingParse() {
-        // The ordering is the test. "in 2 hours" parses, and "every day in 2
-        // hours" must still be refused rather than quietly becoming one.
-        #expect(resolve("every day in 2 hours") == .recurring)
+        // The ordering is the test. "in 2 hours" parses on its own, and "every
+        // day in 2 hours" must not quietly become a single reminder.
+        guard case let .repeating(pattern, _, _) = resolve("every day in 2 hours") else {
+            Issue.record("did not resolve to a pattern"); return
+        }
+        #expect(pattern == .daily)
     }
 
     // MARK: - The silently-wrong class
@@ -77,8 +163,8 @@ struct MomentPhraseTests {
             case let .moment(date, _):
                 let hour = parts(date).hour
                 #expect(hour != 12 && hour != 0, "\(phrase) silently became the fallback hour")
-            case .recurring:
-                Issue.record("\(phrase) is not recurring")
+            case .recurring, .repeating:
+                Issue.record("\(phrase) is not a repeating phrase")
             }
         }
     }

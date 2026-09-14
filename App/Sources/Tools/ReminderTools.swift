@@ -19,7 +19,11 @@ struct RemindersTool {
 
     @ToolArguments
     struct Arguments {
-        @ToolArgument("What to do: list, create or complete.")
+        // "What to do." and not "What to do: list, create or complete." — the
+        // enum in the schema already carries those three words, and at 1,317
+        // tokens of a 1,344 ceiling a redundant clause is a capability
+        // somebody else does not get.
+        @ToolArgument("What to do.")
         var action: ReminderAction
 
         @ToolArgument("For list: which reminders to list. Defaults to all open ones.")
@@ -28,7 +32,7 @@ struct RemindersTool {
         @ToolArgument("For create and complete: what the reminder says.")
         var title: String?
 
-        @ToolArgument("For create: when it is due, in the user's own words, like '2am today' or 'tomorrow at 3pm'. Leave out for no due date.")
+        @ToolArgument("For create: when it is due, in the user's own words, like '2am today', 'tomorrow at 3pm' or 'every day at 7am'. Leave out for no due date.")
         var when: String?
     }
 

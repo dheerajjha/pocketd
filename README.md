@@ -356,7 +356,9 @@ only answers, so nothing you type and nothing the model says back is ever
 transmitted. Health, calendar and reminder data are read on-device and are
 refused to network callers — including the chat page the phone itself serves —
 by the origin gate in `RequestOrigin.swift`. The assistant can also add events
-and reminders, behind a second and stricter gate in the same file:
+and reminders — including repeating ones, as a native `EKRecurrenceRule` rather
+than anything this app simulates — behind a second and stricter gate in the same
+file:
 `mayWritePersonalData` admits only the chat tab, so a network client cannot
 change anything and neither can a scheduled run, which reads at an hour when
 nobody is watching and shares its context with calendar titles that strangers

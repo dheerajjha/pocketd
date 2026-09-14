@@ -67,19 +67,28 @@ public struct ReminderRow: Sendable, Equatable {
     ///
     /// Optional because the rows in tests and previews were never in a store.
     public var identifier: String?
+    /// How often this one comes back, when EventKit says it does.
+    ///
+    /// Carried for the duplicate check rather than for the model, which never
+    /// sees it: a daily "take the pills" and a one-off "take the pills" at the
+    /// same hour are different reminders, and treating them as the same one
+    /// would silently drop the repetition the user asked for.
+    public var repeats: ReminderRepeat?
 
     public init(
         title: String,
         due: Date? = nil,
         dueHasTime: Bool = false,
         priority: Int = 0,
-        identifier: String? = nil
+        identifier: String? = nil,
+        repeats: ReminderRepeat? = nil
     ) {
         self.title = Untrusted(title)
         self.due = due
         self.dueHasTime = dueHasTime
         self.priority = priority
         self.identifier = identifier
+        self.repeats = repeats
     }
 }
 

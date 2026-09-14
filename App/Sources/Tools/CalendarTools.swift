@@ -16,7 +16,7 @@ struct CalendarTool {
 
     @ToolArguments
     struct Arguments {
-        @ToolArgument("What to do: list or create.")
+        @ToolArgument("What to do.")
         var action: CalendarAction
 
         @ToolArgument("For list: which days to list. Defaults to today.")

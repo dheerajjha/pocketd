@@ -212,10 +212,74 @@ actor EventAccess {
                         priority: reminder.priority,
                         // Read inside the callback with everything else, so no
                         // `EKReminder` escapes onto the actor.
-                        identifier: reminder.calendarItemIdentifier
+                        identifier: reminder.calendarItemIdentifier,
+                        repeats: Self.pattern(of: reminder.recurrenceRules?.first)
                     )
                 })
             }
+        }
+    }
+
+    // MARK: - Recurrence
+
+    /// The app's vocabulary as an EventKit rule.
+    ///
+    /// `end: nil` throughout — a repeating reminder somebody asked for by voice
+    /// has no end date in the request, and inventing one would stop the thing
+    /// silently on a day nobody chose.
+    private nonisolated static func rule(for repeats: ReminderRepeat) -> EKRecurrenceRule {
+        switch repeats {
+        case .daily:
+            return EKRecurrenceRule(recurrenceWith: .daily, interval: 1, end: nil)
+        case .weekly:
+            return EKRecurrenceRule(recurrenceWith: .weekly, interval: 1, end: nil)
+        case .monthly:
+            return EKRecurrenceRule(recurrenceWith: .monthly, interval: 1, end: nil)
+        case .yearly:
+            return EKRecurrenceRule(recurrenceWith: .yearly, interval: 1, end: nil)
+        case .weekdays:
+            // Weekly with five days named, which is how iCalendar spells
+            // "every weekday" and therefore how the Reminders app will show it.
+            return EKRecurrenceRule(
+                recurrenceWith: .weekly,
+                interval: 1,
+                daysOfTheWeek: [.monday, .tuesday, .wednesday, .thursday, .friday]
+                    .map { EKRecurrenceDayOfWeek($0) },
+                daysOfTheMonth: nil,
+                monthsOfTheYear: nil,
+                weeksOfTheYear: nil,
+                daysOfTheYear: nil,
+                setPositions: nil,
+                end: nil
+            )
+        }
+    }
+
+    /// The same mapping backwards, for the duplicate check.
+    ///
+    /// Deliberately lossy and deliberately conservative: a rule this app did
+    /// not write — one the user built in the Reminders app, with an interval of
+    /// three or an end date — comes back as `nil` rather than as the nearest
+    /// case. Reporting "every three weeks" as `weekly` would let the duplicate
+    /// check match it against a weekly reminder and silently decline to file
+    /// the one that was asked for.
+    private nonisolated static func pattern(of rule: EKRecurrenceRule?) -> ReminderRepeat? {
+        guard let rule, rule.interval == 1, rule.recurrenceEnd == nil else { return nil }
+        switch rule.frequency {
+        case .daily:
+            return rule.daysOfTheWeek == nil ? .daily : nil
+        case .weekly:
+            guard let days = rule.daysOfTheWeek else { return .weekly }
+            let named = Set(days.map(\.dayOfTheWeek))
+            let workingWeek: Set<EKWeekday> = [.monday, .tuesday, .wednesday, .thursday, .friday]
+            if named == workingWeek { return .weekdays }
+            return days.count == 1 ? .weekly : nil
+        case .monthly:
+            return .monthly
+        case .yearly:
+            return .yearly
+        @unknown default:
+            return nil
         }
     }
 
@@ -251,6 +315,13 @@ actor EventAccess {
                 ? [.year, .month, .day, .hour, .minute]
                 : [.year, .month, .day]
             reminder.dueDateComponents = Calendar.current.dateComponents(fields, from: due)
+        }
+        if let repeats = new.repeats {
+            // Only ever alongside a due date. `PersonalDataWrites` guarantees
+            // that pairing — a pattern with nothing to repeat from is refused
+            // before it gets here — and EventKit would otherwise hold a rule
+            // that never fires.
+            reminder.recurrenceRules = [Self.rule(for: repeats)]
         }
 
         do {
@@ -305,12 +376,17 @@ actor EventAccess {
         event.startDate = new.start
         event.endDate = new.end
         event.calendar = calendar
+        if let repeats = new.repeats {
+            event.recurrenceRules = [Self.rule(for: repeats)]
+        }
 
         do {
-            // `.thisEvent` because nothing here creates a recurring event —
-            // `MomentPhrase` refuses repeating phrases outright — so there is
-            // no series for a span to mean anything about.
-            try store.save(event, span: .thisEvent, commit: true)
+            // `.futureEvents` rather than `.thisEvent`, now that a repeating
+            // phrase creates a series instead of being refused. On a brand new
+            // event the two are equivalent, but `.thisEvent` on an event
+            // carrying a recurrence rule is the spelling that means "detach
+            // this one occurrence", which is not what a create means.
+            try store.save(event, span: .futureEvents, commit: true)
             return .written
         } catch {
             DiagnosticLog.record(.failure(area: .eventKit, code: "event_save_failed"))

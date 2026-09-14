@@ -40,11 +40,20 @@ public struct NewReminder: Sendable, Equatable {
     /// False when the phrase named a day and no clock time. `EKReminder` models
     /// this natively and turning it into midnight would invent a deadline.
     public var dueHasTime: Bool
+    /// How often it comes back, when it does. Always `nil` where `due` is
+    /// `nil`: a pattern with no first occurrence has nothing to repeat from.
+    public var repeats: ReminderRepeat?
 
-    public init(title: String, due: Date? = nil, dueHasTime: Bool = false) {
+    public init(
+        title: String,
+        due: Date? = nil,
+        dueHasTime: Bool = false,
+        repeats: ReminderRepeat? = nil
+    ) {
         self.title = title
         self.due = due
         self.dueHasTime = dueHasTime
+        self.repeats = repeats
     }
 }
 
@@ -53,11 +62,13 @@ public struct NewEvent: Sendable, Equatable {
     public var title: String
     public var start: Date
     public var end: Date
+    public var repeats: ReminderRepeat?
 
-    public init(title: String, start: Date, end: Date) {
+    public init(title: String, start: Date, end: Date, repeats: ReminderRepeat? = nil) {
         self.title = title
         self.start = start
         self.end = end
+        self.repeats = repeats
     }
 }
 
@@ -122,16 +133,22 @@ public enum PersonalDataWrites {
 
         var due: Date?
         var dueHasTime = false
+        var repeats: ReminderRepeat?
         if let phrase = when, !phrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             switch MomentPhrase.resolve(phrase, now: now, calendar: calendar) {
             case let .moment(date, hasTime):
                 due = date
                 dueHasTime = hasTime
+            case let .repeating(pattern, first, hasTime):
+                due = first
+                dueHasTime = hasTime
+                repeats = pattern
             case .recurring:
-                // Refused rather than quietly filed once. This app has a real
-                // `Recurrence` type behind Scheduled tasks, so the honest answer
-                // points at it instead of pretending.
-                return ["text": "I can only set a reminder for one time. For something that repeats, set up a Scheduled task instead."]
+                // A cue with no readable pattern ("every so often") or a
+                // pattern with no hour ("every day"). Still refused, because
+                // filing one reminder for something asked for daily is the
+                // failure the user finds out about on the second morning.
+                return ["text": "I can set a reminder that repeats, but I need to know how often and at what time — like \"every day at 7am\"."]
             case .unresolved:
                 // No guessed hour, ever. A reminder at a time nobody asked for
                 // is worse than none, because the user stops holding it in
@@ -140,7 +157,7 @@ public enum PersonalDataWrites {
             }
         }
 
-        let candidate = NewReminder(title: title, due: due, dueHasTime: dueHasTime)
+        let candidate = NewReminder(title: title, due: due, dueHasTime: dueHasTime, repeats: repeats)
 
         if case let .rows(rows, _) = await existing(), let clash = duplicate(of: candidate, in: rows, calendar: calendar) {
             // Not an error and not a second reminder. The case this is for is a
@@ -243,7 +260,14 @@ public enum PersonalDataWrites {
         }
 
         let start: Date
+        var repeats: ReminderRepeat?
         switch MomentPhrase.resolve(phrase, now: now, calendar: calendar) {
+        case let .repeating(pattern, first, hasTime):
+            guard hasTime else {
+                return ["text": "What time does \"\(title)\" start?"]
+            }
+            start = first
+            repeats = pattern
         case let .moment(date, hasTime):
             guard hasTime else {
                 // A day with no clock time would become an all-day event, which
@@ -253,7 +277,7 @@ public enum PersonalDataWrites {
             }
             start = date
         case .recurring:
-            return ["text": "I can only add a single event. For something that repeats, add it in the Calendar app."]
+            return ["text": "I can add an event that repeats, but I need to know how often and at what time — like \"every Tuesday at 6pm\"."]
         case .unresolved:
             return ["text": "I could not work out when \"\(phrase)\" is. Tell me a time like \"tomorrow at 3pm\"."]
         }
@@ -263,10 +287,10 @@ public enum PersonalDataWrites {
             return ["text": "I could not work out when that event ends."]
         }
 
-        switch await write(NewEvent(title: title, start: start, end: end)) {
+        switch await write(NewEvent(title: title, start: start, end: end, repeats: repeats)) {
         case .written:
             return [
-                "text": "Added \"\(title)\" to your calendar for \(describe(start, hasTime: true, calendar: calendar))\(minutes == defaultEventMinutes ? "" : ", for \(minutes) minutes").",
+                "text": "Added \"\(title)\" to your calendar for \(describe(start, hasTime: true, calendar: calendar))\(minutes == defaultEventMinutes ? "" : ", for \(minutes) minutes")\(repeats.map { ", repeating \($0.sentence)" } ?? "").",
                 "created": true
             ]
         case let .unauthorised(authorization):
@@ -300,6 +324,10 @@ public enum PersonalDataWrites {
     static func duplicate(of candidate: NewReminder, in rows: [ReminderRow], calendar: Calendar) -> ReminderRow? {
         rows.first { row in
             guard matches(candidate.title, row.title.attackerControlledValue()) else { return false }
+            // A daily "take the pills" and a one-off "take the pills" at the
+            // same hour are different things, and filing the second over the
+            // first would silently drop the repetition.
+            guard candidate.repeats == row.repeats else { return false }
             switch (candidate.due, row.due) {
             case (nil, nil): return true
             case let (mine?, theirs?): return calendar.isDate(mine, equalTo: theirs, toGranularity: .minute)
@@ -341,6 +369,13 @@ public enum PersonalDataWrites {
         guard let due = reminder.due else {
             return "Reminder added: \"\(reminder.title)\", with no due date."
         }
-        return "Reminder set: \"\(reminder.title)\" for \(describe(due, hasTime: reminder.dueHasTime, calendar: calendar))."
+        let when = describe(due, hasTime: reminder.dueHasTime, calendar: calendar)
+        guard let repeats = reminder.repeats else {
+            return "Reminder set: \"\(reminder.title)\" for \(when)."
+        }
+        // The pattern is read back in words for the same reason the time is:
+        // "every weekday" and "every week" are one misparse apart, and the user
+        // is the only one who can tell which they meant.
+        return "Reminder set: \"\(reminder.title)\", starting \(when) and repeating \(repeats.sentence)."
     }
 }

@@ -42,7 +42,7 @@ public enum Ability: String, Sendable, Equatable, CaseIterable, Identifiable, Co
         case .calendar:
             "Ask what is on today or whether Thursday is free — and have new events added when you ask."
         case .reminders:
-            "Ask what is overdue or due today, set new reminders, and tick them off when they are done."
+            "Ask what is overdue or due today, set reminders — including ones that repeat — and tick them off when they are done."
         case .health:
             "Ask how you slept, how active you have been, or whether your resting heart rate has moved."
         case .localServer:
