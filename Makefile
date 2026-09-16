@@ -1,8 +1,19 @@
-.PHONY: test app build-sim smoke catalogue device-install clean
+.PHONY: test verify app build-sim smoke catalogue device-install clean
 
 # The package is the part that CI can check in seconds without a simulator.
 test:
 	swift test
+
+# What "it builds" actually means. `make app` is xcodegen and NOTHING else — it
+# regenerates the project file and compiles not one line — so a green `make app`
+# says only that project.yml parsed.
+#
+# That gap hid two compile errors in the app target for three commits: an
+# optional enum argument that @ToolArguments cannot expand, and a `Self`
+# reference in a stored property initializer. Both were invisible to `swift
+# test`, because neither file is in the package, and invisible to `make app`,
+# because it does not build. Use this before claiming the app builds.
+verify: test build-sim
 
 # Regenerates Pocketd.xcodeproj from project.yml. Needed after any change to the
 # spec, and after a fresh clone.

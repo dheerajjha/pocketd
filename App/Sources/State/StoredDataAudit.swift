@@ -198,7 +198,7 @@ final class StoredDataAudit {
         ),
         Destination(
             host: "api.mixpanel.com",
-            sends: "Usage events, and only the \(Self.analyticsEventCount) listed in AnalyticsEvent.swift: the app opened, a model downloaded or loaded or failed to, a message sent, the server started or stopped, a client answered. Each carries a model id, a size, a duration, a bucketed RAM class or a failure reason, and an identifier for this install. Never a message of yours, never the model's reply, never a filename, an address, or anything from Health, Calendar or Reminders.",
+            sends: "Usage events, and only the \(StoredDataAudit.analyticsEventCount) listed in AnalyticsEvent.swift: the app opened, a model downloaded or loaded or failed to, a message sent, the server started or stopped, a client answered. Each carries a model id, a size, a duration, a bucketed RAM class or a failure reason, and an identifier for this install. Never a message of yours, never the model's reply, never a filename, an address, or anything from Health, Calendar or Reminders.",
             when: "While you use the app, unless you have turned Usage events off in Settings. It is on by default."
         ),
     ]

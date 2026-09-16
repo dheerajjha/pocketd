@@ -26,8 +26,12 @@ struct RemindersTool {
         @ToolArgument("What to do.")
         var action: ReminderAction
 
-        @ToolArgument("For list: which reminders to list. Defaults to all open ones.")
-        var filter: ReminderFilter?
+        // Defaulted rather than optional. `@ToolArguments` generates
+        // `Arguments.ReminderFilter` for an optional enum — it strips the `?`
+        // and then qualifies the bare name with the enclosing type, which does
+        // not resolve — so `ReminderFilter?` does not compile at all.
+        @ToolArgument("For list: which reminders to list.")
+        var filter: ReminderFilter = .all_open
 
         @ToolArgument("For create and complete: what the reminder says.")
         var title: String?
@@ -42,7 +46,7 @@ struct RemindersTool {
             // Defaulted rather than refused. `filter` cannot be required now
             // that one tool serves three verbs, and a model that omits it on a
             // list is asking the commonest question there is.
-            return ToolOutput(await PersonalDataTools.reminderPayload(filter: arguments.filter ?? .all_open) { window in
+            return ToolOutput(await PersonalDataTools.reminderPayload(filter: arguments.filter) { window in
                 await EventAccess.shared.reminders(in: window)
             })
 

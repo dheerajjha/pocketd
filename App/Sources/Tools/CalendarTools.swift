@@ -19,8 +19,10 @@ struct CalendarTool {
         @ToolArgument("What to do.")
         var action: CalendarAction
 
-        @ToolArgument("For list: which days to list. Defaults to today.")
-        var range: CalendarRange?
+        // Defaulted, not optional — see `RemindersTool.Arguments.filter` for
+        // what the macro does with an optional enum.
+        @ToolArgument("For list: which days to list.")
+        var range: CalendarRange = .today
 
         @ToolArgument("For create: what the event is called.")
         var title: String?
@@ -35,7 +37,7 @@ struct CalendarTool {
     func call(arguments: Arguments) async throws -> ToolOutput {
         switch arguments.action {
         case .list:
-            return ToolOutput(await PersonalDataTools.calendarPayload(range: arguments.range ?? .today) { window in
+            return ToolOutput(await PersonalDataTools.calendarPayload(range: arguments.range) { window in
                 await EventAccess.shared.events(in: window)
             })
 
