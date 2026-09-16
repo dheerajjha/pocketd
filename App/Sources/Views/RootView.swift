@@ -20,6 +20,7 @@ enum AppTab: Hashable {
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.scenePhase) private var scenePhase
 
     /// Where a returning launch lands.
     ///
@@ -135,7 +136,34 @@ struct RootView: View {
                     route(to: destination)
                 })
             }
+            // A question left by `AskPocketdIntent`. Collected here and not in
+            // the intent because `perform()` runs before this scene exists on a
+            // cold launch, so there is nowhere to put it yet.
+            //
+            // On appearance AND on becoming active: the first covers a launch
+            // the intent caused, the second covers the app already being in
+            // memory, and a phrase said twice must not ask twice — which is why
+            // `take()` clears the slot rather than reading it.
+            .onAppear { collectIntentQuestion() }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { collectIntentQuestion() }
+            }
         }
+    }
+
+    /// Puts a question from Siri or Shortcuts into the Chat tab.
+    ///
+    /// Sent only when a model is actually resident. Without one, `send()` is a
+    /// no-op that would leave somebody staring at their own words in a text
+    /// field with no reply and no explanation — so the question is left in the
+    /// box, ready to send, and Chat's own empty state says what is missing and
+    /// offers the way to Models.
+    private func collectIntentQuestion() {
+        guard let question = IntentInbox.take() else { return }
+        route(to: .chat)
+        model.draft = question
+        guard model.loadedModelID != nil else { return }
+        model.send()
     }
 
     /// Sends the app somewhere, whether or not that somewhere is a tab.
