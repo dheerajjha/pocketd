@@ -63,17 +63,33 @@ server product."* The listing never followed.
 - **Primary category PRODUCTIVITY, secondary UTILITIES** — was DEVELOPER_TOOLS.
   On 1.0.1; live 1.0.0 returns 409 for a category change.
 - Subtitle → `Sets reminders. Sends nothing.` (30/30)
-- Keywords → `local llm,gguf,llama,qwen,gemma,calendar,todo,agenda,private,on-device,chatbot,health,no internet`
-  (97/100). The old field spent half its length on `selfhosted,homelab,lan,endpoint,developer,inference`
-  — all supply-side. `calendar` and `health` are the two words no competitor can claim.
+- Keywords → `local llm,llama,qwen,calendar,todo,private,on-device,siri,health,gguf,gemma,offline,assistant,ai`
+  (96/100). The old field spent half its length on `selfhosted,homelab,lan,endpoint,developer,inference`
+  — all supply-side. `calendar` and `health` are the two words no competitor can
+  claim, and `offline`, `assistant` and `ai` had to be bought back once the name
+  turned out to carry no search load at all.
+
+  `no internet` was dropped for `offline`: eleven characters to contribute "no"
+  and "internet" to a field Apple reads as a combination builder, where the same
+  claim in seven characters is an actual query. That paid for `gguf` and `gemma`.
+  `gguf` is worth its four characters because somebody typing it has already
+  decided they want to run a local model and is looking for something to run it
+  in — the highest-intent, lowest-competition term available.
 - Promotional text, description (2,898/4,000) and screenshot order — staged.
 - Live 1.0.0 got a **read-only** promo text, since that is the one field
   editable without review and the shipped binary cannot write.
 
-Still with the user: the app **name**. It is `Pocketd: Local LLM Server`.
-"Server" tells a consumer the app is not for them. Recommend at minimum
-`Pocketd: Offline AI Assistant` (29/30); whether to keep the Pocketd brand at
-all is a separate and bigger question.
+- App name → `Pocketd: Future is here` (23/30), the user's own choice, replacing
+  `Pocketd: Local LLM Server`. "Server" told a consumer the app was not for
+  them, so dropping it is right. The cost is that the name now carries no search
+  term at all, which is why the keyword field had to absorb `offline`,
+  `assistant` and `ai`.
+
+  It went out briefly as "Pocktd" — a typo, caught by rendering a screenshot and
+  reading it. `CFBundleDisplayName` is `Pocketd` in both targets and 22 strings
+  in the app say Pocketd, so the store would have sold an app whose home screen
+  icon disagreed with its listing. Everything now agrees and no build was
+  needed.
 
 ## Screenshots
 
@@ -96,7 +112,13 @@ Worse than the styling:
 `scripts/store-shots.py` builds the new set: bold caption above a device frame,
 one benefit per shot, exactly one accent word, 1320×2868.
 
-### The three that need a real phone
+### Done
+
+`docs/store/05-privacy.png` — "Nothing leaves the phone." over the data
+inspector, showing a real byte count, a real file count and the three named
+destinations. No competitor can take this picture; theirs is a paragraph.
+
+### The four that need a real phone
 
 A tool-capable model is 1.1GB and the simulator reports **722MB usable**, so
 every model in the catalogue reads "Too large" there — the increased-memory
@@ -108,6 +130,18 @@ entitlement does not change it, because the figure comes from
 | `chat-calendar.png` | Ask **"what's on tomorrow?"** with two or three real events in the calendar. Capture the answer with the calendar card visible. |
 | `chat-reminder.png` | Ask **"remind me to take the bins out at 2am"**. Capture the confirmation naming the time it set. |
 | `chat-repeat.png` | Ask **"remind me every weekday at 7am to take my pills"**. Capture the confirmation saying it repeats. |
+| `abilities.png` | The Abilities screen with Calendar and Reminders on. Must be a phone: on a simulator the only model that fits is one `ToolGate` refuses, so the screen always carries an orange "SmolLM2 360M is not able to use these tools" caveat. |
+
+**Use invented data.** These publish to 175 countries permanently, from the app
+whose pitch is that your calendar never leaves the phone. Two or three plain
+calendar entries, no real names, no companies, no addresses, nothing medical.
+
+**Shoot from build 1789543153 via TestFlight.** It is the first build that both
+contains the write path and compiles — `454c876` and `ff217c6` do not build, so
+no binary from them exists. Whoever takes the reminder captures is exercising
+that feature for the first time on hardware. If "remind me to take the bins out
+at 2am" does not produce a confirmation, that is a defect to report, not a bad
+capture to retake.
 
 Then:
 
@@ -115,5 +149,6 @@ Then:
 python3 scripts/store-shots.py <folder-with-those-pngs> docs/store/
 ```
 
-The script names anything still missing. `abilities`, `privacy`, `models` and
-`server` can be shot on a simulator and are the remaining four slots.
+The script names anything still missing. Models is deliberately out of the set:
+every leader competes on which models run and how fast, so a model grid puts us
+back on the axis where they have MLX, OmniQuant and a thousand ratings each.

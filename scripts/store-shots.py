@@ -40,14 +40,20 @@ BG_BOTTOM = (232, 234, 242)
 #
 # The accent word is the one the eye should land on. Exactly one per caption:
 # two is a ransom note.
+#
+# The fourth field trims that fraction off the top of the raw capture. It exists
+# for screens presented as a SHEET: iOS draws the sheet over the screen it came
+# from, so the strip above the sheet's rounded top carries ghosted text from
+# whatever was behind it. Privacy is the one that needs it. Cropping takes the
+# status bar with it, which is a fair trade — a clean frame reads as deliberate
+# and a ghost of somebody's Settings list reads as a mistake.
 CAPTIONS = [
-    ("chat-calendar",  "It knows what's on|tomorrow.",                "tomorrow."),
-    ("chat-reminder",  "Ask it to remind you.|It actually does.",     "actually"),
-    ("chat-repeat",    "Every weekday|at 7am.",                       "Every"),
-    ("abilities",      "Three switches.|All start off.",              "off."),
-    ("privacy",        "Nothing leaves|the phone.",                   "Nothing"),
-    ("models",         "Tells you what fits|before you download.",    "fits"),
-    ("server",         "Also: your phone|is an AI server.",           "server."),
+    ("chat-calendar",  "It knows what's on|tomorrow.",                "tomorrow.", 0.0),
+    ("chat-reminder",  "Ask it to remind you.|It actually does.",     "actually",  0.0),
+    ("chat-repeat",    "Every weekday|at 7am.",                       "Every",     0.0),
+    ("abilities",      "Three switches.|All start off.",              "off.",      0.0),
+    ("privacy",        "Nothing leaves|the phone.",                   "Nothing",   0.072),
+    ("server",         "Also: your phone|is an AI server.",           "server.",   0.0),
 ]
 
 
@@ -136,8 +142,10 @@ def draw_caption(canvas, text, accent):
     return y
 
 
-def compose(shot_path, caption, accent, out_path):
+def compose(shot_path, caption, accent, out_path, crop_top=0.0):
     shot = Image.open(shot_path).convert("RGB")
+    if crop_top > 0:
+        shot = shot.crop((0, int(shot.height * crop_top), shot.width, shot.height))
     canvas = background()
     bottom_of_caption = draw_caption(canvas, caption, accent)
 
@@ -178,7 +186,7 @@ def main():
     os.makedirs(out, exist_ok=True)
 
     made, missing = [], []
-    for index, (slug, caption, accent) in enumerate(CAPTIONS, 1):
+    for index, (slug, caption, accent, crop_top) in enumerate(CAPTIONS, 1):
         source = None
         for ext in (".png", ".PNG", ".jpg", ".jpeg"):
             candidate = os.path.join(raw, slug + ext)
@@ -189,7 +197,7 @@ def main():
             missing.append(slug)
             continue
         target = os.path.join(out, f"{index:02d}-{slug}.png")
-        compose(source, caption, accent, target)
+        compose(source, caption, accent, target, crop_top)
         made.append(target)
 
     for path in made:
@@ -199,7 +207,7 @@ def main():
         # script to find out which.
         print("\nstill needed in", raw, "(name the file after the slug):")
         for slug in missing:
-            caption = next(c for s, c, _ in CAPTIONS if s == slug)
+            caption = next(c for s, c, _, _ in CAPTIONS if s == slug)
             print(f"  {slug}.png — {caption.replace('|', ' ')}")
     return 0
 
