@@ -91,6 +91,30 @@ server product."* The listing never followed.
   icon disagreed with its listing. Everything now agrees and no build was
   needed.
 
+## Two things about the fields themselves
+
+**The subtitle is per-locale, exactly like the keyword field.** Apple weights it
+second only to the name. Three storefronts inheriting the en-US string is three
+separate indices doing one field's work, and there is no brand cost, because
+nobody sees two storefronts — a user in Sydney sees one subtitle and a user in
+Toronto sees another, and neither can tell they differ.
+
+| locale | | subtitle |
+|---|---|---|
+| en-US | 30/30 | Sets reminders. Sends nothing. |
+| en-GB | 29/30 | Your calendar, answered here. |
+| en-AU | 26/30 | No signal. Knows your day. |
+| en-CA | 30/30 | Reads your week. Uploads none. |
+
+Each was checked against **its own locale's** keyword field. A word in both is
+paid for twice and indexed once.
+
+**Apple does not index the description.** Unlike Google Play it is a conversion
+asset and not a discovery one, which is why the subtitle and the keyword field
+carry the ranking — and why the pressure to work search terms into those 2,898
+characters is a pressure to make them worse for no gain. They are answerable
+only to whether they persuade.
+
 ## Screenshots
 
 The five on the store are bare device captures — no caption, no frame, no accent
