@@ -52,7 +52,18 @@ CAPTIONS = [
     ("chat-reminder",  "Ask it to remind you.|It actually does.",     "actually",  0.0),
     ("chat-repeat",    "Every weekday|at 7am.",                       "Every",     0.0),
     ("abilities",      "Three switches.|All start off.",              "off.",      0.0),
-    ("privacy",        "Nothing leaves|the phone.",                   "Nothing",   0.072),
+    # NOT "Nothing leaves the phone." That caption sat directly above the
+    # screen's own header, "What leaves this device", and three addresses — one
+    # of them api.mixpanel.com. The eye goes caption, then list, and the frame
+    # refutes itself in about a second, on the one shot whose whole job is being
+    # believed. The claim underneath it is true and narrower than it sounded:
+    # nothing the user types and nothing the model says ever leaves.
+    #
+    # Pointing AT the list is the stronger move anyway. The reason this shot
+    # earns a slot is that their privacy claim is a paragraph and ours is a
+    # screen somebody can check; a caption that makes the list the proof cannot
+    # be quoted against us, and a caption the list undercuts can.
+    ("privacy",        "Three addresses.|Nothing else.",              "Three",     0.072),
     ("server",         "Also: your phone|is an AI server.",           "server.",   0.0),
 ]
 

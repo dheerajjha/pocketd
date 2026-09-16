@@ -114,9 +114,16 @@ one benefit per shot, exactly one accent word, 1320×2868.
 
 ### Done
 
-`docs/store/05-privacy.png` — "Nothing leaves the phone." over the data
+`docs/store/05-privacy.png` — "Three addresses. Nothing else." over the data
 inspector, showing a real byte count, a real file count and the three named
 destinations. No competitor can take this picture; theirs is a paragraph.
+
+The caption was "Nothing leaves the phone." and that was wrong, not merely
+weak. It sat directly above the screen's own header — "What leaves this
+device" — and three addresses, one of them `api.mixpanel.com`. The frame
+refuted itself in about a second, on the shot whose entire job is being
+believed. Caught by the engineering manager reading the picture rather than
+the plan.
 
 ### The four that need a real phone
 
