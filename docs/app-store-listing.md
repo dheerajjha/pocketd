@@ -150,6 +150,36 @@ that feature for the first time on hardware. If "remind me to take the bins out
 at 2am" does not produce a confirmation, that is a defect to report, not a bad
 capture to retake.
 
+### The App Preview video — same session, same phone
+
+Apple wants App Previews captured from the app in use, 15–30 seconds, up to
+three per locale. Compositing stills with motion is not that, and a rejection
+on a video is expensive.
+
+The best ten seconds of any preview we could make is the assistant answering
+from a real calendar, which needs a tool-capable model, which needs the phone
+for the same reason the stills do. So it comes out of the same session — screen
+recording is in Control Centre, so it costs nothing extra while the staged data
+is already in place.
+
+**One continuous take, about 20 seconds, no editing.** Start the recording on
+the Chat tab with a model already loaded, then:
+
+1. Type `what's on tomorrow?` and send. Let the answer card finish rendering
+   and sit on it for two seconds — that card is the whole product.
+2. Type `remind me every weekday at 7am to take my pills` and send. Let the
+   confirmation land and sit on it for two seconds.
+3. Stop.
+
+Do not tap around afterwards, do not visit Settings, and do not show the Server
+tab. The preview has one job: someone who has never heard of this app sees a
+phone answering a question about its owner's day, offline. Everything else is
+the listing's job.
+
+The staged-data rule matters more here than on the stills, because a video
+shows more of the screen for longer. Same constraint: invented entries, no real
+names.
+
 Then:
 
 ```bash

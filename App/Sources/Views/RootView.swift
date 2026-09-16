@@ -1,3 +1,4 @@
+import StoreKit
 import SwiftUI
 
 /// Which tab is showing. Lifted out of TabView's own state so an empty state
@@ -21,6 +22,9 @@ enum AppTab: Hashable {
 struct RootView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
+    /// Apple's own prompt. There is no way to ask for it outside a view, and no
+    /// way to find out whether it was shown — see `reviewPromptShown()`.
+    @Environment(\.requestReview) private var requestReview
 
     /// Where a returning launch lands.
     ///
@@ -145,6 +149,15 @@ struct RootView: View {
             // memory, and a phrase said twice must not ask twice — which is why
             // `take()` clears the slot rather than reading it.
             .onAppear { collectIntentQuestion() }
+            // Asked from here rather than from the model, because a review
+            // request is a SwiftUI environment action and only a view holds
+            // one. The model decides WHEN — see `ReviewMoment` — and this is
+            // only the hand that raises it.
+            .onChange(of: model.wantsReviewPrompt) { _, wants in
+                guard wants else { return }
+                requestReview()
+                model.reviewPromptShown()
+            }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active { collectIntentQuestion() }
             }

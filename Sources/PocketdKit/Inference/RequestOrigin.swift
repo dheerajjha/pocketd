@@ -128,6 +128,24 @@ public enum ToolContext {
     /// sentence because the model repeats it to the user verbatim.
     public static let refusal = "Personal data is not available to network clients. Ask on the iPhone itself."
 
+    /// Every sentence this type produces to refuse something.
+    ///
+    /// Exists so the card layer can tell a refusal from a confirmation. Both
+    /// arrive as a bare `text` value — these tools never throw — so the string
+    /// is the only evidence there is, and derived from the same functions that
+    /// produce it rather than from copies of the wording.
+    public static var refusalSentences: Set<String> {
+        var sentences: Set<String> = [refusal]
+        for origin in [
+            RequestOrigin.onDeviceChat,
+            .scheduledTask(id: UUID(uuidString: "00000000-0000-0000-0000-000000000000")!),
+            .network(host: "", port: 0)
+        ] {
+            sentences.insert(writeRefusal(for: origin))
+        }
+        return sentences
+    }
+
     /// What a write tool returns to a caller that may not change anything.
     ///
     /// Two sentences rather than one because the two refusals it covers have

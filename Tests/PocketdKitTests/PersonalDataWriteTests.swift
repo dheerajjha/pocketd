@@ -429,6 +429,29 @@ struct WriteAnswerCardTests {
         Issue.record("a successful write drew an empty-state card: \(body)")
     }
 
+    @Test("a confirmation is not drawn under a padlock")
+    func successIsNotLocked() throws {
+        // `sentence(...)` hardcoded "lock" and ignored the symbol it was given,
+        // which was correct while every non-empty text payload was a permission
+        // refusal. Writes broke that: a filed reminder came through the same
+        // branch and was drawn under a padlock, which reads as a privacy
+        // warning on the one message that should read as success.
+        let done = try #require(card(
+            PersonalDataToolNames.reminders,
+            #"{"action":"create","title":"Take the bins out"}"#,
+            ["text": "Reminder set: \"Take the bins out\" for Sun 14 Sep, 02:00.", "created": true]
+        ))
+        #expect(done.symbol != "lock")
+
+        // And a real refusal still is, because that is what the padlock is for.
+        let refused = try #require(card(
+            PersonalDataToolNames.reminders,
+            #"{"action":"create","title":"x"}"#,
+            ["text": ToolContext.writeRefusal(for: .network(host: "h", port: 1))]
+        ))
+        #expect(refused.symbol == "lock")
+    }
+
     @Test("a refusal renders rather than vanishing")
     func refusalRenders() throws {
         // The sentence a network caller gets. If this drew nothing, the user

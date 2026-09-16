@@ -467,6 +467,25 @@ public struct AnswerCardCatalogue: Sendable {
 /// the one the engine dispatches on — is the app's, and a card that stops
 /// appearing is the symptom of this file falling behind it. `everyToolRenders`
 /// reads the app's literals back out of the source to catch exactly that.
+public extension AnswerCard {
+    /// Whether this card reports a result rather than an absence or a refusal.
+    ///
+    /// Used to decide whether the app has just done the thing it is for, which
+    /// is the only moment worth spending one of Apple's three review prompts
+    /// on. A padlock is a permission problem and an empty-state card is a
+    /// calendar with nothing in it; neither is a success, and asking "enjoying
+    /// the app?" straight after either is how an app earns a one-star.
+    var reportsSomething: Bool {
+        if symbol == "lock" { return false }
+        if let lede, ToolContext.refusalSentences.contains(lede) { return false }
+        let hasContent = sections.contains { section in
+            if case .empty = section { return false }
+            return true
+        }
+        return hasContent || lede != nil
+    }
+}
+
 public enum PersonalDataToolNames {
     public static let calendar = "calendar"
     public static let reminders = "reminders"
@@ -741,7 +760,20 @@ public enum AnswerCardBuilders {
         if isNothingFound {
             return .nothing(text, title: title, symbol: symbol, source: source)
         }
-        return AnswerCard(source: source, symbol: "lock", title: title, lede: text)
+        // The padlock is for sentences about permission, and it used to be the
+        // only kind that reached here — every non-empty `text` payload was a
+        // refusal, so hardcoding it was right and the `symbol` argument went
+        // unused. Writes broke that: "Reminder set for 2:00 AM" comes through
+        // this same branch, and it was being drawn under a padlock, which reads
+        // as a privacy warning on the one message that should read as success.
+        let isRefusal = PersonalDataAuthorization.isRefusalSentence(text)
+            || ToolContext.refusalSentences.contains(text)
+        return AnswerCard(
+            source: source,
+            symbol: isRefusal ? "lock" : symbol,
+            title: title,
+            lede: text
+        )
     }
 
     /// `"Thu 11 Sep, 14:30"` and `"Thu 11 Sep, 15:30"` become
