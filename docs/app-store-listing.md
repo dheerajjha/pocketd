@@ -138,6 +138,14 @@ one benefit per shot, exactly one accent word, 1320×2868.
 
 ### Done
 
+`docs/store/06-server.png` — "Also: your phone is an AI server." over the Server
+tab, live: SERVING, the address, the pairing code, the setup URL. Shot on a
+simulator because it needs no model. Deliberately the LAST slot — after five
+shots about the assistant it reads as "and also this", which is the same job it
+does in the description. No competitor serves an OpenAI-compatible API off the
+phone at all, so it is worth a slot; it is just not worth the first one, which
+is the mistake the old set made.
+
 `docs/store/05-privacy.png` — "Three addresses. Nothing else." over the data
 inspector, showing a real byte count, a real file count and the three named
 destinations. No competitor can take this picture; theirs is a paragraph.
