@@ -217,6 +217,15 @@ numbers on screen, rather than letting you find out after 2 GB of bandwidth.
 Every size below is the real `Content-Length` of the file, checked by
 `scripts/verify-catalogue.sh`, not a number inferred from the parameter count.
 
+The badge is that arithmetic and nothing else — RAM times the fraction — so it
+does not move while you use the app. It deliberately ignores how much memory is
+free at this instant, because that number falls by the size of whatever is
+loaded: a verdict computed from it labelled the running model too large to run.
+"How much room is there right now" is a separate signal with separate words, and
+its advice is to unload rather than to choose differently. In the simulator the
+numbers describe your Mac: llama.cpp runs on the CPU there and the app process
+gets roughly 722 MB, so only models under 1 GB are reported as fitting.
+
 | Model | File | iPhone 14 (6 GB) | iPhone 16 Pro (8 GB) |
 | --- | --- | --- | --- |
 | SmolLM2 360M | 0.39 GB | Fits | Fits |

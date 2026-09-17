@@ -88,18 +88,25 @@ struct MemoryCalibrationTests {
         }
     }
 
-    @Test("holds a reserve back from an observed ceiling but not from a proven load")
-    func reserveAppliesOnlyToTheSnapshot() {
+    // Was "holds a reserve back from an observed ceiling but not from a proven
+    // load", asserting a single `ceilingBytes` that merged the two. That merge
+    // is the bug: it let one small successful load define the whole device's
+    // ceiling. The reserve still exists, as the pressure threshold, and the two
+    // signals are now readable only one at a time.
+    @Test("the proof and the snapshot stay separate signals")
+    func signalsDoNotMerge() {
         withDefaults { defaults in
             let calibration = MemoryCalibration(defaults: defaults)
 
             calibration.recordAvailableMemory(4 * gigabyte)
-            #expect(calibration.ceilingBytes == 4 * gigabyte - MemoryCalibration.loadReserveBytes)
+            #expect(calibration.availableMemoryCeilingBytes == 4 * gigabyte)
+            #expect(calibration.largestSuccessfulLoadBytes == nil,
+                    "a reading is not a load; nothing has been proven yet")
 
-            // A load that already happened needs no reserve: everything the
-            // reserve is there to cover was resident at the time.
-            calibration.recordSuccessfulLoad(estimatedBytes: 4 * gigabyte)
-            #expect(calibration.ceilingBytes == 4 * gigabyte)
+            calibration.recordSuccessfulLoad(estimatedBytes: 2 * gigabyte)
+            #expect(calibration.largestSuccessfulLoadBytes == 2 * gigabyte)
+            #expect(calibration.availableMemoryCeilingBytes == 4 * gigabyte,
+                    "proving a load says nothing about how much was free")
         }
     }
 
@@ -109,14 +116,14 @@ struct MemoryCalibrationTests {
     func coldStart() throws {
         try withDefaults { defaults in
             let calibration = MemoryCalibration(defaults: defaults)
-            #expect(calibration.ceilingBytes == nil, "nothing has been learned yet")
+            #expect(calibration.hasProvenLoad == false, "nothing has been learned yet")
 
             let budget = DeviceBudget(
                 physicalMemoryBytes: 6 * gigabyte,
                 hasIncreasedMemoryLimit: false,
-                calibratedCeilingBytes: calibration.ceilingBytes
+                provenLoadBytes: calibration.largestSuccessfulLoadBytes
             )
-            #expect(budget.isCalibrated == false)
+            #expect(budget.isProven == false)
             #expect(budget.usableBytes == Int64(Double(6 * gigabyte) * 0.45))
 
             // And the fallback has to be usable, not merely non-crashing: the
@@ -126,29 +133,42 @@ struct MemoryCalibrationTests {
         }
     }
 
-    @Test("the calibrated ceiling wins even when it is lower than the guess")
-    func calibrationBeatsTheFraction() {
+    // Was "the calibrated ceiling wins even when it is lower than the guess",
+    // which is the bug written down as a requirement. A model loading here is
+    // evidence about the floor and none at all about the ceiling: SmolLM2 360M
+    // loading proves this phone holds 684 MB, not that it holds no more than
+    // 684 MB. Believing the latter is what made every row on the Models screen
+    // read "Too large" after one small download.
+    @Test("a proven load widens the budget and can never narrow it")
+    func proofIsAFloor() {
         let fraction = Int64(Double(6 * gigabyte) * 0.58)
-        let measured = fraction - gigabyte
 
-        let budget = DeviceBudget(
+        let small = DeviceBudget(
             physicalMemoryBytes: 6 * gigabyte,
             hasIncreasedMemoryLimit: true,
-            calibratedCeilingBytes: measured
+            provenLoadBytes: 683_826_592
         )
-        #expect(budget.isCalibrated)
-        #expect(budget.usableBytes == measured,
-                "preferring whichever is larger would reinstate the guess on exactly the devices it was too generous for")
+        #expect(small.isProven)
+        #expect(small.usableBytes == fraction,
+                "the size of the last model loaded is not this phone's ceiling")
+
+        let big = DeviceBudget(
+            physicalMemoryBytes: 6 * gigabyte,
+            hasIncreasedMemoryLimit: true,
+            provenLoadBytes: fraction + gigabyte
+        )
+        #expect(big.usableBytes == fraction + gigabyte,
+                "a load that actually happened outranks the fraction that said it could not")
     }
 
-    @Test("no calibration can invent memory the machine does not have")
+    @Test("no proof can invent memory the machine does not have")
     func cappedAtPhysicalMemory() {
         // What an overstated catalogue size looks like once it has been
         // recorded as a proof: this project has shipped one out by 1.3 GB.
         let budget = DeviceBudget(
             physicalMemoryBytes: 6 * gigabyte,
             hasIncreasedMemoryLimit: true,
-            calibratedCeilingBytes: 40 * gigabyte
+            provenLoadBytes: 40 * gigabyte
         )
         #expect(budget.usableBytes == 6 * gigabyte)
     }
@@ -171,29 +191,40 @@ struct MemoryCalibrationTests {
             // now demonstrated it can hold this, so refusing it is a lie.
             budget.recordSuccessfulLoad(of: model, calibration: calibration)
 
-            #expect(budget.isCalibrated)
+            #expect(budget.isProven)
             #expect(budget.fit(for: model) != .willNotFit)
             #expect(calibration.largestSuccessfulLoadBytes != nil)
         }
     }
 
-    @Test("a clean-state reading folds into the budget in place")
-    func recordingAReading() {
+    // Was "a clean-state reading folds into the budget in place", which asserted
+    // that `usableBytes` tracked `os_proc_available_memory()`. It is the bug:
+    // the reading falls by the size of whatever is resident, so the budget fell
+    // with it and the app refused models it was already running. The reading now
+    // lands in `pressure`, where dropping is the entire point.
+    @Test("a live reading moves the pressure signal and not the budget")
+    func readingsDoNotMoveTheBudget() {
         withDefaults { defaults in
             let calibration = MemoryCalibration(defaults: defaults)
             var budget = DeviceBudget(physicalMemoryBytes: 8 * gigabyte, hasIncreasedMemoryLimit: false)
-            #expect(budget.isCalibrated == false)
+            let fraction = budget.usableBytes
+            #expect(budget.pressure == .unknown, "no reading yet")
 
             budget.recordCleanStateMemory(.fixed(5 * gigabyte), calibration: calibration)
-            #expect(budget.usableBytes == 5 * gigabyte - MemoryCalibration.loadReserveBytes)
+            #expect(budget.usableBytes == fraction)
+            #expect(budget.pressure == .easy)
+            #expect(budget.headroomNowBytes == 5 * gigabyte)
 
-            // A later, worse moment must not narrow it.
-            budget.recordCleanStateMemory(.fixed(gigabyte), calibration: calibration)
-            #expect(budget.usableBytes == 5 * gigabyte - MemoryCalibration.loadReserveBytes)
+            // The moment a model is resident. The whole screen used to move here.
+            budget.refreshHeadroom(.fixed(120 * 1024 * 1024))
+            #expect(budget.usableBytes == fraction)
+            #expect(budget.pressure == .critical)
+            #expect(budget.pressure.suggestsUnloading)
+            #expect(budget.pressure.message != nil, "pressure has its own words")
         }
     }
 
-    @Test("current() takes a launch reading and carries forward what was learned")
+    @Test("current() takes a launch reading and carries forward what was proven")
     func currentReadsAtLaunch() {
         withDefaults { defaults in
             let calibration = MemoryCalibration(defaults: defaults)
@@ -206,15 +237,14 @@ struct MemoryCalibrationTests {
             )
 
             #expect(calibration.availableMemoryCeilingBytes == 3 * gigabyte,
-                    "launch is the cleanest this process gets; the reading is worth taking there")
-            #expect(budget.isCalibrated)
-            // 3 GB observed minus the reserve is below the 2 GB proof, so the
-            // proof is what the ceiling reports.
-            #expect(budget.calibratedCeilingBytes == max(2 * gigabyte, 3 * gigabyte - MemoryCalibration.loadReserveBytes))
+                    "launch is the cleanest this process gets; the reading is worth keeping there")
+            #expect(budget.isProven)
+            #expect(budget.provenLoadBytes == 2 * gigabyte, "the proof, alone and unmixed")
+            #expect(budget.headroomNowBytes == 3 * gigabyte, "the reading, alone and unmixed")
         }
     }
 
-    @Test("a device that cannot answer produces no calibration at all")
+    @Test("a device that cannot answer still has a budget")
     func noReadingLeavesTheFallbackInPlace() {
         withDefaults { defaults in
             let calibration = MemoryCalibration(defaults: defaults)
@@ -223,7 +253,8 @@ struct MemoryCalibrationTests {
                 calibration: calibration,
                 available: .unavailable
             )
-            #expect(budget.isCalibrated == false)
+            #expect(budget.isProven == false)
+            #expect(budget.pressure == .unknown)
             #expect(budget.usableBytes == Int64(Double(budget.physicalMemoryBytes) * 0.58))
         }
     }
@@ -246,7 +277,43 @@ struct MemoryCalibrationTests {
             calibration.recordSuccessfulLoad(estimatedBytes: 3 * gigabyte)
             calibration.recordAvailableMemory(4 * gigabyte)
             calibration.forget()
-            #expect(calibration.ceilingBytes == nil)
+            #expect(calibration.largestSuccessfulLoadBytes == nil)
+            #expect(calibration.availableMemoryCeilingBytes == nil)
+        }
+    }
+
+    // MARK: The bug the audit found
+
+    /// The whole point, stated once: loading a model must not change what the
+    /// app says about any model, including that one.
+    ///
+    /// What was on screen: "Usable memory 15.46 GB, everything Fits" on a fresh
+    /// launch, then "683.8 MB usable, everything Too large" after one model —
+    /// including the model that was at that moment loaded and answering. 683.8
+    /// MB is SmolLM2 360M's own estimate, which had been recorded as a proof
+    /// and then read as a ceiling.
+    @Test("loading a model changes no model's verdict, least of all its own")
+    func loadingDoesNotMoveAnyVerdict() throws {
+        try withDefaults { defaults in
+            let calibration = MemoryCalibration(defaults: defaults)
+            var budget = DeviceBudget(
+                physicalMemoryBytes: 6 * gigabyte,
+                hasIncreasedMemoryLimit: false,
+                environment: .device
+            )
+            let before = ModelCatalog.all.map { budget.fit(for: $0) }
+
+            let loaded = try #require(ModelCatalog.model(withID: "smollm2-360m"))
+            #expect(budget.fit(for: loaded) == .comfortable)
+            budget.recordSuccessfulLoad(of: loaded, calibration: calibration)
+            // And the phone is now genuinely short of memory, which is true and
+            // is not a fact about whether any model fits.
+            budget.refreshHeadroom(.fixed(180 * 1024 * 1024))
+
+            #expect(ModelCatalog.all.map { budget.fit(for: $0) } == before,
+                    "the resident model's own footprint must not count against itself, or anything else")
+            #expect(budget.fit(for: loaded) == .comfortable)
+            #expect(budget.pressure == .critical, "the pressure signal is where this belongs")
         }
     }
 }
