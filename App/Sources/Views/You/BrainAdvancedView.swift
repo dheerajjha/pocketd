@@ -120,8 +120,19 @@ struct BrainAdvancedView: View {
             RowDivider(inset: 0)
             ValueRow(
                 title: "Ceiling",
-                value: model.budget.isCalibrated ? "Measured on this device" : "Estimated"
+                // "Proven" is not a synonym for "estimated": it means a model
+                // of that size has actually loaded here, which is the only
+                // measurement this app ever gets.
+                value: model.budget.isProven ? "Proven by a real load" : "Estimated"
             )
+            if let note = model.budget.environmentNote {
+                Text(note)
+                    .font(Font.pd.footnote)
+                    .foregroundStyle(Color.pd.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, PDSpacing.s)
+            }
         }
     }
 
