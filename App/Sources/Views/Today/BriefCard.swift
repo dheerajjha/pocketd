@@ -166,6 +166,12 @@ struct BriefCard: View {
                     navigator.openYou(.brain)
                 }
             }
+        } else if BrainUpgrade.cannotReadYourDay(model) {
+            // The brief itself is safe — the day is written into the prompt,
+            // so no tool is needed to produce it — but every chip under this
+            // card hands a question to a brain that cannot look anything up,
+            // and this card is where the way out already lives.
+            BrainUpgradeCallout()
         }
     }
 

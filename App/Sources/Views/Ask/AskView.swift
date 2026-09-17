@@ -29,6 +29,7 @@ struct AskView: View {
             AskBrainChip(
                 name: model.loadedModelID == nil ? nil : model.loadedModelName,
                 isLoading: model.isLoadingModel,
+                readsYourDay: !BrainUpgrade.cannotReadYourDay(model),
                 onChoose: { navigator.openYou(.brain) }
             )
 

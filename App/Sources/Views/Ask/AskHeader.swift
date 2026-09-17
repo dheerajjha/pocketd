@@ -41,19 +41,33 @@ struct AskHeader: View {
 /// all, and what to do if there is not. So the state is first — ready, loading,
 /// missing — and the real name sits beside it for the one person in fifty who
 /// wants it.
+///
+/// "Ready" is a claim, and there is a fourth state where it is not true. A
+/// brain that cannot work a tool will answer every one of the four suggestions
+/// under this chip — what is on tomorrow, what is overdue, how you slept —
+/// confidently and from nothing. It gets the amber dot and says so.
 struct AskBrainChip: View {
     let name: String?
     let isLoading: Bool
+    /// Whether the resident brain is being given the calendar, reminders and
+    /// health tools. Ignored while nothing is resident.
+    var readsYourDay: Bool = true
     let onChoose: () -> Void
 
     private var dot: Color {
-        if name != nil { return .pd.positive }
+        if name != nil { return readsYourDay ? .pd.positive : .pd.caution }
         return isLoading ? .pd.caution : .pd.inkTertiary
     }
 
     private var text: String {
-        if let name { return "\(name) · ready" }
+        if let name { return readsYourDay ? "\(name) · ready" : "\(name) · cannot read your day" }
         return isLoading ? "Loading brain…" : "No brain"
+    }
+
+    /// Whether the chip carries its own way out.
+    private var action: String? {
+        if name == nil { return isLoading ? nil : "Choose" }
+        return readsYourDay ? nil : "Change"
     }
 
     var body: some View {
@@ -66,9 +80,9 @@ struct AskBrainChip: View {
                 .foregroundStyle(Color.pd.inkSecondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
-            if name == nil, !isLoading {
+            if let action {
                 Button(action: onChoose) {
-                    Text("Choose")
+                    Text(action)
                         .font(Font.pd.caption.weight(.semibold))
                         .foregroundStyle(Color.pd.accent)
                 }
@@ -88,6 +102,7 @@ struct AskBrainChip: View {
     VStack(spacing: PDSpacing.m) {
         AskHeader(onHistory: {}, onNew: {})
         AskBrainChip(name: "Qwen3 1.7B", isLoading: false, onChoose: {})
+        AskBrainChip(name: "SmolLM2 360M", isLoading: false, readsYourDay: false, onChoose: {})
         AskBrainChip(name: nil, isLoading: true, onChoose: {})
         AskBrainChip(name: nil, isLoading: false, onChoose: {})
     }
@@ -99,6 +114,7 @@ struct AskBrainChip: View {
     VStack(spacing: PDSpacing.m) {
         AskHeader(onHistory: {}, onNew: {})
         AskBrainChip(name: "Qwen3 1.7B", isLoading: false, onChoose: {})
+        AskBrainChip(name: "SmolLM2 360M", isLoading: false, readsYourDay: false, onChoose: {})
         AskBrainChip(name: nil, isLoading: false, onChoose: {})
     }
     .padding(.vertical, PDSpacing.xl)

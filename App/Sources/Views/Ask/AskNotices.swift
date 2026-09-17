@@ -50,6 +50,14 @@ struct AskNotices: View {
                 Callout(symbol: "moon.zzz", text: notice) {
                     dismiss("OK") { model.dismissOffloadNotice() }
                 }
+            } else if BrainUpgrade.cannotReadYourDay(model), !silenced.contains(Self.toollessKey) {
+                // Ahead of `capabilityWarning`, and instead of it. The Kit's
+                // sentence for this case is Settings wording — "nothing is
+                // registered and no context is spent on them. A 3B model or
+                // larger can" — and it was the only warning on the one screen
+                // where the consequence is visible: four suggestion chips that
+                // this brain will answer out of thin air.
+                BrainUpgradeCallout { silenced.insert(Self.toollessKey) }
             } else if let capability = capabilityWarning {
                 Callout(symbol: "lightbulb", text: capability) {
                     dismiss("OK") { silenced.insert(capability) }
@@ -60,6 +68,11 @@ struct AskNotices: View {
         .animation(PDMotion.gentle, value: model.generationError)
         .animation(PDMotion.gentle, value: model.pendingToolOffer)
     }
+
+    /// The silencing key for the toolless-brain callout. A constant rather than
+    /// the sentence, because the sentence carries the brain's name and swapping
+    /// brains must bring the warning back.
+    private static let toollessKey = "pd.notice.toolless"
 
     /// Only the ones the reader can do something about.
     ///
