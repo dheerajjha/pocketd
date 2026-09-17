@@ -97,6 +97,9 @@ public enum OnboardingDestination: String, Sendable, CaseIterable {
     case chat
     case server
     case models
+    /// Where v2's intro ends. The three above are v1's destinations and are
+    /// kept so that a funnel spanning both versions still reads.
+    case today
 }
 
 /// Which screen of the intro was reached.
