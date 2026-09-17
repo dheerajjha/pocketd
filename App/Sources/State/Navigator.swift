@@ -53,6 +53,9 @@ enum YouRoute: Hashable {
     case brain
     /// Hugging Face search, one level below Brain.
     case addBrain
+    /// The technical detail behind Brain — quantisation, context, speed,
+    /// sampling. One of the two screens where the jargon is allowed out.
+    case brainAdvanced
     /// The LAN server, under what it is for rather than what it is.
     case devices
     case deskMode
@@ -75,19 +78,15 @@ extension YouRoute: Identifiable {
     /// by tapping "Brain" in the simulator; it takes the whole process down,
     /// not just the screen.
     ///
-    /// So those five are presented instead of pushed, and `Navigator` decides
-    /// which is which rather than every caller remembering. Each one goes back
-    /// to being a push the moment its own workstream removes the inner stack —
-    /// delete the case from this list and the row becomes a `NavigationLink`
-    /// again.
-    var bringsOwnNavigationStack: Bool {
-        switch self {
-        case .brain, .addBrain, .devices, .privacy, .settings:
-            true
-        case .deskMode, .diagnostics:
-            false
-        }
-    }
+    /// So those five were presented instead of pushed, and `Navigator` decided
+    /// which is which rather than every caller remembering.
+    ///
+    /// Every one of them is now a rebuilt screen with no inner stack, so this
+    /// is `false` everywhere and every route is a push again. Kept as a
+    /// property rather than deleted because it is the only place the trap is
+    /// written down, and the next screen that arrives wearing its own
+    /// `NavigationStack` needs somewhere to say so.
+    var bringsOwnNavigationStack: Bool { false }
 }
 
 /// A question handed from one tab to another.

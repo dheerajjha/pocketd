@@ -107,6 +107,7 @@ private struct Shell: View {
             switch link {
             case .today: navigator.go(.today)
             case .ask: navigator.go(.ask)
+            case .you: navigator.go(.you)
             }
         }
         // The seam between `Navigator.ask(_:send:)` and the chat screen, which
@@ -218,19 +219,17 @@ private struct YouTab: View {
         @Bindable var navigation = navigator
 
         NavigationStack(path: $navigation.youPath) {
-            YouPlaceholderView()
+            YouView()
                 .navigationDestination(for: YouRoute.self) { route in
                     YouRouteView(route: route)
                 }
         }
-        // The five screens that still carry a `NavigationStack` of their own.
-        // Presented rather than pushed, because pushing one takes the process
-        // down — see `YouRoute.bringsOwnNavigationStack`.
+        // Nothing sets this any more: every screen under You is rebuilt and
+        // pushes cleanly, so `YouRoute.bringsOwnNavigationStack` is false
+        // everywhere. Kept wired up so the escape hatch still works the day a
+        // screen arrives carrying its own stack.
         .sheet(item: $navigation.youSheet) { route in
             YouRouteView(route: route)
-                // Three of the five have no Done button of their own — they
-                // were tabs. The grabber is what says "pull this down" to
-                // somebody who would otherwise be stuck looking at Models.
                 .presentationDragIndicator(.visible)
         }
     }
