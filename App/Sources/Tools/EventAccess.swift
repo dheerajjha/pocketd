@@ -375,6 +375,7 @@ actor EventAccess {
         event.title = new.title
         event.startDate = new.start
         event.endDate = new.end
+        event.location = new.location
         event.calendar = calendar
         if let repeats = new.repeats {
             event.recurrenceRules = [Self.rule(for: repeats)]

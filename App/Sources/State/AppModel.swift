@@ -479,6 +479,10 @@ final class AppModel {
     }
 
     func bootstrap() async {
+        #if DEBUG
+        await DemoSeed.runIfRequested()
+        #endif
+
         // Before anything else that could fail: the review gate needs to know
         // how long this install has existed, and an app that crashes on launch
         // is exactly the one that must not ask for a rating tomorrow.
