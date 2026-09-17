@@ -311,7 +311,10 @@ struct DevicesView: View {
     var body: some View {
         YouDetailScreen(
             title: "Other devices",
-            subtitle: "A laptop or a tablet on this Wi-Fi can send questions to the brain on this phone. It speaks the two APIs those clients already know, so nothing has to be written for it."
+            // "It speaks the two APIs those clients already know" was the first
+            // wording, and API is on the list of words this screen may not use
+            // — only the setup guide behind it may.
+            subtitle: "A laptop or a tablet on this Wi-Fi can send questions to the brain on this phone. Chat apps that already run on those devices can talk to it as they are."
         ) {
             OtherDevicesSection(title: "ON THIS WI-FI")
 
