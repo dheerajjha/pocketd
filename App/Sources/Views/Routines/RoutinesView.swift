@@ -343,7 +343,7 @@ struct RoutinesView: View {
         }
     }
 
-    private func setEnabled(_ enabled: Bool, _ task: ScheduledTask, now: Date = Date()) async {
+    private func setEnabled(_ enabled: Bool, _ task: ScheduledTask, now: Date = DemoClock.now) async {
         var updated = task
         updated.isEnabled = enabled
         if enabled {
@@ -633,11 +633,11 @@ enum RoutinePreviewData {
     }
 
     static var morningBrief: ScheduledTask {
-        var task = RoutineTemplate.morningBrief.task(now: Date().addingTimeInterval(-86_400 * 6))
+        var task = RoutineTemplate.morningBrief.task(now: DemoClock.now.addingTimeInterval(-86_400 * 6))
         task.runs = [
             .reported(
-                firing: Date().addingTimeInterval(-86_400 - 3_600),
-                ranAt: Date().addingTimeInterval(-86_400 - 3_000),
+                firing: DemoClock.now.addingTimeInterval(-86_400 - 3_600),
+                ranAt: DemoClock.now.addingTimeInterval(-86_400 - 3_000),
                 context: .notificationResponse,
                 output: Untrusted(
                     """
@@ -648,8 +648,8 @@ enum RoutinePreviewData {
                 )
             ),
             .reported(
-                firing: Date().addingTimeInterval(-3_600 * 5),
-                ranAt: Date().addingTimeInterval(-3_600 * 4),
+                firing: DemoClock.now.addingTimeInterval(-3_600 * 5),
+                ranAt: DemoClock.now.addingTimeInterval(-3_600 * 4),
                 context: .deskMode,
                 output: Untrusted(
                     """
@@ -664,16 +664,16 @@ enum RoutinePreviewData {
     }
 
     static var overdueWatcher: ScheduledTask {
-        var task = RoutineTemplate.overdueWatcher.task(now: Date().addingTimeInterval(-86_400 * 3))
+        var task = RoutineTemplate.overdueWatcher.task(now: DemoClock.now.addingTimeInterval(-86_400 * 3))
         task.runs = [
             .nothingToReport(
-                firing: Date().addingTimeInterval(-86_400),
-                ranAt: Date().addingTimeInterval(-86_400),
+                firing: DemoClock.now.addingTimeInterval(-86_400),
+                ranAt: DemoClock.now.addingTimeInterval(-86_400),
                 context: .backgroundRefresh
             ),
             .reported(
-                firing: Date().addingTimeInterval(-3_600 * 9),
-                ranAt: Date().addingTimeInterval(-3_600 * 9),
+                firing: DemoClock.now.addingTimeInterval(-3_600 * 9),
+                ranAt: DemoClock.now.addingTimeInterval(-3_600 * 9),
                 context: .backgroundRefresh,
                 output: Untrusted("2 overdue\nSend the signed lease — due Friday\nBook the dentist — due 4 September")
             ),

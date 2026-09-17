@@ -132,7 +132,7 @@ struct AskTranscript: View {
     private func stampArrivals(upTo count: Int, grownFrom previous: Int) {
         guard count - previous <= 2 else { return }
         for index in 0..<count where arrived[index] == nil {
-            arrived[index] = .now
+            arrived[index] = DemoClock.now
         }
     }
 

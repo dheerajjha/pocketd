@@ -12,7 +12,7 @@ enum ScheduleSummary {
 
     /// The next firing across every task, or `nil` when nothing will fire again
     /// — every task paused, or every recurrence spent.
-    static func nextFiring(in tasks: [ScheduledTask], now: Date = Date()) -> Date? {
+    static func nextFiring(in tasks: [ScheduledTask], now: Date = DemoClock.now) -> Date? {
         tasks.compactMap { $0.dueness(now: now).next }.min()
     }
 
@@ -22,7 +22,7 @@ enum ScheduleSummary {
     /// `ScheduledTask.pendingRun` is what decides whether one is still worth
     /// collecting — a daily task's uncollected 07:00 lapses when tomorrow's
     /// arrives — so this is a filter and not a judgement of its own.
-    static func pending(in tasks: [ScheduledTask], now: Date = Date()) -> [(task: ScheduledTask, run: TaskRun)] {
+    static func pending(in tasks: [ScheduledTask], now: Date = DemoClock.now) -> [(task: ScheduledTask, run: TaskRun)] {
         tasks.compactMap { task in
             task.pendingRun(now: now).map { (task, $0) }
         }
@@ -122,7 +122,7 @@ enum ScheduleWords {
     /// is whether it has happened yet. Anything further out gets the same format
     /// the watcher's own report lines use, so a notification and this screen
     /// never disagree about how a date looks.
-    static func when(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+    static func when(_ date: Date, now: Date = DemoClock.now, calendar: Calendar = .current) -> String {
         let time = date.formatted(
             Date.FormatStyle(calendar: calendar, timeZone: calendar.timeZone).hour().minute()
         )
@@ -143,7 +143,7 @@ enum ScheduleWords {
     }
 
     /// A firing as a day alone, for a line that has already said the time.
-    static func day(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+    static func day(_ date: Date, now: Date = DemoClock.now, calendar: Calendar = .current) -> String {
         if calendar.isDate(date, inSameDayAs: now) { return "today" }
         if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now),
            calendar.isDate(date, inSameDayAs: tomorrow) {
@@ -345,7 +345,7 @@ extension ScheduleWords {
     /// Uppercased here rather than by the label that draws it, so the spoken
     /// form below can keep readable casing — the same argument `SectionLabel`
     /// makes about shouting at VoiceOver.
-    static func nextLabel(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+    static func nextLabel(_ date: Date, now: Date = DemoClock.now, calendar: Calendar = .current) -> String {
         let seconds = date.timeIntervalSince(now)
         if seconds < 60 { return "ANY MOMENT" }
         if seconds < 3600 {
@@ -376,7 +376,7 @@ extension ScheduleWords {
     }
 
     /// What a screen reader says instead of the shouted form above.
-    static func nextSpoken(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+    static func nextSpoken(_ date: Date, now: Date = DemoClock.now, calendar: Calendar = .current) -> String {
         "Next \(when(date, now: now, calendar: calendar))"
     }
 

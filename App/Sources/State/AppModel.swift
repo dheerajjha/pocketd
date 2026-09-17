@@ -593,6 +593,9 @@ final class AppModel {
         }
 
         await loadScheduledTasks()
+        #if DEBUG
+        await seedDemoRoutinesIfRequested()
+        #endif
         // Swept here rather than left to the scene phase, because there is no
         // scene-phase change to hang a cold launch on: SwiftUI's
         // `onChange(of:)` does not fire for the value a scene already has, so an
@@ -1318,6 +1321,22 @@ final class AppModel {
     /// point of it — and a schedule view reading a snapshot taken at launch
     /// would show this morning's briefing as never having run.
     private(set) var scheduledTasks: [ScheduledTask] = []
+
+    #if DEBUG
+    /// `-pocketd.demoRoutines`: two routines with a run history, for store
+    /// captures. A simulator cannot run a routine — the brain never fires there —
+    /// so the only way to photograph a result is to write one. Saved straight
+    /// through the store rather than `saveScheduledTask`, which would put the
+    /// notification permission sheet in the middle of a capture.
+    func seedDemoRoutinesIfRequested() async {
+        guard ProcessInfo.processInfo.arguments.contains("-pocketd.demoRoutines") else { return }
+        let existing = Set(scheduledTasks.map(\.title))
+        for task in RoutinePreviewData.tasks where !existing.contains(task.title) {
+            try? await tasks.save(task)
+        }
+        await loadScheduledTasks()
+    }
+    #endif
 
     func loadScheduledTasks() async {
         scheduledTasks = await tasks.all()

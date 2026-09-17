@@ -58,7 +58,7 @@ enum AskPreviewChat {
         messages.append(.user("What's on tomorrow?"))
         messages.append(ChatMessage(
             role: .assistant,
-            content: "Three things tomorrow, and the afternoon is the busy half.",
+            content: "Two things tomorrow: the design review at ten, then yoga at half past six.",
             cards: [calendarCard()].compactMap { $0 }
         ))
         messages.append(.user("Anything overdue?"))
@@ -86,30 +86,24 @@ enum AskPreviewChat {
     // MARK: - The three read shapes
 
     private static func calendarCard() -> AnswerCard? {
-        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: DemoClock.now) ?? DemoClock.now
         func at(_ hour: Int, _ minute: Int) -> Date {
             Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: tomorrow) ?? tomorrow
         }
+        // The same two events `DemoSeed` puts in tomorrow, so that a capture of
+        // this card and a capture of the Today tiles describe one calendar.
         let events: [[String: any Sendable]] = [
             [
-                "title": "Standup",
+                "title": "Design review",
                 "all_day": false,
-                "start": PersonalDataFormat.moment(at(9, 30)),
-                "end": PersonalDataFormat.moment(at(9, 45)),
+                "start": PersonalDataFormat.moment(at(10, 0)),
+                "end": PersonalDataFormat.moment(at(11, 0)),
             ],
             [
-                "title": "Design review with the platform team",
+                "title": "Yoga",
                 "all_day": false,
-                "start": PersonalDataFormat.moment(at(14, 30)),
-                "end": PersonalDataFormat.moment(at(15, 30)),
-                "location": "Conference room B",
-            ],
-            [
-                "title": "Dentist",
-                "all_day": false,
-                "start": PersonalDataFormat.moment(at(16, 0)),
-                "end": PersonalDataFormat.moment(at(16, 45)),
-                "location": "Marine Drive",
+                "start": PersonalDataFormat.moment(at(18, 30)),
+                "end": PersonalDataFormat.moment(at(20, 0)),
             ],
         ]
         let payload: [String: any Sendable] = ["events": events]
@@ -123,16 +117,30 @@ enum AskPreviewChat {
     /// ever report "I could not find that" — a demonstration of the failure path
     /// dressed up as the feature. With the seeded names they work.
     private static func remindersCard() -> AnswerCard? {
+        // Due dates relative to the demo clock, matching `DemoSeed`: expenses
+        // slipped yesterday evening, the plumber is today at five, the passport
+        // is tomorrow morning.
         let rows: [[String: any Sendable]] = [
-            ["title": "Submit expenses", "due": "Wed 17 Sep, 18:00", "priority": 1],
-            ["title": "Call the plumber", "due": "Thu 18 Sep, 17:00"],
-            ["title": "Renew passport", "due": "Fri 19 Sep, 09:00"],
+            ["title": "Submit expenses", "due": due(dayOffset: -1, hour: 18), "priority": 1],
+            ["title": "Call the plumber", "due": due(dayOffset: 0, hour: 17)],
+            ["title": "Renew passport", "due": due(dayOffset: 1, hour: 9)],
         ]
         let payload: [String: any Sendable] = [
             "reminders": rows,
             "priority_scale": "1 is highest, 9 is lowest",
         ]
         return AnswerCardBuilders.reminders(#"{"action":"list","filter":"overdue"}"#, payload)
+    }
+
+    /// "Thu 18 Sep, 17:00" for a day relative to the demo clock.
+    private static func due(dayOffset: Int, hour: Int, minute: Int = 0) -> String {
+        let calendar = Calendar.current
+        let day = calendar.date(byAdding: .day, value: dayOffset, to: DemoClock.now) ?? DemoClock.now
+        let moment = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day) ?? day
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_GB")
+        formatter.dateFormat = "EEE d MMM, HH:mm"
+        return formatter.string(from: moment)
     }
 
     private static func healthCard() -> AnswerCard? {
