@@ -751,6 +751,12 @@ final class AppModel {
 
     func fit(for model: ModelRecord) -> DeviceBudget.Fit { budget.fit(for: model) }
 
+    /// How much room there is *right now*, which is a different question from
+    /// `fit(for:)` and has its own words. Never draw a fit badge from this: it
+    /// drops by the size of whatever is resident, so a badge that read it would
+    /// call the running model too large to run.
+    var memoryPressure: DeviceBudget.Pressure { budget.pressure }
+
     func isInstalled(_ model: ModelRecord) -> Bool {
         installed.contains { $0.id == model.id }
     }
@@ -1073,6 +1079,11 @@ final class AppModel {
             // prediction — it is a measurement of what this device tolerates.
             // Recording it is what makes the next verdict better than a guess.
             budget.recordSuccessfulLoad(of: model)
+            // And take a live reading while the model is resident, which is the
+            // only moment the pressure signal is worth anything. It moves
+            // `budget.pressure` and deliberately nothing else — the fit badges
+            // on the Models tab do not shift because a model loaded.
+            budget.refreshHeadroom()
             await store.updateBudget(budget)
             if remember { UserDefaults.standard.set(model.id, forKey: Keys.loadedModel) }
         } catch {

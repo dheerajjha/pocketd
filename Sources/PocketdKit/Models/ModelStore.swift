@@ -311,7 +311,9 @@ public actor ModelStore {
             let remaining = (transfersInFlight[model.id] ?? 1) - 1
             transfersInFlight[model.id] = remaining > 0 ? remaining : nil
         }
-        guard allowingOversized || budget.fit(for: model).allowsDownload else {
+        // `needsOverride` is the other half of this: the only way past the gate
+        // is the dialog that shows both numbers, which is what sets the flag.
+        guard allowingOversized || budget.fit(for: model).isDownloadable else {
             throw ModelStoreError.insufficientMemory(model: model.id)
         }
         try checkDiskSpace(for: model)
