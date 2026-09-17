@@ -113,7 +113,7 @@ struct AnalyticsTaxonomyTests {
             // user's name.
             + OnboardingStep.allCases.map(\.rawValue)
             + BriefSource.allCases.map(\.rawValue)
-            + RoutineTemplate.allCases.map(\.rawValue)
+            + RoutineOrigin.allCases.map(\.rawValue)
             + TodayTile.allCases.map(\.rawValue) {
             #expect(raw.count <= 24, "'\(raw)' is long enough to be carrying a message")
             #expect(raw.allSatisfy { $0.isLowercase || $0 == "_" || $0.isNumber })

@@ -130,17 +130,24 @@ public enum BriefSource: String, Sendable, CaseIterable {
     case manual
 }
 
-/// Which routine somebody actually created.
+/// Where a routine came from.
 ///
 /// The templates exist because "create a scheduled task" is an empty form and
 /// nobody fills in an empty form. `custom` is the control: if it dominates, the
 /// templates are wrong, and if it is near zero, the grid is the feature.
-public enum RoutineTemplate: String, Sendable, CaseIterable {
+///
+/// Named for the question rather than for the thing, because `custom` is not a
+/// template and because the Routines feature has a `RoutineTemplate` of its own
+/// that builds real `ScheduledTask`s. That one is the domain; this is a bounded
+/// wire value with snake_case raw strings and one extra case, and the two would
+/// drift the moment either grew a case the other should not have.
+public enum RoutineOrigin: String, Sendable, CaseIterable {
     case morningBrief = "morning_brief"
     case eveningWrapUp = "evening_wrap_up"
     case weeklyReview = "weekly_review"
     case overdueWatcher = "overdue_watcher"
     case sleepWatcher = "sleep_watcher"
+    /// Built from the empty form rather than from a card.
     case custom
 }
 
@@ -274,7 +281,7 @@ public enum AnalyticsEvent: Sendable, Equatable {
     case answerFeedback(positive: Bool)
 
     /// A routine was created, from which template.
-    case routineCreated(template: RoutineTemplate)
+    case routineCreated(template: RoutineOrigin)
 
     /// One of Today's four tiles was tapped.
     case todayTileTapped(tile: TodayTile)
