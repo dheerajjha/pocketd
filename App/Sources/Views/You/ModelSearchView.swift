@@ -37,6 +37,13 @@ struct ModelSearchView: View {
         .task(id: SearchKey(query: query, attempt: attempt)) {
             await finder.search(query)
         }
+        #if DEBUG
+        .onAppear {
+            // A screenshot run arrives with something already typed. See
+            // `YouStage`; both this and the type are inside `#if DEBUG`.
+            if let staged = YouStage.searchQuery, query.isEmpty { query = staged }
+        }
+        #endif
         .sheet(item: $chosen) { repository in
             RepositoryFilesView(repository: repository) { record, allowingOversized in
                 model.download(record, allowingOversized: allowingOversized)

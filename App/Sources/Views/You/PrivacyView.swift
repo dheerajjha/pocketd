@@ -364,7 +364,7 @@ struct PrivacyView: View {
         ) {
             if model.configuration.requiresAuth {
                 apiKeyRow
-                NavRow(symbol: "doc.on.doc", title: "Copy the key", detail: nil) {
+                ActionRow(symbol: "doc.on.doc", title: "Copy the key", detail: nil) {
                     UIPasteboard.general.string = model.configuration.apiKey
                     toasts.show("Key copied")
                 }

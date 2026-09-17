@@ -26,10 +26,7 @@ struct BrainView: View {
         ) {
             if let notice = model.offloadNotice {
                 Callout(symbol: "memorychip", text: notice, tint: .pd.positive, fill: .pd.positiveSoft) {
-                    HStack {
-                        Spacer(minLength: 0)
-                        SecondaryLink("OK") { model.dismissOffloadNotice() }
-                    }
+                    InlineLink("OK") { model.dismissOffloadNotice() }
                 }
             }
 
@@ -302,7 +299,7 @@ struct BrainView: View {
                         .minimumScaleFactor(0.7)
                 }
             }
-            SecondaryLink("Cancel") { model.cancelDownload(record) }
+            InlineLink("Cancel") { model.cancelDownload(record) }
         }
         .padding(.top, PDSpacing.xxs)
         .accessibilityElement(children: .combine)
@@ -320,7 +317,7 @@ struct BrainView: View {
                     .font(Font.pd.footnote)
                     .foregroundStyle(Color.pd.caution)
                     .fixedSize(horizontal: false, vertical: true)
-                SecondaryLink("Throw away what arrived") {
+                InlineLink("Throw away what arrived") {
                     Task { await model.discardPartialDownload(record) }
                 }
             }
@@ -330,7 +327,7 @@ struct BrainView: View {
                     .font(Font.pd.footnote)
                     .foregroundStyle(Color.pd.danger)
                     .fixedSize(horizontal: false, vertical: true)
-                SecondaryLink("Dismiss") { model.clearTransfer(transfer.id) }
+                InlineLink("Dismiss") { model.clearTransfer(transfer.id) }
             }
         case .stopping:
             Text("Stopping — checking what can be kept…")

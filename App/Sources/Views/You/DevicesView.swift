@@ -22,10 +22,15 @@ struct OtherDevicesSection: View {
     /// section is a summary, and a request log is the opposite of one.
     var showsRequests = true
 
+    /// The mono label. Different on the pushed screen, whose own title is
+    /// already "Other devices" — a label repeating the heading two lines above
+    /// it is the sort of thing nobody notices and everybody feels.
+    var title = "OTHER DEVICES"
+
     @State private var requestsExpanded = false
 
     var body: some View {
-        YouSection("OTHER DEVICES", footnote: footnote) {
+        YouSection(title, footnote: footnote) {
             toggleRow
 
             if model.serverState.isRunning {
@@ -95,12 +100,12 @@ struct OtherDevicesSection: View {
     private var toggleDetail: String {
         switch model.serverState {
         case .starting: "Starting…"
-        case .running: "Anything on this Wi-Fi can reach it. Turning this off stops them working until you turn it back on."
+        case .running: "Anything on this Wi-Fi can reach it"
         case .failed: "It could not start."
         case .stopped:
             model.loadedModelID == nil
-                ? "Choose a brain first — there would be nothing to serve."
-                : "Off. Nothing else on your network can reach this phone."
+                ? "Choose a brain first — there would be nothing to serve"
+                : "Off. Nothing else on your network can reach this phone"
         }
     }
 
@@ -172,9 +177,15 @@ struct OtherDevicesSection: View {
                             .accessibilityLabel("No pairing code open")
                     }
                     Spacer(minLength: 0)
-                    SecondaryLink("New code") {
+                    Button {
+                        Haptics.tap()
                         Task { await model.newPairingCode() }
+                    } label: {
+                        Text("New code")
+                            .font(Font.pd.secondary.weight(.semibold))
+                            .foregroundStyle(Color.pd.accent)
                     }
+                    .buttonStyle(.plain)
                 }
                 expiry
             }
@@ -302,7 +313,7 @@ struct DevicesView: View {
             title: "Other devices",
             subtitle: "A laptop or a tablet on this Wi-Fi can send questions to the brain on this phone. It speaks the two APIs those clients already know, so nothing has to be written for it."
         ) {
-            OtherDevicesSection()
+            OtherDevicesSection(title: "ON THIS WI-FI")
 
             if model.pairing.hasPaired {
                 connect
@@ -321,10 +332,11 @@ struct DevicesView: View {
                 }
                 if !model.log.isEmpty {
                     RowDivider()
-                    NavRow(
+                    ActionRow(
                         symbol: "trash",
                         title: "Clear the request log",
-                        detail: "\(model.log.count) entries, held in memory only"
+                        detail: "\(model.log.count) entries, held in memory only",
+                        isDestructive: true
                     ) {
                         Task {
                             await model.clearLog()
@@ -366,7 +378,7 @@ struct DevicesView: View {
                     MonoBlock(text: breakableIdentifier(model.configuration.apiKey))
                         .padding(.bottom, PDSpacing.xs)
                 }
-                NavRow(symbol: "doc.on.doc", title: "Copy the key", detail: nil) {
+                ActionRow(symbol: "doc.on.doc", title: "Copy the key", detail: nil) {
                     UIPasteboard.general.string = model.configuration.apiKey
                     Haptics.success()
                     toasts.show("Key copied")

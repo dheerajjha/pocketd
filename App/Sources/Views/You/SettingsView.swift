@@ -39,7 +39,10 @@ struct SettingsView: View {
 
     var body: some View {
         YouDetailScreen(
-            title: "Advanced",
+            // Not "Advanced": Brain has a screen by that name, and two pushed
+            // screens sharing a heading is how a reader loses track of which
+            // one they are on.
+            title: "Server and generation",
             subtitle: "How the server answers, and what a request inherits when it does not say. Nothing here changes until you apply it."
         ) {
             network
@@ -128,12 +131,12 @@ struct SettingsView: View {
                     MonoBlock(text: breakableIdentifier(draft.apiKey))
                 }
                 .padding(.vertical, PDSpacing.s)
-                NavRow(symbol: "doc.on.doc", title: "Copy the live key", detail: nil) {
+                ActionRow(symbol: "doc.on.doc", title: "Copy the live key", detail: nil) {
                     UIPasteboard.general.string = model.configuration.apiKey
                     toasts.show("Key copied")
                 }
                 RowDivider()
-                NavRow(symbol: "key", title: "Generate a new key", detail: "Everything paired has to pair again") {
+                ActionRow(symbol: "key", title: "Generate a new key", detail: "Everything paired has to pair again", isDestructive: true) {
                     showKeyWarning = true
                 }
             }
@@ -250,7 +253,7 @@ struct SettingsView: View {
                 }
             }
             RowDivider(inset: 0)
-            NavRow(symbol: "arrow.uturn.backward", title: "Put the defaults back", detail: nil) {
+            ActionRow(symbol: "arrow.uturn.backward", title: "Put the defaults back", detail: nil) {
                 draft.sampling = .default
             }
             .disabled(draft.sampling == .default)

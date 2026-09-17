@@ -40,7 +40,12 @@ struct DiagnosticsView: View {
 
                 RowDivider(inset: 0)
 
-                NavRow(symbol: "trash", title: "Clear the log", detail: "Starts it again from empty") {
+                ActionRow(
+                    symbol: "trash",
+                    title: "Clear the log",
+                    detail: "Starts it again from empty",
+                    isDestructive: true
+                ) {
                     DiagnosticLog.clear()
                     refresh()
                     toasts.show("Log cleared")

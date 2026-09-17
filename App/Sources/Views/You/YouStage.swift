@@ -45,6 +45,14 @@ enum YouStage {
         }
     }
 
+    /// The value after `-pocketd.stage.search`: what to type into "Add a
+    /// brain" before the screenshot.
+    static var searchQuery: String? {
+        guard let index = arguments.firstIndex(of: "-pocketd.stage.search"),
+              arguments.indices.contains(index + 1) else { return nil }
+        return arguments[index + 1]
+    }
+
     /// The value after `-pocketd.stage.scrollTo`: one of the section ids on the
     /// You screen.
     static var scrollAnchor: String? {
@@ -100,7 +108,21 @@ enum YouStage {
     @MainActor
     private static func stageBrain(_ model: AppModel) async {
         guard let record = ModelCatalog.model(withID: "smollm2-360m") else { return }
-        if !model.isInstalled(record) {
+        // Waited for rather than asked once. `bootstrap()` fills both the
+        // snapshot and the store's own manifest asynchronously and this task
+        // can easily run first, and a download started for a file already on
+        // disk fails on the move and leaves a red banner over the screenshot.
+        var onDisk = false
+        for _ in 0..<20 where !onDisk {
+            if model.isInstalled(record) {
+                onDisk = true
+            } else {
+                let manifest = await model.manifestInstalled()
+                onDisk = manifest.contains { $0.id == record.id }
+            }
+            if !onDisk { try? await Task.sleep(for: .milliseconds(250)) }
+        }
+        if !onDisk {
             model.download(record)
             // Polled rather than awaited: the download is driven by a
             // URLSession delegate that publishes into `transfers`, and there is
@@ -109,6 +131,11 @@ enum YouStage {
             for _ in 0..<240 where !model.isInstalled(record) {
                 try? await Task.sleep(for: .milliseconds(500))
             }
+        }
+        // Wait for the snapshot to catch up with the disk before loading, for
+        // the same reason.
+        for _ in 0..<20 where !model.isInstalled(record) {
+            try? await Task.sleep(for: .milliseconds(250))
         }
         guard model.isInstalled(record), model.loadedModelID != record.id else { return }
         await model.loadModel(record)

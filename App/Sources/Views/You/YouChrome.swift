@@ -232,6 +232,41 @@ struct NavRow: View {
     }
 }
 
+/// A row that does something here and now.
+///
+/// No chevron and no arrow, because neither is true: nothing is pushed and
+/// nothing is opened. "Copy the key" and "Clear the log" happen where you are
+/// standing, and a chevron beside them promises a screen that never arrives.
+struct ActionRow: View {
+    var symbol: String?
+    let title: String
+    var detail: String?
+    var tint: Color = .pd.accent
+    var isDestructive = false
+    let action: () -> Void
+
+    var body: some View {
+        Button {
+            isDestructive ? Haptics.warning() : Haptics.tap()
+            action()
+        } label: {
+            RowShell(
+                symbol: symbol,
+                symbolTint: isDestructive ? .pd.danger : tint,
+                symbolFill: isDestructive ? .pd.dangerSoft : .pd.accentSoft,
+                title: title,
+                detail: detail
+            ) {
+                EmptyView()
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel([title, detail].compactMap { $0 }.joined(separator: ". "))
+        .accessibilityAddTraits(.isButton)
+    }
+}
+
 /// A row that leaves the app — iOS Settings, Safari, the App Store sheet.
 ///
 /// `arrow.up.right` rather than a chevron, because the two mean different
@@ -396,6 +431,41 @@ struct DangerButton: View {
         }
         .buttonStyle(PDPressStyle())
         .disabled(!isEnabled)
+        .accessibilityLabel(title)
+    }
+}
+
+/// A word you can tap, at the leading edge of whatever it belongs to.
+///
+/// Not `SecondaryLink`: that one takes the full width and centres itself,
+/// because it is the escape hatch under a full-width primary button and that is
+/// exactly where it belongs. Inside a card, "Cancel" under a download has to
+/// start where the sentence above it starts, or it floats in the middle of the
+/// row with nothing explaining what it cancels.
+struct InlineLink: View {
+    let title: String
+    var tint: Color = .pd.accent
+    let action: () -> Void
+
+    init(_ title: String, tint: Color = .pd.accent, action: @escaping () -> Void) {
+        self.title = title
+        self.tint = tint
+        self.action = action
+    }
+
+    var body: some View {
+        Button {
+            Haptics.tap()
+            action()
+        } label: {
+            Text(title)
+                .font(Font.pd.secondary.weight(.semibold))
+                .foregroundStyle(tint)
+                .padding(.vertical, PDSpacing.xxs)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityLabel(title)
     }
 }
