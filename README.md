@@ -348,7 +348,7 @@ model. And `api.mixpanel.com`, which receives usage events — the app opened, a
 model downloaded or loaded, a message sent, the server started, a client
 answered, an ability switched on, a scheduled task run. They are on by default
 and a switch in Settings turns them off; the complete list is
-`AnalyticsEvent.swift`, which is twenty-one cases long and is meant to be read
+`AnalyticsEvent.swift`, which is twenty-eight cases long and is meant to be read
 in a minute.
 
 What stays is the part worth promising. Inference is local and the HTTP server

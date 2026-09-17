@@ -34,7 +34,14 @@ struct AnalyticsTaxonomyTests {
         .abilityOfferShown(ability: "reminders"),
         .abilityOfferAccepted(ability: "reminders"),
         .scheduledTaskRan(kind: .watcher, context: "background"),
-        .scheduledTaskLapsed(kind: .prompt)
+        .scheduledTaskLapsed(kind: .prompt),
+        .onboardingStepViewed(step: .morningBrief),
+        .briefGenerated(source: .auto, durationMilliseconds: 7_400),
+        .briefReadAloud,
+        .voiceAskUsed,
+        .answerFeedback(positive: false),
+        .routineCreated(template: .eveningWrapUp),
+        .todayTileTapped(tile: .sleep)
     ]
 
     @Test("every event's properties match the schema exactly")
@@ -78,7 +85,7 @@ struct AnalyticsTaxonomyTests {
         // other test in this file silently stops covering it. The count is
         // hand-maintained on purpose: bumping it is the moment you notice you
         // must also add a sample.
-        #expect(Self.sample.count == 21)
+        #expect(Self.sample.count == 28)
         #expect(Set(Self.sample.map(\.name)).count == Self.sample.count, "duplicate event in sample")
         #expect(Set(Self.sample.map(\.name)) == Set(AnalyticsSchema.allowedProperties.keys),
                 "sample and schema disagree about which events exist")
@@ -98,10 +105,55 @@ struct AnalyticsTaxonomyTests {
             + DownloadFailureReason.allCases.map(\.rawValue)
             + LoadFailureReason.allCases.map(\.rawValue)
             + RefusalReason.allCases.map(\.rawValue)
-            + ClientDialect.allCases.map(\.rawValue) {
+            + ClientDialect.allCases.map(\.rawValue)
+            // The v2 sets. `onboardingStepViewed` was specified with a
+            // `step: String`, and this loop is why it is an enum instead: a
+            // free string cannot be checked for length or for shape, and the
+            // one place a screen name comes from is a view that also knows the
+            // user's name.
+            + OnboardingStep.allCases.map(\.rawValue)
+            + BriefSource.allCases.map(\.rawValue)
+            + RoutineOrigin.allCases.map(\.rawValue)
+            + TodayTile.allCases.map(\.rawValue) {
             #expect(raw.count <= 24, "'\(raw)' is long enough to be carrying a message")
             #expect(raw.allSatisfy { $0.isLowercase || $0 == "_" || $0.isNumber })
         }
+    }
+
+    @Test("the v2 events carry a shape and never a reading")
+    func v2EventsCarryNoContent() {
+        // The trap this suite exists for, in its most plausible form. Three of
+        // the seven new events sit on screens made entirely of personal facts —
+        // the brief, the tiles, the thumbs under an answer — and the obvious
+        // next property on each is the fact itself: how long you slept, how
+        // many steps, what the answer said. Every one of those is a banned
+        // name, so the check is that these events stay where they are.
+        let v2: [AnalyticsEvent] = [
+            .onboardingStepViewed(step: .health),
+            .briefGenerated(source: .manual, durationMilliseconds: 12_900),
+            .briefReadAloud,
+            .voiceAskUsed,
+            .answerFeedback(positive: true),
+            .routineCreated(template: .sleepWatcher),
+            .todayTileTapped(tile: .steps),
+        ]
+        for event in v2 {
+            let allowed = AnalyticsSchema.allowedProperties[event.name]
+            #expect(allowed != nil, "\(event.name) has no schema entry")
+            #expect(Set(event.properties.keys) == (allowed ?? []))
+            for key in event.properties.keys {
+                #expect(AnalyticsSchema.forbiddenProperties.contains(key) == false,
+                        "\(event.name) carries forbidden property '\(key)'")
+            }
+        }
+
+        // `sleep` and `steps` are banned as property NAMES and are legitimate
+        // as values of `tile`, which says which square a thumb landed on and
+        // can carry no number at all. Worth asserting, because the next person
+        // to read the forbidden list will wonder.
+        #expect(AnalyticsSchema.forbiddenProperties.contains("sleep"))
+        #expect(AnalyticsSchema.forbiddenProperties.contains("steps"))
+        #expect(AnalyticsEvent.todayTileTapped(tile: .sleep).properties == ["tile": .string("sleep")])
     }
 
     @Test("no string value in any event looks like a network address")

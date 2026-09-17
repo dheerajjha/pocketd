@@ -1898,6 +1898,15 @@ final class AppModel {
         autoReleased = (resident, .idle)
     }
 
+    // MARK: - The person
+
+    /// What to call them, and nothing else. See `Profile`.
+    ///
+    /// A `let` holding its own observable object rather than three properties
+    /// here: a view that only greets somebody then observes one small thing and
+    /// does not redraw on every byte a download reports.
+    @ObservationIgnored let profile = Profile()
+
     // MARK: - First run
 
     /// Whether the intro has been seen.

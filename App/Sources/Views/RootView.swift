@@ -1,176 +1,175 @@
 import StoreKit
 import SwiftUI
 
-/// Which tab is showing. Lifted out of TabView's own state so an empty state
-/// can send someone where it is telling them to go — an instruction naming a
-/// destination with no way to reach it is the definition of feeling stuck.
-enum AppTab: Hashable {
-    case abilities, server, models, chat, settings
-
-    /// Scheduled tasks, which is a destination and **not** a tab — `route(to:)`
-    /// presents it rather than selecting it.
-    ///
-    /// It lives in this enum anyway, and that is the point: every screen in the
-    /// app already takes a `(AppTab) -> Void`, so the schedule is one line away
-    /// for any of them without a second routing type or a second closure
-    /// threaded through views this change does not own. The Abilities list is
-    /// where the permanent row for it belongs — see the handoff — and until that
-    /// lands, `ScheduleBar` carries the entry point.
-    case schedules
-}
-
+/// The three things the app can be showing, and the shell that holds the
+/// fourth.
+///
+/// `AppTab` used to live here as `RootView`'s private idea of where it was. It
+/// now lives in `Navigator`, because a tab is no longer this view's secret: a
+/// chip on Today hands a question to Ask, a card on Today pushes two levels
+/// into You, and a Siri phrase lands on Ask before this view has rendered once.
 struct RootView: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.scenePhase) private var scenePhase
-    /// Apple's own prompt. There is no way to ask for it outside a view, and no
-    /// way to find out whether it was shown — see `reviewPromptShown()`.
-    @Environment(\.requestReview) private var requestReview
-
-    /// Where a returning launch lands.
-    ///
-    /// Was `.server`, which is the line that made this a server product: the
-    /// first thing anyone saw, every time, was a socket. The direction is
-    /// assistant first and server second — `OnboardingView` already argues it
-    /// at length, and the tab bar was still saying the opposite.
-    ///
-    /// Abilities rather than Chat, because it is the one screen that is useful
-    /// in every state the app can be in. Chat with nothing loaded is a dead end
-    /// that sends you to Models; Abilities says what the assistant can do,
-    /// shows anything that is quietly broken — a refused permission, a server
-    /// that did not come back up — and carries the door to Chat when there is
-    /// something to ask. A server user loses nothing either: the server's live
-    /// state and its stop button are a row on it.
-    ///
-    /// Only ever the *initial* value. A fresh install goes through onboarding,
-    /// which picks its own destination.
-    @State private var tab: AppTab = .abilities
-
-    @State private var showingSchedules = false
 
     var body: some View {
         if model.needsOnboarding {
-            // Ahead of desk mode and the tabs both: there is nothing useful
+            // Ahead of desk mode and the shell both: there is nothing useful
             // behind this yet, and a tab bar under an intro invites someone to
             // tap into a screen the intro is about to explain.
-            OnboardingView(finish: { route(to: $0) })
+            //
+            // Untouched from v1 on purpose — the onboarding rebuild is its own
+            // workstream, and a half-restyled intro is worse than either end
+            // of the change.
+            OnboardingViewBridge()
                 .transition(.opacity)
         } else if model.deskMode {
             DeskModeView()
                 .transition(.opacity)
         } else {
-            // Above the tabs rather than inside one of them: a download is the
-            // one thing here that outlives the screen that started it.
-            VStack(spacing: 0) {
-                DownloadBanner(goTo: { route(to: $0) })
-                TabView(selection: $tab) {
-                    // A fifth tab, and not casually. iOS collapses a tab bar at
-                    // five, so this is paid for rather than free, and the two
-                    // cheaper options were both worse:
-                    //
-                    // An entry point from Chat and Settings puts the one screen
-                    // that says what this app is *behind* the two screens that
-                    // assume you already know. Settings is where these three
-                    // abilities have been hiding all along — moving them a
-                    // section higher inside it changes nothing about whether
-                    // anybody finds them.
-                    //
-                    // Replacing a tab was the other option, and there is no
-                    // spare one: Models is where a model comes from, Chat is
-                    // the product, Settings holds the server's configuration,
-                    // and Server is the second act rather than a dead one.
-                    //
-                    // So the bar grows by one, and the new tab goes first —
-                    // leftmost is what an app says it is when you look at the
-                    // bar, and what this app is, is the assistant that can read
-                    // what is on your phone.
-                    Tab("Abilities", systemImage: "sparkles", value: AppTab.abilities) {
-                        AbilitiesView(goTo: { route(to: $0) })
-                            // Scheduled tasks hang off Abilities, and as a bar
-                            // rather than as a sixth tab.
-                            //
-                            // Five is the hard limit: iOS folds everything past
-                            // the fifth tab into More, so a sixth does not cost
-                            // a slot, it costs Settings — buried behind a
-                            // disclosure list to make room for a screen most
-                            // people visit weekly. The argument above for the
-                            // fifth tab already spent the last one that was
-                            // going.
-                            //
-                            // Abilities rather than Chat because the sentence
-                            // this screen exists to say is "what the assistant
-                            // on this phone can do", and running on a schedule
-                            // is one of those things — Chat is the same
-                            // assistant answering *now*, and a schedule is not
-                            // a conversation. It also puts the bar on the tab a
-                            // returning launch lands on, which is what makes it
-                            // discoverable at all.
-                            //
-                            // A bar and not a plain link because it carries
-                            // state the user cannot get anywhere else: the next
-                            // firing, and a count of prompt-task results
-                            // waiting to be written because the app was closed
-                            // when they came due. That last one is the fact
-                            // this whole feature has to keep visible.
-                            //
-                            // The row belongs inside the Abilities list itself;
-                            // that file is another change's, so the handoff
-                            // names the line. When it lands, this modifier and
-                            // `ScheduleBar` both go.
-                            .safeAreaInset(edge: .bottom) {
-                                ScheduleBar { showingSchedules = true }
-                            }
-                    }
-                    Tab("Server", systemImage: "network", value: AppTab.server) {
-                        ServerView(goTo: { route(to: $0) })
-                    }
-                    Tab("Models", systemImage: "shippingbox", value: AppTab.models) { ModelsView() }
-                    Tab("Chat", systemImage: "bubble.left.and.bubble.right", value: AppTab.chat) {
-                        ChatView(goTo: { route(to: $0) })
-                    }
-                    Tab("Settings", systemImage: "gearshape", value: AppTab.settings) { SettingsView() }
-                }
-            }
-            // On the container rather than on the Abilities tab, so that a route
-            // to the schedule from anywhere — the bar today, an Abilities row or
-            // a notification tap later — presents the same sheet and does not
-            // tear it down when the selected tab changes underneath it.
-            .sheet(isPresented: $showingSchedules) {
-                SchedulesView(goTo: { destination in
-                    showingSchedules = false
-                    route(to: destination)
-                })
-            }
-            // A question left by `AskPocketdIntent`. Collected here and not in
-            // the intent because `perform()` runs before this scene exists on a
-            // cold launch, so there is nowhere to put it yet.
-            //
-            // On appearance AND on becoming active: the first covers a launch
-            // the intent caused, the second covers the app already being in
-            // memory, and a phrase said twice must not ask twice — which is why
-            // `take()` clears the slot rather than reading it.
-            .onAppear { collectIntentQuestion() }
-            // Asked from here rather than from the model, because a review
-            // request is a SwiftUI environment action and only a view holds
-            // one. The model decides WHEN — see `ReviewMoment` — and this is
-            // only the hand that raises it.
-            .onChange(of: model.wantsReviewPrompt) { _, wants in
-                guard wants else { return }
-                requestReview()
-                model.reviewPromptShown()
-            }
-            .onChange(of: scenePhase) { _, phase in
-                if phase == .active { collectIntentQuestion() }
-            }
+            Shell()
+                .transition(.opacity)
+        }
+    }
+}
+
+/// Hands the old intro a destination in the new vocabulary.
+///
+/// A separate view so `RootView` does not have to hold a `Navigator` it only
+/// needs in one branch, and so the seam where v1's `(AppTab) -> Void` meets the
+/// `Navigator` is one line that a later workstream deletes.
+private struct OnboardingViewBridge: View {
+    @Environment(Navigator.self) private var navigator
+
+    var body: some View {
+        OnboardingView(finish: { navigator.go($0) })
+    }
+}
+
+// MARK: - The shell
+
+/// Four tabs in a ZStack, a floating capsule over them, and a download banner
+/// above everything.
+///
+/// Not a `TabView`. The system bar is 83pt of opaque chrome that ends every
+/// screen with a hard line, and these screens are meant to run off the bottom
+/// of the phone. There is no system tab bar to hide here, because none is
+/// created. How each tab keeps clear of the capsule is the note on `selected`.
+private struct Shell: View {
+    @Environment(AppModel.self) private var model
+    @Environment(Navigator.self) private var navigator
+    @Environment(\.scenePhase) private var scenePhase
+    /// Apple's own prompt. There is no way to ask for it outside a view, and no
+    /// way to find out whether it was shown — see `reviewPromptShown()`.
+    @Environment(\.requestReview) private var requestReview
+
+    @State private var toasts = ToastCenter()
+
+    var body: some View {
+        @Bindable var navigation = navigator
+
+        ZStack(alignment: .bottom) {
+            Color.pd.canvas.ignoresSafeArea()
+
+            selected
+
+            FloatingTabBar(selection: $navigation.tab)
+                .padding(.horizontal, PDMetric.tabBarSideMargin)
+                .padding(.bottom, PDMetric.tabBarBottomInset)
+        }
+        // Above the tabs rather than inside one of them: a download is the one
+        // thing here that outlives the screen that started it. Slim, at the
+        // top, and absent entirely when nothing is downloading.
+        .overlay(alignment: .top) {
+            DownloadBanner(goTo: { navigator.go($0) })
+        }
+        .environment(toasts)
+        .toast(toasts)
+        // A question left by `AskPocketdIntent`. Collected here and not in the
+        // intent because `perform()` runs before this scene exists on a cold
+        // launch, so there is nowhere to put it yet.
+        //
+        // On appearance AND on becoming active: the first covers a launch the
+        // intent caused, the second covers the app already being in memory, and
+        // a phrase said twice must not ask twice — which is why `take()` clears
+        // the slot rather than reading it.
+        .onAppear {
+            collectIntentQuestion()
+            applyAskHandoff()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { collectIntentQuestion() }
+        }
+        // The seam between `Navigator.ask(_:send:)` and the chat screen, which
+        // still reads `AppModel.draft`. Keyed on the handoff's id rather than
+        // its text so that tapping the same chip twice is two requests.
+        .onChange(of: navigator.askHandoff?.id) { _, _ in applyAskHandoff() }
+        // Asked from here rather than from the model, because a review request
+        // is a SwiftUI environment action and only a view holds one. The model
+        // decides WHEN — see `ReviewMoment` — and this is only the hand that
+        // raises it.
+        .onChange(of: model.wantsReviewPrompt) { _, wants in
+            guard wants else { return }
+            requestReview()
+            model.reviewPromptShown()
         }
     }
 
-    /// Puts a question from Siri or Shortcuts into the Chat tab.
+    /// The selected tab's content.
+    ///
+    /// Only the selected one is built. A `ZStack` of all four with opacity
+    /// would keep their scroll positions, and would also run four screens'
+    /// `task` modifiers at once — including the one that starts a generation.
+    ///
+    /// Ask and Routines are not wrapped in a `NavigationStack` here because
+    /// they still bring their own; wrapping them would stack two navigation
+    /// bars on one screen. Their rebuilds drop the inner one and this switch
+    /// grows two wrappers.
+    ///
+    /// They also end above the capsule rather than scrolling under it, and
+    /// that is not a preference. Both are bottom-anchored screens — a composer,
+    /// a toolbar — and a `safeAreaInset` applied from out here does not reach
+    /// past their own `NavigationStack`: the first build put the chat composer
+    /// half off the bottom of the phone, under the tab bar. A real spacer in a
+    /// `VStack` cannot be ignored by anything inside it.
+    ///
+    /// Today and You do scroll under, and own that inset themselves — see
+    /// `PDMetric.tabBarClearance` where their scroll views apply it.
+    @ViewBuilder
+    private var selected: some View {
+        switch navigator.tab {
+        case .today:
+            NavigationStack {
+                TodayPlaceholderView()
+            }
+        case .ask:
+            reservingTabBar {
+                ChatView(goTo: { navigator.go($0) })
+            }
+        case .routines:
+            reservingTabBar {
+                SchedulesView(goTo: { navigator.go($0) })
+            }
+        case .you:
+            YouTab()
+        }
+    }
+
+    /// Lays a screen out above the floating bar rather than behind it.
+    private func reservingTabBar<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(spacing: 0) {
+            content()
+            Color.clear.frame(height: PDMetric.tabBarReserve)
+        }
+    }
+
+    /// Puts a question from Siri or Shortcuts into Ask.
     ///
     /// Sent only when a model is actually resident. Without one, `send()` is a
     /// no-op that would leave somebody staring at their own words in a text
     /// field with no reply and no explanation — so the question is left in the
-    /// box, ready to send, and Chat's own empty state says what is missing and
-    /// offers the way to Models.
+    /// box, ready to send, and Ask's own empty state says what is missing.
     private func collectIntentQuestion() {
         // A tap on the "Ask Pocketd" control, independent of any Siri
         // question below — see AskLaunch.
@@ -179,28 +178,50 @@ struct RootView: View {
             model.askComposerFocusRequested = true
         }
         guard let question = IntentInbox.take() else { return }
-        route(to: .chat)
-        model.draft = question
-        guard model.loadedModelID != nil else { return }
-        model.send()
+        navigator.ask(question, send: model.loadedModelID != nil)
     }
 
-    /// Sends the app somewhere, whether or not that somewhere is a tab.
+    /// Delivers a pending question to the chat screen.
     ///
-    /// Switched exhaustively rather than defaulted, so that a destination added
-    /// to `AppTab` later has to say here how it is reached instead of silently
-    /// selecting a tab that does not exist — which `TabView` renders as a blank
-    /// screen with no way back.
-    private func route(to destination: AppTab) {
-        switch destination {
-        case .schedules:
-            showingSchedules = true
-        case .abilities, .server, .models, .chat, .settings:
-            // Dismissed first: a tab change behind a sheet moves a screen the
-            // user cannot see, which is the shape of every "the button did
-            // nothing" report.
-            showingSchedules = false
-            tab = destination
+    /// The chat screen reads `AppModel.draft`, which predates the `Navigator`;
+    /// this is the one place that knows both. When Ask is rebuilt it consumes
+    /// `navigator.askHandoff` itself and this method goes.
+    private func applyAskHandoff() {
+        guard let handoff = navigator.takeAskHandoff() else { return }
+        model.draft = handoff.draft
+        guard handoff.send, model.loadedModelID != nil else { return }
+        model.send()
+    }
+}
+
+// MARK: - You's stack
+
+/// The You tab, with its stack bound to the `Navigator`.
+///
+/// Its own view so the path binding lives next to the stack that uses it, and
+/// so that `openYou(_:)` from a card on Today lands somewhere real rather than
+/// setting a property nothing is watching.
+private struct YouTab: View {
+    @Environment(Navigator.self) private var navigator
+
+    var body: some View {
+        @Bindable var navigation = navigator
+
+        NavigationStack(path: $navigation.youPath) {
+            YouPlaceholderView()
+                .navigationDestination(for: YouRoute.self) { route in
+                    YouRouteView(route: route)
+                }
+        }
+        // The five screens that still carry a `NavigationStack` of their own.
+        // Presented rather than pushed, because pushing one takes the process
+        // down — see `YouRoute.bringsOwnNavigationStack`.
+        .sheet(item: $navigation.youSheet) { route in
+            YouRouteView(route: route)
+                // Three of the five have no Done button of their own — they
+                // were tabs. The grabber is what says "pull this down" to
+                // somebody who would otherwise be stuck looking at Models.
+                .presentationDragIndicator(.visible)
         }
     }
 }

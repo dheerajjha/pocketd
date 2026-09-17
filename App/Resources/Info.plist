@@ -44,8 +44,12 @@
 	<string>Pocketd does not write to Health. This permission is requested only because iOS requires the description to be present whenever an app links HealthKit.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Pocketd serves the language model running on this device to other devices on your network. Everything stays on your local network.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Pocketd listens only while you hold the microphone button, to hear your question. Nothing is recorded or sent anywhere.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Pocketd lets the AI assistant running on this iPhone answer questions about your reminders, such as what is overdue, and add or tick off reminders when you ask it to. Your reminders are read and written on this device only, are never uploaded, and are never sent to the other devices this app serves.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Pocketd turns your voice into text on this iPhone so you can ask by speaking. Audio is processed on the device and never uploaded.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>UIBackgroundModes</key>

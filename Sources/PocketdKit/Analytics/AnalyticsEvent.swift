@@ -99,6 +99,71 @@ public enum OnboardingDestination: String, Sendable, CaseIterable {
     case models
 }
 
+/// Which screen of the intro was reached.
+///
+/// A closed enum and not the `step: String` the plan first wrote down, for the
+/// same reason every other reason in this file is closed: a free string is one
+/// careless interpolation away from carrying a name or a model file path, and
+/// the funnel question — where do people stop — is answered exactly as well by
+/// eight case names.
+///
+/// The order of the cases is the order of the screens, which is what makes a
+/// drop-off chart readable without a lookup table.
+public enum OnboardingStep: String, Sendable, CaseIterable {
+    case welcome
+    case brain
+    case calendar
+    case reminders
+    case health
+    case name
+    case morningBrief = "morning_brief"
+    case ready
+}
+
+/// Whether the day's brief wrote itself or was asked for.
+///
+/// The distinction the whole Today screen rests on. A brief nobody ever
+/// refreshes by hand is working; one that is only ever manual means the
+/// automatic one is arriving wrong, or too late to be read.
+public enum BriefSource: String, Sendable, CaseIterable {
+    case auto
+    case manual
+}
+
+/// Where a routine came from.
+///
+/// The templates exist because "create a scheduled task" is an empty form and
+/// nobody fills in an empty form. `custom` is the control: if it dominates, the
+/// templates are wrong, and if it is near zero, the grid is the feature.
+///
+/// Named for the question rather than for the thing, because `custom` is not a
+/// template and because the Routines feature has a `RoutineTemplate` of its own
+/// that builds real `ScheduledTask`s. That one is the domain; this is a bounded
+/// wire value with snake_case raw strings and one extra case, and the two would
+/// drift the moment either grew a case the other should not have.
+public enum RoutineOrigin: String, Sendable, CaseIterable {
+    case morningBrief = "morning_brief"
+    case eveningWrapUp = "evening_wrap_up"
+    case weeklyReview = "weekly_review"
+    case overdueWatcher = "overdue_watcher"
+    case sleepWatcher = "sleep_watcher"
+    /// Built from the empty form rather than from a card.
+    case custom
+}
+
+/// Which of the four tiles on Today was tapped.
+///
+/// The case names are the tiles, not their contents: `sleep` here means "the
+/// sleep tile", and it can never carry how long anybody slept. The forbidden
+/// property list bans `sleep` and `steps` as property *names* for exactly that
+/// reason; as values of `tile` they say only which square a thumb landed on.
+public enum TodayTile: String, Sendable, CaseIterable {
+    case upNext = "up_next"
+    case due
+    case sleep
+    case steps
+}
+
 // MARK: - The events
 
 /// Everything this app may report about itself.
@@ -181,6 +246,46 @@ public enum AnalyticsEvent: Sendable, Equatable {
     /// Its due moment passed with no way to run it.
     case scheduledTaskLapsed(kind: ScheduledKind)
 
+    // MARK: v2
+
+    /// A screen of the intro was reached.
+    ///
+    /// The cold-start funnel. `onboardingCompleted` says who got to the end and
+    /// nothing about where everybody else stopped, and "where do people stop"
+    /// is the only question worth asking about a seven-screen intro.
+    case onboardingStepViewed(step: OnboardingStep)
+
+    /// The day's brief was written, and how long the phone took to write it.
+    ///
+    /// The duration is the number this whole product stands or falls on: a
+    /// brief that takes forty seconds on a mid-range phone is not a morning
+    /// brief, it is a wait. Milliseconds rather than seconds because the
+    /// interesting spread is between two and twenty seconds and a double of
+    /// seconds buries it.
+    case briefGenerated(source: BriefSource, durationMilliseconds: Int)
+    /// Somebody had the brief read to them.
+    case briefReadAloud
+
+    /// A question was spoken rather than typed.
+    ///
+    /// No property. Whether the recogniser ran on-device is not a measurement,
+    /// it is an invariant — the app refuses to show the microphone at all where
+    /// it cannot — so an event that carried it would be recording a constant.
+    case voiceAskUsed
+
+    /// Thumbs up or thumbs down on an answer.
+    ///
+    /// A bool and nothing else. Not the question, not the answer, not the model
+    /// that wrote it: the tempting next property is "why", and "why" is free
+    /// text typed by a person about their own day.
+    case answerFeedback(positive: Bool)
+
+    /// A routine was created, from which template.
+    case routineCreated(template: RoutineOrigin)
+
+    /// One of Today's four tiles was tapped.
+    case todayTileTapped(tile: TodayTile)
+
     public var name: String {
         switch self {
         case .appOpened: "app_opened"
@@ -204,6 +309,13 @@ public enum AnalyticsEvent: Sendable, Equatable {
         case .abilityOfferAccepted: "ability_offer_accepted"
         case .scheduledTaskRan: "scheduled_task_ran"
         case .scheduledTaskLapsed: "scheduled_task_lapsed"
+        case .onboardingStepViewed: "onboarding_step_viewed"
+        case .briefGenerated: "brief_generated"
+        case .briefReadAloud: "brief_read_aloud"
+        case .voiceAskUsed: "voice_ask_used"
+        case .answerFeedback: "answer_feedback"
+        case .routineCreated: "routine_created"
+        case .todayTileTapped: "today_tile_tapped"
         }
     }
 
@@ -251,6 +363,20 @@ public enum AnalyticsEvent: Sendable, Equatable {
             ["kind": .string(kind.rawValue), "context": .string(context)]
         case let .scheduledTaskLapsed(kind):
             ["kind": .string(kind.rawValue)]
+        case let .onboardingStepViewed(step):
+            ["step": .string(step.rawValue)]
+        case let .briefGenerated(source, durationMilliseconds):
+            ["source": .string(source.rawValue), "duration_ms": .int(durationMilliseconds)]
+        case .briefReadAloud:
+            [:]
+        case .voiceAskUsed:
+            [:]
+        case let .answerFeedback(positive):
+            ["positive": .bool(positive)]
+        case let .routineCreated(template):
+            ["template": .string(template.rawValue)]
+        case let .todayTileTapped(tile):
+            ["tile": .string(tile.rawValue)]
         }
     }
 }
@@ -287,7 +413,14 @@ public enum AnalyticsSchema {
         "ability_offer_shown": ["ability"],
         "ability_offer_accepted": ["ability"],
         "scheduled_task_ran": ["kind", "context"],
-        "scheduled_task_lapsed": ["kind"]
+        "scheduled_task_lapsed": ["kind"],
+        "onboarding_step_viewed": ["step"],
+        "brief_generated": ["source", "duration_ms"],
+        "brief_read_aloud": [],
+        "voice_ask_used": [],
+        "answer_feedback": ["positive"],
+        "routine_created": ["template"],
+        "today_tile_tapped": ["tile"]
     ]
 
     /// Property names that must never appear, whatever anyone adds later.

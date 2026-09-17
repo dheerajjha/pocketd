@@ -403,7 +403,7 @@ struct ScheduleEditorView: View {
                     .font(.footnote)
                     .foregroundStyle(scheduleWarningColour)
                 if warning.offersAbilities {
-                    Button("Open Abilities") { goTo(.abilities) }
+                    Button("Open Abilities") { goTo(.you) }
                 }
             }
         } header: {

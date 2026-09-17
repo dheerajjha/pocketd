@@ -68,7 +68,7 @@ struct AbilitiesView: View {
                 // ability they have not enabled is sending them to watch a model
                 // invent a calendar, which is the failure the abilities exist to
                 // end rather than a demonstration of them.
-                Button("Ask it something") { goTo(.chat) }
+                Button("Ask it something") { goTo(.ask) }
             }
         } footer: {
             // At the top rather than under the list, because it is the
@@ -133,7 +133,7 @@ struct AbilitiesView: View {
                 }
             }
             if ability == .localServer, model.serverState.isRunning {
-                Button("Server details") { goTo(.server) }
+                Button("Server details") { goTo(.you) }
             }
         } header: {
             Label(ability.title, systemImage: ability.symbolName)
