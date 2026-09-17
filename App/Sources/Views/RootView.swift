@@ -172,6 +172,12 @@ struct RootView: View {
     /// box, ready to send, and Chat's own empty state says what is missing and
     /// offers the way to Models.
     private func collectIntentQuestion() {
+        // A tap on the "Ask Pocketd" control, independent of any Siri
+        // question below — see AskLaunch.
+        if AskLaunch.take() != nil {
+            route(to: .chat)
+            model.askComposerFocusRequested = true
+        }
         guard let question = IntentInbox.take() else { return }
         route(to: .chat)
         model.draft = question

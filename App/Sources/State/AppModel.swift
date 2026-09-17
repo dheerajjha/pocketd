@@ -177,6 +177,8 @@ final class AppModel {
 
     var conversation: [ChatMessage] = []
     var draft = ""
+    /// Left by `AskLaunch` for `ChatView` to focus (and, where supported, start listening on) the composer once, then clear.
+    var askComposerFocusRequested = false
 
     /// An ability the last message would have used, if it were switched on.
     ///
