@@ -152,7 +152,7 @@ private struct Shell: View {
             }
         case .ask:
             reservingTabBar {
-                ChatView(goTo: { navigator.go($0) })
+                AskView()
             }
         case .routines:
             RoutinesView()
