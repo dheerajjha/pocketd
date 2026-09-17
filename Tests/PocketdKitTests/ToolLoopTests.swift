@@ -139,3 +139,53 @@ struct ToolCallAnnouncementTests {
         #expect(body.choices.first?.finish_reason == "stop")
     }
 }
+
+/// The far side of the same round: the model is handed `Rendered.prompt` and
+/// asked to speak about it, and sometimes speaks by reading it back out.
+///
+/// `LlamaEngine` lives in the app target, which SwiftPM never compiles, so
+/// these do not drive the generation loop — they pin the seam it is wired
+/// across. The engine arms `NarrationEcho` with `outputs.map(\.1)`, and
+/// `outputs` is built from exactly these values; a change to either side that
+/// left them no longer identical would disarm the screen silently.
+@Suite("Tool narration")
+struct ToolNarrationTests {
+
+    @Test("the echo screen is armed with the same string the model is handed")
+    func armedWithTheRenderedPrompt() {
+        let rendered = ToolResult.render(
+            ["text": "No events tomorrow."],
+            from: PersonalDataToolNames.calendar,
+            arguments: #"{"range":"tomorrow"}"#
+        )
+        // What the engine appends to `outputs`, and therefore what it arms with.
+        let echo = NarrationEcho(payloads: [rendered.prompt])
+        #expect(echo.isArmed)
+        // A narration that is that string and nothing else is not narration.
+        #expect(echo.resolve(rendered.prompt) == "")
+        #expect(echo.safeCount(in: rendered.prompt) == 0)
+        // And the round did yield a card, so the engine leaves the bubble to it.
+        #expect(rendered.card != nil)
+    }
+
+    @Test("a tool that produced no card still arms it")
+    func armedWithoutACard() {
+        // An unknown or failed call renders a prompt and no card, so a turn that
+        // echoes it has nothing above it to fall back on — which is the case
+        // `NarrationEcho.acknowledgement` exists for.
+        let rendered = ToolResult.Rendered(prompt: ToolResult.unknownTool(named: "get_weather"))
+        #expect(rendered.card == nil)
+        let echo = NarrationEcho(payloads: [rendered.prompt])
+        #expect(echo.resolve(rendered.prompt) == "")
+    }
+
+    @Test("a round with no tools leaves the narration alone")
+    func noToolsNoScreen() {
+        // The engine constructs this only after a tool round, so a generation
+        // without one never withholds and never rewrites.
+        let echo = NarrationEcho(payloads: [])
+        let answer = "The capital of France is Paris."
+        #expect(echo.safeCount(in: answer) == answer.count)
+        #expect(echo.resolve(answer) == nil)
+    }
+}
