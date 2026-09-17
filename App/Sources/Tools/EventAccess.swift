@@ -1,5 +1,6 @@
 import EventKit
 import Foundation
+import os
 import PocketdKit
 
 // The value types this file used to declare — `CalendarEventRow`, `ReminderRow`
@@ -120,6 +121,17 @@ actor EventAccess {
     /// and those are two different sentences to the user.
     func requestReadAccess(to entity: PersonalDataEntity) async -> PersonalDataAuthorization {
         let current = Self.authorization(for: entity)
+        #if DEBUG
+        // Who is asking, and from where. A permission sheet is the one thing
+        // this app must never raise on its own initiative, so a Debug build
+        // says which call site raised it — read with
+        // `log show --predicate 'subsystem == "dev.pocketd"'`.
+        if case .notDetermined = current {
+            let trace = Thread.callStackSymbols.prefix(14).joined(separator: " | ")
+            Logger(subsystem: "dev.pocketd", category: "eventkit")
+                .error("requestReadAccess(\(String(describing: entity), privacy: .public)) from \(trace, privacy: .public)")
+        }
+        #endif
         switch current {
         case .granted, .denied, .restricted:
             // iOS shows its prompt once. Asking again from here would return
