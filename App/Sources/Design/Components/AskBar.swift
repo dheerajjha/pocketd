@@ -22,6 +22,10 @@ struct AskBar: View {
     var onMicEnd: () -> Void = {}
     var onSend: () -> Void = {}
     var onAttach: (() -> Void)?
+    /// A focus state owned by the screen, for the callers that have to put the
+    /// cursor here without a tap — a phrase from Siri, the Control Center
+    /// button, a question handed over from Today. `nil` keeps the bar's own.
+    var focus: FocusState<Bool>.Binding?
 
     @FocusState private var isFocused: Bool
 
@@ -47,7 +51,7 @@ struct AskBar: View {
                 .foregroundStyle(Color.pd.ink)
                 .tint(Color.pd.accent)
                 .lineLimit(1...4)
-                .focused($isFocused)
+                .focused(focus ?? $isFocused)
                 .submitLabel(.send)
                 .disabled(isListening)
 
