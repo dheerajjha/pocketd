@@ -99,6 +99,16 @@ private struct Shell: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { collectIntentQuestion() }
         }
+        // A tap on the Today widget, or a Shortcut. `DeepLink` is the whole
+        // parser and anything it does not recognise is `nil`, so an unknown
+        // URL does nothing at all rather than landing somewhere surprising.
+        .onOpenURL { url in
+            guard let link = DeepLink(url: url) else { return }
+            switch link {
+            case .today: navigator.go(.today)
+            case .ask: navigator.go(.ask)
+            }
+        }
         // The seam between `Navigator.ask(_:send:)` and the chat screen, which
         // still reads `AppModel.draft`. Keyed on the handoff's id rather than
         // its text so that tapping the same chip twice is two requests.
