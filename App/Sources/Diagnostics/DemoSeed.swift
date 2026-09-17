@@ -194,6 +194,12 @@ enum DemoSeed {
     /// this line keeps working unchanged: it writes the value, not the type.
     private static func seedProfileName() {
         UserDefaults.standard.set("Sam", forKey: Keys.profileName)
+        // The two abilities the seeded data is for, switched on so the Today
+        // tiles and the Ask cards have something to read. `AppModel.bootstrap`
+        // re-reads both after the seed runs; iOS's own grant comes from
+        // `simctl privacy`, never from here.
+        UserDefaults.standard.set(true, forKey: "pocketd.calendarTools")
+        UserDefaults.standard.set(true, forKey: "pocketd.reminderTools")
     }
 
     // MARK: - Shared

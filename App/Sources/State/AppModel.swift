@@ -265,8 +265,12 @@ final class AppModel {
     func acceptToolOffer() {
         guard let offer = pendingToolOffer else { return }
         switch offer.ability {
-        case .calendar: calendarToolsEnabled = true
-        case .reminders: reminderToolsEnabled = true
+        case .calendar:
+            calendarToolsEnabled = true
+            Task { await requestAccess(to: .calendar) }
+        case .reminders:
+            reminderToolsEnabled = true
+            Task { await requestAccess(to: .reminders) }
         case .health: healthToolsEnabled = true
         // Not offered — the server is not a thing a question implies.
         case .localServer: break
@@ -497,6 +501,17 @@ final class AppModel {
     func bootstrap() async {
         #if DEBUG
         await DemoSeed.runIfRequested()
+        // The seeder writes defaults that this object read at init, so on the
+        // first seeded launch the intro still showed and the greeting had no
+        // name. Re-read the two it wrote, and only when it ran.
+        if DemoSeed.isRequested || ProcessInfo.processInfo.arguments.contains("-pocketd.skipIntro") {
+            hasCompletedOnboarding = UserDefaults.standard.bool(forKey: Keys.completedOnboarding)
+            if let seeded = UserDefaults.standard.string(forKey: Profile.nameKey), !seeded.isEmpty {
+                profile.name = seeded
+            }
+            if UserDefaults.standard.bool(forKey: Keys.calendarTools) { calendarToolsEnabled = true }
+            if UserDefaults.standard.bool(forKey: Keys.reminderTools) { reminderToolsEnabled = true }
+        }
         #endif
 
         // Before anything else that could fail: the review gate needs to know
@@ -1798,7 +1813,14 @@ final class AppModel {
                 personalDataAuthorization[entity] = nil
                 continue
             }
-            personalDataAuthorization[entity] = await EventAccess.shared.requestReadAccess(to: entity)
+            // The standing answer, never a request. This runs from the switch's
+            // observer, which also fires while the model is being restored at
+            // launch — and a request from here put iOS's Calendar sheet over
+            // the first screen of the intro whenever a switch was on and the
+            // permission was not yet decided. The sheet is raised only by the
+            // three places a person taps: the intro's Connect cards, the You
+            // rows and the offer in Ask, all of which call `requestAccess(to:)`.
+            personalDataAuthorization[entity] = EventAccess.authorization(for: entity)
         }
         // Not a reload. The engine records the new set and rebuilds its client
         // on the next request that needs one, so a user who flips the switch

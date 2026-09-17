@@ -374,7 +374,7 @@ private struct RoutineCard: View {
     let openResult: () -> Void
     let setEnabled: (Bool) -> Void
 
-    private var dueness: Dueness { task.dueness() }
+    private var dueness: Dueness { task.dueness(now: DemoClock.now) }
 
     private var symbol: String {
         RoutineTemplate.matching(task)?.symbolName ?? "clock"
