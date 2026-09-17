@@ -130,20 +130,19 @@ private struct Shell: View {
     /// would keep their scroll positions, and would also run four screens'
     /// `task` modifiers at once — including the one that starts a generation.
     ///
-    /// Ask and Routines are not wrapped in a `NavigationStack` here because
-    /// they still bring their own; wrapping them would stack two navigation
-    /// bars on one screen. Their rebuilds drop the inner one and this switch
-    /// grows two wrappers.
+    /// Ask is not wrapped in a `NavigationStack` here because it still brings
+    /// its own; wrapping it would stack two navigation bars on one screen. Its
+    /// rebuild drops the inner one and this switch grows a wrapper.
     ///
-    /// They also end above the capsule rather than scrolling under it, and
-    /// that is not a preference. Both are bottom-anchored screens — a composer,
-    /// a toolbar — and a `safeAreaInset` applied from out here does not reach
-    /// past their own `NavigationStack`: the first build put the chat composer
-    /// half off the bottom of the phone, under the tab bar. A real spacer in a
-    /// `VStack` cannot be ignored by anything inside it.
+    /// It also ends above the capsule rather than scrolling under it, and that
+    /// is not a preference. It is a bottom-anchored screen — a composer — and a
+    /// `safeAreaInset` applied from out here does not reach past its own
+    /// `NavigationStack`: the first build put the chat composer half off the
+    /// bottom of the phone, under the tab bar. A real spacer in a `VStack`
+    /// cannot be ignored by anything inside it.
     ///
-    /// Today and You do scroll under, and own that inset themselves — see
-    /// `PDMetric.tabBarClearance` where their scroll views apply it.
+    /// Today, Routines and You do scroll under, and own that inset themselves —
+    /// see `PDMetric.tabBarClearance` where their scroll views apply it.
     @ViewBuilder
     private var selected: some View {
         switch navigator.tab {
@@ -156,9 +155,7 @@ private struct Shell: View {
                 ChatView(goTo: { navigator.go($0) })
             }
         case .routines:
-            reservingTabBar {
-                SchedulesView(goTo: { navigator.go($0) })
-            }
+            RoutinesView()
         case .you:
             YouTab()
         }
