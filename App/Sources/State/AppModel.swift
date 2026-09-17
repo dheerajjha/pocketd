@@ -1956,42 +1956,30 @@ final class AppModel {
 
     /// What the intro should have selected when it opens.
     ///
-    /// The middle tier, not the smallest. A 360M model downloads in seconds and
-    /// is barely coherent, so defaulting to it makes the first answer someone
-    /// ever sees the worst one this app can produce — a fast route to deciding
-    /// the whole idea does not work. The bigger download is the better trade,
-    /// and the smaller option is still right there for anyone on a slow
-    /// connection.
+    /// The rule moved to `StarterModels` in the Kit, where it can be tested
+    /// against a 4, 6 and 8 GB phone with and without the entitlement. It used
+    /// to be "the middle of the list by download size", which on the 6 GB
+    /// iPhone 14 this is developed against selected Llama 3.2 1B — a model
+    /// whose template has no notion of tools, so the first thing the app
+    /// recommended could not do the calendar, reminders or health questions it
+    /// was recommending itself for.
     var recommendedStarter: ModelRecord? {
-        let starters = starterModels
-        guard !starters.isEmpty else { return nil }
-        return starters[starters.count / 2]
+        StarterModels.recommended(budget: budget, installed: installedIDs)
     }
 
     /// Up to three models spanning what this phone can actually hold.
     ///
-    /// Built from the same fit estimate the Models tab uses, so the intro can
-    /// never offer something that will be killed on load. Comfortable entries
-    /// only, unless nothing is comfortable — on a small device an honest
-    /// "tight" beats an empty screen with nothing to choose.
+    /// Built from the same fit verdict the Models tab uses, so the intro can
+    /// never offer something that will be killed on load, and it always
+    /// contains `recommendedStarter`.
     var starterModels: [ModelRecord] {
-        // Already-downloaded models are excluded: on a replay from Settings the
-        // list would otherwise offer to fetch things this phone has had for
-        // weeks.
-        let installable = ModelCatalog.all.filter {
-            !$0.declaredCapabilities.vision.isYes && !isInstalled($0)
-        }
-        var usable = installable.filter { fit(for: $0) == .comfortable }
-        if usable.isEmpty {
-            usable = installable.filter { fit(for: $0) != .willNotFit }
-        }
-        let ordered = usable.sorted { $0.totalDownloadBytes < $1.totalDownloadBytes }
-        guard ordered.count > 3 else { return ordered }
-        // Smallest, middle and largest: the choice being offered is "how much
-        // of this phone do you want to spend", and three points make that
-        // legible where eight would not.
-        return [ordered[0], ordered[ordered.count / 2], ordered[ordered.count - 1]]
+        StarterModels.shortlist(budget: budget, installed: installedIDs)
     }
+
+    /// Already-downloaded models, by id. Excluded from the intro: on a replay
+    /// from Settings the list would otherwise offer to fetch things this phone
+    /// has had for weeks.
+    private var installedIDs: Set<String> { Set(installed.map(\.id)) }
 
     // MARK: - Residency
 

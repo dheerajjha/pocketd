@@ -6,11 +6,6 @@ import Testing
 private enum Phone {
     static let gigabyte: Int64 = 1024 * 1024 * 1024
 
-    /// iPhone SE / older 4 GB hardware.
-    static func fourGB(entitled: Bool) -> DeviceBudget {
-        DeviceBudget(physicalMemoryBytes: 4 * gigabyte, hasIncreasedMemoryLimit: entitled, environment: .device)
-    }
-
     /// iPhone 14, the primary test device.
     static func sixGB(entitled: Bool) -> DeviceBudget {
         DeviceBudget(physicalMemoryBytes: 6 * gigabyte, hasIncreasedMemoryLimit: entitled, environment: .device)
