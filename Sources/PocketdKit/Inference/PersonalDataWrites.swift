@@ -63,12 +63,19 @@ public struct NewEvent: Sendable, Equatable {
     public var start: Date
     public var end: Date
     public var repeats: ReminderRepeat?
+    /// Free text for where it is. Optional and last, because nothing that
+    /// reaches this type through chat sets it today — the assistant's own
+    /// `create` never asks "and where" — but `CalendarEventRow` already reads
+    /// a location back out, and the write side needs the same field to exist
+    /// for anything to put one there at all.
+    public var location: String?
 
-    public init(title: String, start: Date, end: Date, repeats: ReminderRepeat? = nil) {
+    public init(title: String, start: Date, end: Date, repeats: ReminderRepeat? = nil, location: String? = nil) {
         self.title = title
         self.start = start
         self.end = end
         self.repeats = repeats
+        self.location = location
     }
 }
 
