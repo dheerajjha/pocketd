@@ -298,6 +298,11 @@ targets:
       # as types — they meet as JSON on disk, through the App Group.
       - path: Sources/PocketdKit/Widgets/SchedulePublication.swift
       - path: Sources/PocketdKit/Widgets/SchedulePublicationStore.swift
+      # The Today brief's widget mirror, split the same three ways: the type
+      # and its store are Foundation-only and compiled in here; the `+Make`
+      # half references PocketdKit and stays app-side.
+      - path: Sources/PocketdKit/Widgets/WidgetBrief.swift
+      - path: Sources/PocketdKit/Widgets/WidgetBriefStore.swift
     info:
       path: App/Resources/Widgets-Info.plist
       properties:
