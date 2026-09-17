@@ -157,6 +157,25 @@ public enum PersonalDataWrites {
             }
         }
 
+        // A reminder set in the past cannot fire, and somebody asking to be
+        // reminded is asking for something in the future.
+        //
+        // This is not a hypothetical. Asked "remind me to take the bins out at
+        // 2am" at ten past three in the afternoon, qwen3-1.7b filled `when`
+        // with "2am today" — and `MomentPhrase` honours a named day even when
+        // it is behind, on the reasoning that a person who names a day is owed
+        // the day they named. That reasoning holds for a day the USER named.
+        // The model added this one, and the result was an alarm thirteen hours
+        // in the past that would never go off.
+        //
+        // Only a time of day that has already gone today is moved. An
+        // explicitly past DATE — "remind me on the 15th", said on the 17th — is
+        // left alone, because rolling that to next month would invent an
+        // intention nobody had.
+        let rolled = rollPastTimeForward(due, now: now, calendar: calendar)
+        due = rolled.due
+        let movedForward = rolled.moved
+
         let candidate = NewReminder(title: title, due: due, dueHasTime: dueHasTime, repeats: repeats)
 
         if case let .rows(rows, _) = await existing(), let clash = duplicate(of: candidate, in: rows, calendar: calendar) {
@@ -178,7 +197,7 @@ public enum PersonalDataWrites {
             // is for the answer to state what it actually set, so the user
             // catches it in the same breath.
             return [
-                "text": confirmation(for: candidate, calendar: calendar),
+                "text": confirmation(for: candidate, calendar: calendar, movedForward: movedForward),
                 "created": true
             ]
         case let .unauthorised(authorization):
@@ -302,6 +321,38 @@ public enum PersonalDataWrites {
 
     // MARK: - Shared judgement
 
+    /// Moves a due time that has already gone today to the next day.
+    ///
+    /// A reminder set in the past cannot fire, and somebody asking to be
+    /// reminded is asking for something in the future.
+    ///
+    /// This is not hypothetical. Asked "remind me to take the bins out at 2am"
+    /// at ten past three in the afternoon, qwen3-1.7b filled `when` with "2am
+    /// today" — and `MomentPhrase` honours a named day even when it is behind,
+    /// on the reasoning that a person who names a day is owed the day they
+    /// named. That reasoning holds for a day the USER named. The model added
+    /// this one, and the result was an alarm thirteen hours in the past that
+    /// would never go off.
+    ///
+    /// Only a time of day that has already gone TODAY is moved. An explicitly
+    /// past date — "remind me on the 12th", said on the 14th — is left alone,
+    /// because rolling that to next month would invent an intention nobody had.
+    ///
+    /// Its own function so the decision can be tested directly. Reaching it
+    /// through `MomentPhrase.resolve` cannot be: `NSDataDetector` anchors "2am
+    /// today" to the system clock and ignores any injected `now`, so a test
+    /// that went the long way round would be testing the hour it ran at.
+    static func rollPastTimeForward(
+        _ due: Date?,
+        now: Date,
+        calendar: Calendar
+    ) -> (due: Date?, moved: Bool) {
+        guard let due, due < now, calendar.isDate(due, inSameDayAs: now),
+              let nextDay = calendar.date(byAdding: .day, value: 1, to: due)
+        else { return (due, false) }
+        return (nextDay, true)
+    }
+
     /// A title the user would recognise, or nothing.
     ///
     /// A model that calls the tool with an empty string, a lone full stop or
@@ -365,11 +416,22 @@ public enum PersonalDataWrites {
             : PersonalDataFormat.day(date, timeZone: calendar.timeZone, calendar: calendar)
     }
 
-    static func confirmation(for reminder: NewReminder, calendar: Calendar) -> String {
+    /// - Parameter movedForward: Whether the due date was rolled to tomorrow
+    ///   because the time had already gone. Said out loud rather than done
+    ///   quietly: the user asked for a time, and if this reading is wrong they
+    ///   can only tell us so if they are told what happened.
+    static func confirmation(
+        for reminder: NewReminder,
+        calendar: Calendar,
+        movedForward: Bool = false
+    ) -> String {
         guard let due = reminder.due else {
             return "Reminder added: \"\(reminder.title)\", with no due date."
         }
         let when = describe(due, hasTime: reminder.dueHasTime, calendar: calendar)
+        if movedForward, reminder.repeats == nil {
+            return "That time has already passed today, so I have set \"\(reminder.title)\" for \(when)."
+        }
         guard let repeats = reminder.repeats else {
             return "Reminder set: \"\(reminder.title)\" for \(when)."
         }

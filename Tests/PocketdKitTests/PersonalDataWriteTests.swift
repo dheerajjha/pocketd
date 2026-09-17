@@ -119,6 +119,49 @@ struct PersonalDataWriteTests {
 
     // MARK: - Times that must not be invented
 
+    @Test("a time that has already gone today is moved to the next one")
+    func pastTimeIsRolledForward() {
+        // Found by running it. Asked "remind me to take the bins out at 2am" at
+        // ten past three in the afternoon, qwen3-1.7b filled `when` with "2am
+        // today" — and MomentPhrase honours a named day even when it is behind,
+        // because a person who names a day is owed the day they named. That
+        // reasoning is about a day the USER named. The model added this one,
+        // and the result was an alarm thirteen hours in the past.
+        //
+        // Tested against the decision directly rather than through
+        // MomentPhrase: NSDataDetector anchors "2am today" to the system clock
+        // and ignores an injected now, so going the long way round would test
+        // the hour this ran at.
+        let afternoon = calendar.date(from: DateComponents(year: 2026, month: 9, day: 14, hour: 15, minute: 7))!
+        let twoThisMorning = calendar.date(from: DateComponents(year: 2026, month: 9, day: 14, hour: 2, minute: 0))!
+
+        let rolled = PersonalDataWrites.rollPastTimeForward(twoThisMorning, now: afternoon, calendar: calendar)
+        #expect(rolled.moved)
+        #expect(calendar.component(.day, from: rolled.due ?? afternoon) == 15)
+        #expect(calendar.component(.hour, from: rolled.due ?? afternoon) == 2)
+
+        // A time still ahead today is left exactly where it is.
+        let sixTonight = calendar.date(from: DateComponents(year: 2026, month: 9, day: 14, hour: 18, minute: 0))!
+        let untouched = PersonalDataWrites.rollPastTimeForward(sixTonight, now: afternoon, calendar: calendar)
+        #expect(!untouched.moved)
+        #expect(untouched.due == sixTonight)
+
+        // And a reminder with no due date has nothing to move.
+        #expect(PersonalDataWrites.rollPastTimeForward(nil, now: afternoon, calendar: calendar).moved == false)
+    }
+
+    @Test("an explicitly past date is left alone")
+    func pastDateIsNotRolled() {
+        // "Remind me on the 12th", said on the 14th. Rolling that to next month
+        // would invent an intention nobody had — only a time of day that has
+        // gone TODAY is moved.
+        let afternoon = calendar.date(from: DateComponents(year: 2026, month: 9, day: 14, hour: 15, minute: 7))!
+        let twoDaysAgo = calendar.date(from: DateComponents(year: 2026, month: 9, day: 12, hour: 9, minute: 0))!
+        let result = PersonalDataWrites.rollPastTimeForward(twoDaysAgo, now: afternoon, calendar: calendar)
+        #expect(!result.moved)
+        #expect(result.due == twoDaysAgo)
+    }
+
     @Test("a repeating phrase files one repeating reminder, not one reminder")
     func recurrenceIsFiled() async {
         // "at 9" goes through the bare-clock parser, which uses the calendar it
