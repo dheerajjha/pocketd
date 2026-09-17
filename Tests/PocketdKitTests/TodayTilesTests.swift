@@ -91,11 +91,11 @@ struct TodayTilesTests {
         // their day is clear on the strength of having not looked.
         let off = TodayTiles.upNext(Self.snapshot(calendar: .off), now: Self.date(8), calendar: Self.calendar, locale: Self.locale)
         #expect(off.value == "Off")
-        #expect(off.footnote == "Connect calendar")
+        #expect(off.footnote == "Connect your calendar")
         #expect(off.tone == .neutral)
 
         let refused = TodayTiles.upNext(Self.snapshot(calendar: .refused), now: Self.date(8), calendar: Self.calendar, locale: Self.locale)
-        #expect(refused.footnote == "Allow calendar in Settings")
+        #expect(refused.footnote == "Allow in Settings")
         #expect(refused.tone == .caution)
 
         let absent = TodayTiles.upNext(Self.snapshot(calendar: .unavailable), now: Self.date(8), calendar: Self.calendar, locale: Self.locale)
@@ -151,7 +151,7 @@ struct TodayTilesTests {
     func dueWhenNotConnected() {
         let tile = TodayTiles.due(Self.snapshot(reminders: .off))
         #expect(tile.value == "Off")
-        #expect(tile.footnote == "Connect reminders")
+        #expect(tile.footnote == "Connect your reminders")
     }
 
     // MARK: - Sleep

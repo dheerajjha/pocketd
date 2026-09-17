@@ -81,7 +81,7 @@ public enum TodayTiles {
         locale: Locale = .current
     ) -> Tile {
         guard snapshot.calendar.isReadable else {
-            return unavailable(snapshot.calendar, source: "calendar")
+            return unavailable(snapshot.calendar, source: "your calendar")
         }
         guard let next = snapshot.nextEvent(now: now) else {
             // "Free" and not "None". The tile is answering "what is next", and
@@ -121,7 +121,7 @@ public enum TodayTiles {
 
     public static func due(_ snapshot: TodaySnapshot) -> Tile {
         guard snapshot.reminders.isReadable else {
-            return unavailable(snapshot.reminders, source: "reminders")
+            return unavailable(snapshot.reminders, source: "your reminders")
         }
         let overdue = snapshot.overdue.count
         return Tile(
@@ -199,7 +199,7 @@ public enum TodayTiles {
         case .off:
             return Tile(value: "Off", footnote: "Connect \(source)", tone: .neutral)
         case .refused:
-            return Tile(value: "Off", footnote: "Allow \(source) in Settings", tone: .caution)
+            return Tile(value: "Off", footnote: "Allow in Settings", tone: .caution)
         case .unavailable:
             return Tile(value: "—", footnote: "Not on this iPhone", tone: .neutral)
         }

@@ -368,7 +368,7 @@ struct DevicesView: View {
 
         YouSection(
             "CONNECTED",
-            footnote: snippet?.note ?? "Point any Ollama or OpenAI-compatible client at the address above."
+            footnote: snippet?.note ?? "Point the tools on your laptop at the address above; the setup guide has the exact lines."
         ) {
             if model.configuration.requiresAuth {
                 RowShell(symbol: "key", title: "API key", detail: showKey ? nil : "Hidden until you ask") {
