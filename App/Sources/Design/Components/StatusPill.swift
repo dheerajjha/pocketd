@@ -55,8 +55,13 @@ struct StatusPill: View {
             }
             Text(text)
                 .font(Font.pd.caption.weight(.medium))
+                // One word or two, never "Needs atte…". This pill shares a row
+                // with a title that can be any length, and a flexible label
+                // beside a flexible title is the one that loses.
+                .fixedSize(horizontal: true, vertical: false)
         }
         .foregroundStyle(kind.ink)
+        .layoutPriority(1)
         .padding(.horizontal, PDSpacing.s)
         .frame(height: PDMetric.linkPillHeight + 4)
         .background(kind.fill, in: Capsule(style: .continuous))

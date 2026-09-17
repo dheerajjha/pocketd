@@ -54,6 +54,11 @@ struct AskBar: View {
                 .focused(focus ?? $isFocused)
                 .submitLabel(.send)
                 .disabled(isListening)
+                // The placeholder is not a label: VoiceOver stops reading it
+                // the moment there is a character in the field, and a text
+                // field announced as nothing but its contents gives no clue
+                // what typing into it will do.
+                .accessibilityLabel("Your question")
 
             trailingControl
         }
