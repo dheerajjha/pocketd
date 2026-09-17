@@ -77,13 +77,21 @@ private struct Shell: View {
 
             selected
 
+            // The bar belongs to the phone, not to the page: without this it
+            // rides up on top of the keyboard and sits in the gap between the
+            // composer and the keys, which is the one place on Ask nobody is
+            // looking for it.
+            //
+            // The full-height frame is what makes `ignoresSafeArea` mean
+            // anything here. The modifier extends the view it is attached to
+            // into the safe area, and a capsule 53pt tall attached directly has
+            // nothing to extend — the ZStack still pins it to the keyboard's
+            // top edge. Filling the stack first, then ignoring, puts this
+            // layer's bottom back at the bottom of the phone.
             FloatingTabBar(selection: $navigation.tab)
                 .padding(.horizontal, PDMetric.tabBarSideMargin)
                 .padding(.bottom, PDMetric.tabBarBottomInset)
-                // The bar belongs to the phone, not to the page: without this
-                // it rides up on top of the keyboard and sits in the gap
-                // between the composer and the keys, which is the one place on
-                // Ask nobody is looking for it.
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .ignoresSafeArea(.keyboard, edges: .bottom)
         }
         // Above the tabs rather than inside one of them: a download is the one
