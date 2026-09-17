@@ -101,6 +101,31 @@ final class BriefingState {
 /// rather than in `DemoSeed` because that file stages the *device's* calendar
 /// and reminders, which are real stores a real install shares; this stages
 /// nothing and only decorates one value on its way to a view.
+/// A clock for screenshots, and nothing else.
+///
+/// A store capture is taken whenever the capture session happens to run, and
+/// the brief greets by the hour: shot at midnight it opens "Good evening" under
+/// a status bar that says 9:41, which is the one contradiction a reader spots
+/// in under a second. `-pocketd.demoTime 09:41` moves Today's idea of now to
+/// that time today; the seeded calendar is relative to the real day, so the
+/// tiles stay true. Absent in Release, like every other `-pocketd.` argument.
+enum DemoClock {
+    static var now: Date {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "-pocketd.demoTime"),
+              index + 1 < arguments.count else { return Date() }
+        let parts = arguments[index + 1].split(separator: ":").compactMap { Int($0) }
+        guard parts.count == 2,
+              let shifted = Calendar.current.date(bySettingHour: parts[0], minute: parts[1], second: 0, of: Date())
+        else { return Date() }
+        return shifted
+        #else
+        return Date()
+        #endif
+    }
+}
+
 enum DemoHealth {
     #if DEBUG
     static let isRequested = ProcessInfo.processInfo.arguments.contains("-pocketd.demoHealth")
@@ -152,7 +177,7 @@ extension AppModel {
     /// clear diary and an app that shows a clear diary to somebody whose
     /// calendar permission it lost three weeks ago — `Availability` carries
     /// which of the two this is, and every consumer branches on it.
-    func makeTodaySnapshot(now: Date = Date(), calendar: Calendar = .current) async -> TodaySnapshot {
+    func makeTodaySnapshot(now: Date = DemoClock.now, calendar: Calendar = .current) async -> TodaySnapshot {
         let calendarAvailability = availability(for: .calendar)
         let remindersAvailability = availability(for: .reminders)
         let health: TodaySnapshot.Availability = DemoHealth.isRequested ? .connected : briefingHealthAvailability
@@ -352,7 +377,7 @@ extension AppModel {
         briefing.isRefreshing = true
         defer { briefing.isRefreshing = false }
 
-        let now = Date()
+        let now = DemoClock.now
         let calendar = Calendar.current
         let store = Self.dailyBriefStore()
 

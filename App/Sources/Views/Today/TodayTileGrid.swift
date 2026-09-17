@@ -19,7 +19,7 @@ struct TodayTileGrid: View {
     /// Recomputed on every redraw rather than stored, because "in 2h 10m" is a
     /// function of the clock and a stored one would still be saying it at half
     /// past eleven. The parent redraws this once a minute.
-    private var now: Date { Date() }
+    private var now: Date { DemoClock.now }
 
     var body: some View {
         Grid(horizontalSpacing: PDSpacing.tileGap, verticalSpacing: PDSpacing.tileGap) {

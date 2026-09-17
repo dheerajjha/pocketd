@@ -52,7 +52,7 @@ struct TodayView: View {
                 // on the screen and stays put; the header scrolls away, which
                 // is what gives the page its whole height back once somebody is
                 // reading rather than arriving.
-                HeroHeader(date: Date(), wash: false) {
+                HeroHeader(date: DemoClock.now, wash: false) {
                     CircleIconButton(symbol: "bell", label: "Routines", badge: waiting) {
                         navigator.go(.routines)
                     }
