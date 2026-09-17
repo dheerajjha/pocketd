@@ -48,6 +48,7 @@ struct TodayTileGrid: View {
             value: tile.value,
             unit: tile.unit,
             footnote: tile.footnote,
+            isText: Self.isText(kind),
             tint: Self.tint(for: tile.tone)
         ) {
             open(kind)
@@ -72,6 +73,15 @@ struct TodayTileGrid: View {
         case .sleep: "Sleep"
         case .steps: "Steps"
         }
+    }
+
+    /// Which of the four reads as words rather than as a figure.
+    ///
+    /// UP NEXT is an event title, or "Free" when there is none — never a
+    /// number. The other three are counts and durations, and the mono face is
+    /// what keeps "6h 36m" and "6h 02m" aligned across a redraw.
+    private static func isText(_ kind: TodayTile) -> Bool {
+        kind == .upNext
     }
 
     private static func symbol(for kind: TodayTile) -> String {

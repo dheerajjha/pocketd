@@ -229,6 +229,11 @@ extension Font {
         /// a reading, not a headline.
         static let statValue = Font.system(size: 27, design: .monospaced)
             .monospacedDigit()
+        /// The same slot when the value is words rather than a figure — an
+        /// event title on UP NEXT, or "Free". Proportional and semibold: the
+        /// mono face is the reference's way of saying "this is a number", and
+        /// a letter-spaced "Design review" reads as a rendering fault.
+        static let statText = Font.system(size: 24, weight: .semibold)
     }
 }
 
