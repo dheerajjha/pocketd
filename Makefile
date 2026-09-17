@@ -64,16 +64,33 @@ BUNDLE_ID ?=
 # target. The project defines PRODUCT_BUNDLE_IDENTIFIER for both in terms of
 # POCKETD_BUNDLE_ID, so moving that one variable moves both and keeps the
 # nesting. Same trick, and same reason, as POCKETD_ENTITLEMENTS below.
+# Release, not Debug. This is an inference app: a Debug build generates visibly
+# slowly, which is tolerable for a screenshot and wrong for anything where the
+# tokens appear on camera, or for any judgement about whether the phone is fast
+# enough. The simulator target stays Debug because llama.cpp on a simulator is
+# useless for speed either way.
+#
+# CURRENT_PROJECT_VERSION is stamped because the default is 1, and a phone
+# carrying "1.0.0 (1)" names no commit. That is not hypothetical: it is how
+# nobody could tell whether the build on the test phone contained the write
+# path, and the answer turned out to be that it could not have, because the app
+# target did not compile at those commits. f0a8ebf fixed this for releases;
+# device installs had the same trap. Override it with VERSION= to match a
+# specific upload.
+VERSION ?= $(shell date +%s)
+
 device-install: app
 	xcodebuild -project Pocketd.xcodeproj -scheme Pocketd \
 		-destination 'platform=iOS,id=$(DEVICE)' \
+		-configuration Release \
 		-derivedDataPath .build/device -skipMacroValidation \
 		-allowProvisioningUpdates \
 		$(if $(BUNDLE_ID),POCKETD_BUNDLE_ID=$(BUNDLE_ID),) \
+		CURRENT_PROJECT_VERSION=$(VERSION) \
 		POCKETD_ENTITLEMENTS='$(PWD)/App/Resources/Pocketd-NoMemoryLimit.entitlements' \
 		build
 	xcrun devicectl device install app --device $(DEVICE) \
-		.build/device/Build/Products/Debug-iphoneos/Pocketd.app
+		.build/device/Build/Products/Release-iphoneos/Pocketd.app
 
 # Two catalogue entries answered 401 and 404 for weeks — the first two rows of
 # the list, so the first thing a new user tapped always failed. Nothing in the
