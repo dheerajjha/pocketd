@@ -1,3 +1,8 @@
+// `Combine` for `WaitingIndicator`'s `Timer.publish`. Implicit through SwiftUI
+// until Swift 6, which warns that a stored property's type comes from a module
+// this file never imported.
+import Combine
+import PocketdKit
 import SwiftUI
 
 /// Draws a model's reply: prose through `AttributedString`, code through
@@ -13,7 +18,7 @@ struct MessageContentView: View {
 
     var body: some View {
         let split = MessageMarkdown.splitReasoning(from: text)
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: PDSpacing.s) {
             if let reasoning = split.reasoning, !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 reasoningBlock(reasoning, isComplete: split.isComplete)
             }
@@ -26,38 +31,50 @@ struct MessageContentView: View {
     /// Deliberately not auto-expanding while the model thinks: a block that
     /// unfurls and then snaps shut moves the answer under the reader's eyes at
     /// the exact moment it becomes worth reading.
+    ///
+    /// "Show working" rather than "reasoning" or "chain of thought". It is what
+    /// a teacher asks for, it is plain words, and it says what is behind the
+    /// chevron without teaching anybody a term they did not need.
     @ViewBuilder
     private func reasoningBlock(_ reasoning: String, isComplete: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: PDSpacing.xs) {
             Button {
-                withAnimation(.snappy) { isReasoningExpanded.toggle() }
+                withAnimation(PDMotion.standard) { isReasoningExpanded.toggle() }
             } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "brain")
-                    Text(isComplete ? "Thought it through" : "Thinking…")
+                HStack(spacing: PDSpacing.xs) {
+                    Text(disclosureLabel(isComplete: isComplete))
                     Image(systemName: "chevron.down")
-                        .font(.caption2)
+                        .font(.system(size: 10, weight: .semibold))
                         .rotationEffect(.degrees(isReasoningExpanded ? 0 : -90))
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .contentShape(.rect)
+                .font(Font.pd.caption.weight(.medium))
+                .foregroundStyle(Color.pd.inkSecondary)
+                .padding(.horizontal, PDSpacing.s)
+                .frame(height: PDMetric.linkPillHeight + 4)
+                .background(Color.pd.chip, in: Capsule(style: .continuous))
+                .contentShape(Capsule(style: .continuous))
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(isComplete ? "The model's reasoning" : "The model is reasoning")
+            .buttonStyle(PDPressStyle())
+            .accessibilityLabel(isComplete ? "Show working" : "Still working")
             .accessibilityValue(isReasoningExpanded ? "Expanded" : "Collapsed")
 
             if isReasoningExpanded {
                 Text(reasoning.trimmingCharacters(in: .whitespacesAndNewlines))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(Font.pd.secondary)
+                    .foregroundStyle(Color.pd.inkSecondary)
+                    .lineSpacing(4)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.leading, 8)
+                    .padding(.leading, PDSpacing.s)
                     .overlay(alignment: .leading) {
-                        Rectangle().fill(.secondary.opacity(0.3)).frame(width: 2)
+                        Rectangle().fill(Color.pd.divider).frame(width: 2)
                     }
             }
         }
+    }
+
+    private func disclosureLabel(isComplete: Bool) -> String {
+        if !isComplete { return "Working…" }
+        return isReasoningExpanded ? "Hide working" : "Show working"
     }
 
     @ViewBuilder
@@ -73,7 +90,7 @@ struct MessageContentView: View {
                 WaitingIndicator()
             }
         } else {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: PDSpacing.s) {
                 ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                     view(for: block)
                 }
@@ -86,35 +103,45 @@ struct MessageContentView: View {
         switch block {
         case let .paragraph(text):
             Text(inline(text))
+                .font(Font.pd.body)
+                .foregroundStyle(Color.pd.ink)
+                .lineSpacing(5)
                 .fixedSize(horizontal: false, vertical: true)
 
         case let .heading(level, text):
             Text(inline(text, style: headingStyle(level)))
-                .font(.system(headingStyle(level), weight: .semibold))
+                .font(.system(size: headingSize(level), weight: .semibold))
+                .foregroundStyle(Color.pd.ink)
                 .fixedSize(horizontal: false, vertical: true)
 
         case let .quote(text):
-            HStack(alignment: .top, spacing: 8) {
+            HStack(alignment: .top, spacing: PDSpacing.xs) {
                 RoundedRectangle(cornerRadius: 1.5)
-                    .fill(Color.secondary.opacity(0.4))
+                    .fill(Color.pd.divider)
                     .frame(width: 3)
                 Text(inline(text))
-                    .foregroundStyle(.secondary)
+                    .font(Font.pd.body)
+                    .foregroundStyle(Color.pd.inkSecondary)
+                    .lineSpacing(5)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .fixedSize(horizontal: false, vertical: true)
 
         case let .list(_, items):
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: PDSpacing.xxs) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline, spacing: PDSpacing.xs) {
                         // firstTextBaseline, not top: at accessibility sizes a
                         // top-aligned marker floats above the line it belongs to.
                         Text(item.marker)
-                            .foregroundStyle(.secondary)
+                            .font(Font.pd.body)
+                            .foregroundStyle(Color.pd.inkTertiary)
                             .monospacedDigit()
                             .fixedSize()
                         Text(inline(item.text))
+                            .font(Font.pd.body)
+                            .foregroundStyle(Color.pd.ink)
+                            .lineSpacing(5)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(.leading, CGFloat(item.depth) * 14)
@@ -125,7 +152,21 @@ struct MessageContentView: View {
             CodeBlockView(language: language, code: code)
 
         case .rule:
-            Divider()
+            Rectangle()
+                .fill(Color.pd.divider)
+                .frame(height: 1)
+        }
+    }
+
+    /// The same four steps `headingStyle` names, at the absolute sizes this
+    /// design is drawn at. Kept beside it rather than derived from it because
+    /// `inline(_:style:)` still needs the `TextStyle` for its monospaced runs.
+    private func headingSize(_ level: Int) -> CGFloat {
+        switch level {
+        case 1: 22
+        case 2: 20
+        case 3: 19
+        default: 17
         }
     }
 
@@ -178,7 +219,7 @@ struct CodeBlockView: View {
     @State private var copied = false
     @State private var copyTick = 0
 
-    private let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+    private let shape = RoundedRectangle(cornerRadius: PDRadius.tile, style: .continuous)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -188,23 +229,22 @@ struct CodeBlockView: View {
             // accessibility text sizes almost every line is too wide to fit.
             ScrollView(.horizontal) {
                 Text(code.isEmpty ? " " : code)
-                    .font(.system(.footnote, design: .monospaced))
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(Color.pd.ink)
                     .fixedSize()
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 10)
+                    .padding(.horizontal, PDSpacing.s)
+                    .padding(.bottom, PDSpacing.s)
             }
             .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         }
-        .background(Color(.tertiarySystemBackground), in: shape)
-        .overlay(shape.strokeBorder(Color.secondary.opacity(0.25)))
+        .background(Color.pd.fillTile, in: shape)
+        .overlay(shape.strokeBorder(Color.pd.cardStroke, lineWidth: 1))
         .sensoryFeedback(.success, trigger: copyTick)
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Text(copied ? "COPIED" : (language?.uppercased() ?? ""))
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(copied ? Color.green : Color.secondary)
+        HStack(spacing: PDSpacing.xs) {
+            MiniLabel(copied ? "Copied" : (language ?? ""), tint: copied ? .pd.positive : .pd.inkSecondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
 
@@ -212,19 +252,19 @@ struct CodeBlockView: View {
 
             Button(action: copy) {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .font(.caption)
+                    .font(.system(size: 13, weight: .regular))
                     .frame(minWidth: 44, minHeight: 32)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .foregroundStyle(copied ? Color.green : Color.secondary)
+            .foregroundStyle(copied ? Color.pd.positive : Color.pd.inkSecondary)
             .accessibilityLabel(copied ? "Code copied" : language.map { "Copy \($0) code" } ?? "Copy code")
         }
         // The block's own text is left to scale as far as the reader needs it
         // to; capping the chrome around it is what keeps a label and a button
         // from filling the bubble at accessibility3.
         .dynamicTypeSize(...DynamicTypeSize.accessibility1)
-        .padding(.leading, 10)
+        .padding(.leading, PDSpacing.s)
         .padding(.trailing, 2)
         .padding(.top, 2)
     }
@@ -271,6 +311,7 @@ struct CodeBlockView: View {
         """)
         .padding()
     }
+    .pdCanvas()
 }
 
 #Preview("Streaming, at accessibility3") {
@@ -284,6 +325,7 @@ struct CodeBlockView: View {
         """)
         .padding()
     }
+    .pdCanvas()
     .dynamicTypeSize(.accessibility3)
 }
 
@@ -316,12 +358,12 @@ private struct WaitingIndicator: View {
             }
             if elapsed >= 5 {
                 Text("\(elapsed)s")
-                    .font(.caption2)
+                    .font(Font.pd.miniLabel)
                     .monospacedDigit()
                     .transition(.opacity)
             }
         }
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Color.pd.inkTertiary)
         .onReceive(tick) { _ in
             lit = (lit + 1) % 3
             // 0.4s a tick, so every third is a second. Counting ticks rather
