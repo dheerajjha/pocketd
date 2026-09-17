@@ -384,14 +384,20 @@ extension AppModel {
         // anything is published — because it decides what is published.
         let willGenerate = loadedModelID != nil && !isGenerating && briefing.generation == nil
 
-        // The template, unless a model already wrote today's and no model is
-        // free to write it again. That case is a Refresh tapped while the chat
-        // is answering, and replacing a good paragraph with the template there
-        // would be losing the better text to produce the worse one. The words
-        // stay; the snapshot travelling with them moves on, which is what the
-        // widget in the other process reads.
+        // The template, unless a model already wrote today's and the model that
+        // could write it again is merely busy. That case is a Refresh tapped
+        // while the chat is answering, and replacing a good paragraph with the
+        // template there would be losing the better text to produce the worse
+        // one. The words stay; the snapshot travelling with them moves on,
+        // which is what the widget in the other process reads.
+        //
+        // `loadedModelID != nil` is the whole of the difference, and without it
+        // Refresh was a button that did nothing: with no brain resident there
+        // is no better paragraph coming, ever, and the card went on showing
+        // what a brain that has since been removed wrote hours ago — under a
+        // callout inviting the reader to get a brain so it could write one.
         let republished: DailyBrief
-        if !willGenerate, let today, today.source != .template {
+        if loadedModelID != nil, !willGenerate, let today, today.source != .template {
             republished = DailyBrief(
                 text: today.text, generatedAt: today.generatedAt, source: today.source, snapshot: snapshot
             )
