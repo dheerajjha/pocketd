@@ -19,9 +19,21 @@ struct OnboardingBrainCard: View {
 
     /// The transfer this screen is watching, if the brain step started one.
     private var transfer: ModelTransfer? {
-        model.transfers.values
+        #if DEBUG
+        if let staged = OnboardingDownloadStage.transfer { return staged }
+        #endif
+        return model.transfers.values
             .sorted { $0.record.displayName < $1.record.displayName }
             .first
+    }
+
+    /// The measured rate behind the "about 4 min left" line.
+    private var pace: AppModel.DownloadPace? {
+        #if DEBUG
+        if let staged = OnboardingDownloadStage.pace { return staged }
+        #endif
+        guard let transfer else { return nil }
+        return model.pace(for: transfer.id)
     }
 
     private var isReady: Bool { model.loadedModelID != nil }
@@ -34,6 +46,13 @@ struct OnboardingBrainCard: View {
     /// promise that the bytes are still gettable.
     @State private var cancelled: ModelRecord?
 
+    private var stopped: ModelRecord? {
+        #if DEBUG
+        if let staged = OnboardingDownloadStage.cancelledRecord { return staged }
+        #endif
+        return cancelled
+    }
+
     var body: some View {
         PDCard(warm: true) {
             VStack(alignment: .leading, spacing: PDSpacing.s) {
@@ -41,12 +60,12 @@ struct OnboardingBrainCard: View {
 
                 if isReady {
                     ready
-                } else if let cancelled, transfer?.isActive != true {
+                } else if let stopped, transfer?.isActive != true {
                     // Ahead of the transfer branch, because a cancel leaves a
                     // `.stopping` and then a `.paused` transfer behind it and
                     // "Try again" is not what somebody who just tapped Cancel
                     // asked to be offered.
-                    downloadLater(cancelled)
+                    downloadLater(stopped)
                 } else if let transfer {
                     running(transfer)
                 } else if !model.installed.isEmpty {
@@ -198,12 +217,12 @@ struct OnboardingBrainCard: View {
             // The estimate sits beside the percentage rather than under the
             // byte counts, because "how long" is the question and the megabytes
             // are only the evidence for it.
-            if let left = OnboardingDownloadWords.remaining(model.pace(for: transfer.id)) {
+            if let left = OnboardingDownloadWords.remaining(pace) {
                 line += " · \(left)"
             }
             line += "\n\(OnboardingDownloadWords.size(progress.receivedBytes))"
             line += " of \(OnboardingDownloadWords.size(progress.totalBytes))"
-            if let pace = model.pace(for: transfer.id), pace.bytesPerSecond > 0 {
+            if let pace, pace.bytesPerSecond > 0 {
                 line += " · \(OnboardingDownloadWords.size(Int64(pace.bytesPerSecond)))/s"
             }
             return line

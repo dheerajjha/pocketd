@@ -15,7 +15,23 @@ import PocketdKit
 /// sheet on the final screen for somebody who declined two screens ago.
 enum OnboardingSnapshot {
 
-    static func build(healthEnabled: Bool, now: Date = Date()) async -> TodaySnapshot {
+    /// Where Health stands, from the two facts that decide it.
+    ///
+    /// The switch being on is not the same as the store having answered. The
+    /// first build asked only the switch, so a phone where the request failed —
+    /// every unsigned simulator build, and any device with a restricted Health
+    /// store — printed a green tick next to Health on the screen whose entire
+    /// claim is that it is telling you the truth about your own day.
+    static func healthAvailability(
+        enabled: Bool,
+        reported: HealthAvailability
+    ) -> TodaySnapshot.Availability {
+        guard HealthAccess.isAvailable else { return .unavailable }
+        guard enabled else { return .off }
+        return reported == .available ? .connected : .refused
+    }
+
+    static func build(health: TodaySnapshot.Availability, now: Date = Date()) async -> TodaySnapshot {
         let calendar = EventAccess.authorization(for: .calendar)
         let reminders = EventAccess.authorization(for: .reminders)
 
@@ -49,9 +65,7 @@ enum OnboardingSnapshot {
             generatedAt: now,
             calendar: availability(calendar),
             reminders: availability(reminders),
-            // The switch is on and the store exists, which is the strongest
-            // claim HealthKit permits — it never confirms a read grant.
-            health: healthEnabled && HealthAccess.isAvailable ? .connected : .off,
+            health: health,
             events: events,
             dueToday: dueToday,
             overdue: overdue

@@ -71,7 +71,15 @@ struct OnboardingConnectStep: View {
                     }
 
                     if state == .needsAttention {
-                        Callout(symbol: "gear", text: refusalPrimer)
+                        // Amber, like the pill above it. A blue information
+                        // bubble under an amber card is two different opinions
+                        // about how much this matters.
+                        Callout(
+                            symbol: "gear",
+                            text: refusalPrimer,
+                            tint: .pd.caution,
+                            fill: .pd.cautionSoft
+                        )
                     }
                 }
             }
@@ -130,9 +138,20 @@ struct OnboardingConnectStep: View {
         case .health:
             // Health never confirms a read grant — HealthKit deliberately will
             // not say, so that an app cannot infer what a user hid. "Connected"
-            // here means the request was put and the store exists, which is the
-            // strongest honest claim available.
-            model.healthToolsEnabled && model.healthAvailability == .available ? .connected : .connect
+            // here means the request was put and the store answered, which is
+            // the strongest honest claim available.
+            //
+            // The third case is the one worth having: the switch is on and iOS
+            // could not be asked. Without it the Connect button looks like it
+            // did nothing, which on a simulator — where the Health sheet never
+            // appears — is exactly what it looks like.
+            if !model.healthToolsEnabled {
+                .connect
+            } else if model.healthAvailability == .available {
+                .connected
+            } else {
+                .needsAttention
+            }
         }
     }
 
@@ -185,11 +204,18 @@ struct OnboardingConnectStep: View {
         }
     }
 
+    /// The card's title, and the shortest honest version of each.
+    ///
+    /// "Apple Health" is what the spec wrote and what the first build shipped.
+    /// It is two words too long: `ConnectCard` puts the status pill on the same
+    /// line, and "Apple Health" beside "Needs attention" clipped the pill to
+    /// "Needs atte…" on a Pro Max — the widest phone there is. The word the
+    /// headline and the detail already use is "Health".
     private var title: String {
         switch ability {
         case .calendar: "Calendar"
         case .reminders: "Reminders"
-        case .health: "Apple Health"
+        case .health: "Health"
         }
     }
 
@@ -218,7 +244,10 @@ struct OnboardingConnectStep: View {
         switch ability {
         case .calendar: "Allowed in Settings › Privacy › Calendars."
         case .reminders: "Allowed in Settings › Privacy › Reminders."
-        case .health: "Allowed in Settings › Health › Data Access."
+        // The store's own reason when there is one — "could not ask iOS" and
+        // "not available on this device" are different problems and only one of
+        // them is fixed by a trip to Settings.
+        case .health: model.healthAvailability.explanation ?? "Allowed in Settings › Health › Data Access."
         }
     }
 }

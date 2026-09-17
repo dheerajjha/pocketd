@@ -115,18 +115,36 @@ struct OnboardingFlow: View {
         .animation(PDMotion.gentle, value: downloading)
     }
 
-    /// "Downloading brain · 34% · about 4 min left", or nothing.
+    /// The transfer the line is about.
     ///
-    /// Reads `visibleTransfers` rather than `transfers` so that a download the
-    /// person dismissed elsewhere stays dismissed, and so the line disappears a
-    /// few seconds after it finishes instead of sitting there saying 100%.
+    /// `visibleTransfers` rather than `transfers`, so that a download somebody
+    /// dismissed elsewhere stays dismissed and the line goes a few seconds
+    /// after it finishes instead of sitting there saying 100%.
+    private var bannerTransfer: ModelTransfer? {
+        #if DEBUG
+        if let staged = OnboardingDownloadStage.transfer { return staged }
+        #endif
+        return model.visibleTransfers.first
+    }
+
+    private var bannerPace: AppModel.DownloadPace? {
+        #if DEBUG
+        if let staged = OnboardingDownloadStage.pace { return staged }
+        #endif
+        guard let bannerTransfer else { return nil }
+        return model.pace(for: bannerTransfer.id)
+    }
+
+    /// "Downloading brain · 34% · about 4 min left", or nothing.
     ///
     /// The estimate is the measured rate, padded — see
     /// `OnboardingDownloadWords.remaining`. A percentage on its own answers
-    /// "how far", which is the question people ask when they have already
-    /// decided to wait; "how long" is the one they ask before deciding.
+    /// "how far", which is the question people ask once they have decided to
+    /// wait; "how long" is the one they ask before deciding, and v1 answered it
+    /// nowhere. The audit measured twenty-six minutes on a slow link with
+    /// nothing on screen saying so.
     private var downloading: String? {
-        guard let transfer = model.visibleTransfers.first else { return nil }
+        guard let transfer = bannerTransfer else { return nil }
         switch transfer.state {
         case .waiting:
             return "Downloading brain · starting"
@@ -134,7 +152,7 @@ struct OnboardingFlow: View {
             return "Stopping the download"
         case .running:
             var line = "Downloading brain · \(Int((transfer.fraction * 100).rounded(.down)))%"
-            if let left = OnboardingDownloadWords.remaining(model.pace(for: transfer.id)) {
+            if let left = OnboardingDownloadWords.remaining(bannerPace) {
                 line += " · \(left)"
             }
             return line
@@ -154,7 +172,7 @@ struct OnboardingFlow: View {
 
     /// The banner's tint. Amber when something needs a person, grey otherwise.
     private var downloadNeedsAttention: Bool {
-        guard let transfer = model.visibleTransfers.first else { return false }
+        guard let transfer = bannerTransfer else { return false }
         switch transfer.state {
         case .paused, .failed: return true
         case .waiting, .running, .stopping, .finished: return false

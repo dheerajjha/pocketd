@@ -42,7 +42,12 @@ struct OnboardingDayStep: View {
             // Built once. A second read on every redraw would put an EventKit
             // query behind the scroll position.
             guard snapshot == nil else { return }
-            snapshot = await OnboardingSnapshot.build(healthEnabled: model.healthToolsEnabled)
+            snapshot = await OnboardingSnapshot.build(
+                health: OnboardingSnapshot.healthAvailability(
+                    enabled: model.healthToolsEnabled,
+                    reported: model.healthAvailability
+                )
+            )
         }
     }
 
