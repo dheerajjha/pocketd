@@ -23,9 +23,27 @@ public enum DeclaredPermissions {
     /// terminates an app that links HealthKit without it, and nothing in this
     /// app writes to Health, so a row would claim a permission the app never
     /// exercises. Health read access has its own row.
+    ///
+    /// What is deliberately **not** here is the voice pair. Hold-to-talk needs
+    /// `NSMicrophoneUsageDescription` and `NSSpeechRecognitionUsageDescription`
+    /// both, and it is tempting to fold them into one row because one button
+    /// causes both. They stay separate because iOS treats them separately:
+    /// two prompts, two switches in Settings, and two ways for this to be half
+    /// granted. A screen that promises to list what this app can reach would be
+    /// lying by showing one row for a state that has four values.
     public static let keysReportedElsewhere: Set<String> = [
         "NSLocalNetworkUsageDescription",
         "NSHealthUpdateUsageDescription",
+    ]
+
+    /// The keys behind one control, for a screen that wants to group them.
+    ///
+    /// Not a merge — see above — but the relationship is real and stating it
+    /// here is better than each screen rediscovering it. `rowKeys` still
+    /// returns both.
+    public static let voiceKeys: Set<String> = [
+        "NSMicrophoneUsageDescription",
+        "NSSpeechRecognitionUsageDescription",
     ]
 
     /// Every usage-description key that deserves a row of its own, in the order

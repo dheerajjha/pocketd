@@ -363,6 +363,47 @@ struct StoredDataAuditRulesTests {
         #expect(Set(titles).count == titles.count)
     }
 
+    @Test("the voice pair is declared, and as two rows rather than one")
+    func voicePermissionsAreDeclaredSeparately() throws {
+        // Hold-to-talk on the Ask bar needs both keys, and shipping one without
+        // the other is not a warning — iOS terminates the app the moment
+        // somebody first holds the button. So this reads the plist that
+        // actually renders rather than a fixture of it.
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let plist = repository.appendingPathComponent("App/Resources/Info.plist")
+        let info = try #require(
+            PropertyListSerialization.propertyList(
+                from: try Data(contentsOf: plist), format: nil
+            ) as? [String: Any]
+        )
+
+        for key in DeclaredPermissions.voiceKeys {
+            let reason = try #require(info[key] as? String, "\(key) must be declared")
+            #expect(reason.isEmpty == false)
+            // The unusual claim these strings make, and the one App Review
+            // will check against the code: the recogniser runs on the device.
+            #expect(
+                reason.lowercased().contains("device") || reason.lowercased().contains("anywhere"),
+                "\(key) should say where the audio goes"
+            )
+        }
+
+        // Two rows, not one. One button causes both prompts, but iOS keeps two
+        // switches and a screen that claims to list what this app can reach
+        // cannot show one row for a state with four values.
+        let keys = DeclaredPermissions.rowKeys(in: info)
+        #expect(keys.contains("NSMicrophoneUsageDescription"))
+        #expect(keys.contains("NSSpeechRecognitionUsageDescription"))
+        #expect(DeclaredPermissions.title(forInfoKey: "NSMicrophoneUsageDescription") == "Microphone")
+        #expect(
+            DeclaredPermissions.title(forInfoKey: "NSSpeechRecognitionUsageDescription")
+                == "Speech Recognition"
+        )
+    }
+
     @Test("a permission title loses the prefix, not every NS in the name")
     func permissionTitles() {
         #expect(DeclaredPermissions.title(forInfoKey: "NSCameraUsageDescription") == "Camera")

@@ -171,6 +171,23 @@ targets:
           Pocketd does not write to Health. This permission is requested only
           because iOS requires the description to be present whenever an app
           links HealthKit.
+        # Hold-to-talk on the Ask bar, and the two keys are not
+        # interchangeable: the microphone string is what iOS shows when the
+        # audio session starts, and the speech one is what it shows before
+        # `SFSpeechRecognizer` runs. Ship one without the other and the app is
+        # terminated at the moment somebody first holds the button.
+        #
+        # Both strings say where the audio goes, because that is the unusual
+        # part: `requiresOnDeviceRecognition` is set, so the recogniser never
+        # reaches Apple's servers — and the app hides the microphone entirely
+        # rather than falling back to the network one when a device cannot do
+        # it locally.
+        NSSpeechRecognitionUsageDescription: >-
+          Pocketd turns your voice into text on this iPhone so you can ask by
+          speaking. Audio is processed on the device and never uploaded.
+        NSMicrophoneUsageDescription: >-
+          Pocketd listens only while you hold the microphone button, to hear
+          your question. Nothing is recorded or sent anywhere.
         # Required to advertise over Bonjour. Without these exact service types
         # publish fails silently and the phone is discoverable by nothing.
         NSBonjourServices:
