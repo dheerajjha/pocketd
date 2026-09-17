@@ -105,9 +105,25 @@ struct OnboardingFlow: View {
             }
 
             if let downloading, showsDownloadLine {
-                MiniLabel(downloading, tint: downloadNeedsAttention ? .pd.caution : .pd.inkSecondaryWarm)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if downloadNeedsAttention {
+                    // A sentence, in the component sentences get. Mono
+                    // uppercase is this app's section label — fine for
+                    // "DOWNLOADING BRAIN · 34%", which is a status line with a
+                    // number in it, and unreadable when the same slot has to
+                    // carry two lines of "BRAIN DOWNLOAD FAILED · THERE IS A
+                    // TRY AGAIN AT THE END".
+                    Callout(
+                        symbol: "exclamationmark.triangle",
+                        text: downloading,
+                        tint: .pd.caution,
+                        fill: .pd.cautionSoft
+                    )
                     .transition(.opacity)
+                } else {
+                    MiniLabel(downloading, tint: .pd.inkSecondaryWarm)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .transition(.opacity)
+                }
             }
         }
         .padding(.horizontal, PDSpacing.heroGutter)
@@ -162,9 +178,9 @@ struct OnboardingFlow: View {
         // as a surprise at the end — which is the opposite of what a status
         // line is for.
         case .paused:
-            return "Brain download paused · it can resume later"
+            return "The brain download is paused. There is a Resume on the last screen."
         case .failed:
-            return "Brain download failed · there is a Try again at the end"
+            return "The brain download failed. There is a Try again on the last screen."
         case .finished:
             return model.loadedModelID == nil ? "Brain downloaded · loading it" : nil
         }

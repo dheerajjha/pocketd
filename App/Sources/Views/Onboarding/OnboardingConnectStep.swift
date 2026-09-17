@@ -38,8 +38,12 @@ struct OnboardingConnectStep: View {
             ornament: .icon(symbol),
             headline: headline,
             secondary: secondary,
-            primary: .init("Continue", run: onContinue),
-            escape: connected ? nil : .init("Not now", run: onContinue)
+            // One way on, not two. "Continue" and "Not now" were stacked on
+            // each other and both did exactly this, so the pair read as a
+            // choice that was never being offered — the decision on this screen
+            // is the Connect button on the card, and this is only the way past
+            // it.
+            primary: .init("Continue", run: onContinue)
         ) {
             if unavailable {
                 // A fact about the hardware. No card, because there is no
@@ -232,7 +236,14 @@ struct OnboardingConnectStep: View {
     /// prepared for.
     private var primer: String {
         switch ability {
-        case .calendar, .reminders: "Next, tap Allow Full Access."
+        // Word for word what the sheet's own button says, which is the whole
+        // job of this line. They are not the same two words: the calendar sheet
+        // offers "Allow Full Access" beside an add-only choice, and the
+        // reminders sheet on this iOS offers a plain "Allow" — so naming the
+        // calendar's button on the reminders screen sends somebody looking for
+        // a control that is not there.
+        case .calendar: "Next, tap Allow Full Access."
+        case .reminders: "Next, tap Allow."
         case .health: "Next, choose what it may read, then tap Allow."
         }
     }

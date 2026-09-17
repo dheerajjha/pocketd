@@ -49,8 +49,8 @@ struct OnboardingBrainStep: View {
             ornament: .icon("brain"),
             headline: "Give it a brain.",
             secondary: """
-            Pocketd runs a small language model on this iPhone. This one fits \
-            your phone best.
+            The brain is a file this phone keeps to itself. This one fits your \
+            phone best.
             """,
             primary: .init("Download and continue") {
                 model.download(record)
