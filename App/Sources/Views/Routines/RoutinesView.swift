@@ -632,52 +632,64 @@ enum RoutinePreviewData {
         [morningBrief, overdueWatcher]
     }
 
+    /// The demo clock's day, at a given hour: the runs below happened this
+    /// morning, so the cards read "NEXT TOMORROW" rather than "any moment".
+    private static func today(at hour: Int, _ minute: Int) -> Date {
+        Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: DemoClock.now) ?? DemoClock.now
+    }
+
+    private static func daysAgo(_ days: Int, at hour: Int, _ minute: Int) -> Date {
+        today(at: hour, minute).addingTimeInterval(-86_400 * Double(days))
+    }
+
+    /// The same day `DemoSeed` stages and `-pocketd.demoHealth` fills in, so a
+    /// capture of this card agrees with a capture of Today's tiles.
     static var morningBrief: ScheduledTask {
-        var task = RoutineTemplate.morningBrief.task(now: DemoClock.now.addingTimeInterval(-86_400 * 6))
+        var task = RoutineTemplate.morningBrief.task(now: daysAgo(6, at: 7, 30))
         task.runs = [
             .reported(
-                firing: DemoClock.now.addingTimeInterval(-86_400 - 3_600),
-                ranAt: DemoClock.now.addingTimeInterval(-86_400 - 3_000),
+                firing: daysAgo(1, at: 7, 30),
+                ranAt: daysAgo(1, at: 7, 31),
                 context: .notificationResponse,
                 output: Untrusted(
                     """
-                    You have the design review at ten and nothing after four, so the afternoon is yours. \
-                    Two things are still open on your list, both from last week. You slept six and a half \
-                    hours, a little under your usual.
+                    Standup at half past nine, then the dentist late afternoon. Two things are still \
+                    open on your list. You slept seven hours and ten minutes, the best this week.
                     """
                 )
             ),
             .reported(
-                firing: DemoClock.now.addingTimeInterval(-3_600 * 5),
-                ranAt: DemoClock.now.addingTimeInterval(-3_600 * 4),
-                context: .deskMode,
+                firing: today(at: 7, 30),
+                ranAt: today(at: 7, 31),
+                context: .notificationResponse,
                 output: Untrusted(
                     """
-                    A quiet morning: nothing on until the one-to-one at two. Three reminders are due today \
-                    and one of them has slipped. Seven hours and ten minutes of sleep, which is the best \
-                    this week.
+                    Lunch at The Arches at one, then the dentist at half past four. Two reminders are \
+                    due today and one has slipped. You slept 6h 36m, a little under your usual.
                     """
                 )
             ),
         ]
+        task.settledThrough = DemoClock.now
         return task
     }
 
     static var overdueWatcher: ScheduledTask {
-        var task = RoutineTemplate.overdueWatcher.task(now: DemoClock.now.addingTimeInterval(-86_400 * 3))
+        var task = RoutineTemplate.overdueWatcher.task(now: daysAgo(3, at: 9, 0))
         task.runs = [
             .nothingToReport(
-                firing: DemoClock.now.addingTimeInterval(-86_400),
-                ranAt: DemoClock.now.addingTimeInterval(-86_400),
+                firing: daysAgo(1, at: 9, 0),
+                ranAt: daysAgo(1, at: 9, 0),
                 context: .backgroundRefresh
             ),
             .reported(
-                firing: DemoClock.now.addingTimeInterval(-3_600 * 9),
-                ranAt: DemoClock.now.addingTimeInterval(-3_600 * 9),
+                firing: today(at: 9, 0),
+                ranAt: today(at: 9, 0),
                 context: .backgroundRefresh,
-                output: Untrusted("2 overdue\nSend the signed lease — due Friday\nBook the dentist — due 4 September")
+                output: Untrusted("1 overdue\nSubmit expenses — due yesterday at 6:00 PM")
             ),
         ]
+        task.settledThrough = DemoClock.now
         return task
     }
 }
