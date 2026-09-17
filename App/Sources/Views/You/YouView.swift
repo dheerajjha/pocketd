@@ -70,8 +70,16 @@ struct YouView: View {
         .sheet(isPresented: $showingAbout) { AboutSheet() }
         #if DEBUG
         // A screenshot's state, asked for at launch. See `YouStage`; the whole
-        // type and this call are inside `#if DEBUG`.
+        // type and these two calls are inside `#if DEBUG`.
         .task { await YouStage.apply(model: model, navigator: navigator) }
+        .task {
+            switch YouStage.sheet {
+            case "name": editingName = true
+            case "instructions": editingInstructions = true
+            case "about": showingAbout = true
+            default: break
+            }
+        }
         #endif
     }
 

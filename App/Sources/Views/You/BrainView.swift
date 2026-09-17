@@ -75,9 +75,11 @@ struct BrainView: View {
     /// rather than for how many parameters they have.
     private var recommended: [(tier: String, record: ModelRecord)] {
         let starters = model.starterModels
+        // Not "Recommended" for the last case: it would repeat the section
+        // label two lines above it, which reads as a bug rather than as a tier.
         let names = starters.count >= 3
             ? ["Quick", "Balanced", "Smart"]
-            : (starters.count == 2 ? ["Quick", "Smart"] : ["Recommended"])
+            : (starters.count == 2 ? ["Quick", "Smart"] : ["Best for this phone"])
         return Array(zip(names, starters)).map { (tier: $0.0, record: $0.1) }
     }
 

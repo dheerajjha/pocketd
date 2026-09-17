@@ -45,6 +45,15 @@ enum YouStage {
         }
     }
 
+    /// The value after `-pocketd.stage.sheet`: which of the You screen's three
+    /// sheets to open. Named rather than tapped for the reason the whole type
+    /// exists.
+    static var sheet: String? {
+        guard let index = arguments.firstIndex(of: "-pocketd.stage.sheet"),
+              arguments.indices.contains(index + 1) else { return nil }
+        return arguments[index + 1]
+    }
+
     /// The value after `-pocketd.stage.search`: what to type into "Add a
     /// brain" before the screenshot.
     static var searchQuery: String? {
