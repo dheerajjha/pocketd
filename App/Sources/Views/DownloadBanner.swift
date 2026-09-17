@@ -32,20 +32,20 @@ struct DownloadBanner: View {
             // sentence — "32.2 MB of 270.9 MB · 6.3 MB/s · under a minute
             // left" — wrapped and orphaned "a minute left" under the bar.
             // Giving that line the whole width costs nothing and it fits.
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: PDSpacing.xs) {
+                HStack(spacing: PDSpacing.s) {
                     icon(for: first)
                         .frame(width: 20)
 
                     Button { goTo(.you) } label: {
                         Text(first.record.displayName)
-                            .font(.footnote.weight(.medium))
-                            .foregroundStyle(.primary)
+                            .font(Font.pd.secondary.weight(.semibold))
+                            .foregroundStyle(Color.pd.ink)
                             .lineLimit(1)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(.rect)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PDPressStyle())
                     .accessibilityHint("Opens the You tab.")
 
                     // The number people actually look for, and it was nowhere
@@ -53,17 +53,16 @@ struct DownloadBanner: View {
                     // said megabytes, and neither says 34%.
                     if case .running = first.state {
                         Text(percent(first.fraction))
-                            .font(.caption.weight(.semibold))
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
+                            .font(Font.pd.monoValue)
+                            .foregroundStyle(Color.pd.inkSecondary)
                     }
 
                     actions(for: first)
                 }
 
                 Text(subtitle(for: first))
-                    .font(.caption2)
-                    .foregroundStyle(tint(for: first) ?? .secondary)
+                    .font(Font.pd.caption)
+                    .foregroundStyle(tint(for: first) ?? Color.pd.inkSecondary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                     .monospacedDigit()
@@ -72,19 +71,19 @@ struct DownloadBanner: View {
                 bar(for: first)
 
                 if shown.count > 1 {
-                    HStack {
-                        Text(queueLine)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                    }
+                    Text(queueLine)
+                        .font(Font.pd.caption)
+                        .foregroundStyle(Color.pd.inkSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(.regularMaterial)
-            .overlay(alignment: .bottom) { Divider() }
-            .animation(.snappy, value: first.state)
+            .padding(.horizontal, PDSpacing.m)
+            .padding(.vertical, PDSpacing.m)
+            .background(Color.pd.floatSurface)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Color.pd.divider).frame(height: 1)
+            }
+            .animation(PDMotion.gentle, value: first.state)
             .accessibilityElement(children: .contain)
             .accessibilityLabel(accessibilityLabel(for: first))
         }
@@ -98,20 +97,23 @@ struct DownloadBanner: View {
         case .waiting, .stopping:
             ProgressView().controlSize(.small)
         case .running:
-            Image(systemName: "arrow.down.circle.fill")
-                .foregroundStyle(.tint)
+            Image(systemName: "arrow.down.circle")
+                .foregroundStyle(Color.pd.accent)
         case .finished:
             // The one moment the app has to say the thing worked. It said
             // nothing at all before: the bar vanished and the model appeared in
             // a section that may well have been collapsed or scrolled past.
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
+            Image(systemName: "checkmark.circle")
+                .foregroundStyle(Color.pd.positive)
         case .paused:
-            Image(systemName: "pause.circle.fill")
-                .foregroundStyle(.orange)
+            Image(systemName: "pause.circle")
+                .foregroundStyle(Color.pd.caution)
         case .failed:
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.red)
+            // Amber, not red. A download that did not finish is not a fault in
+            // the app and is not a thing to be alarmed by — this palette keeps
+            // red for a transport failure and uses amber for "your turn".
+            Image(systemName: "exclamationmark.triangle")
+                .foregroundStyle(Color.pd.caution)
         }
     }
 
@@ -122,13 +124,13 @@ struct DownloadBanner: View {
             // Indeterminate on purpose. There is no total yet — the server has
             // not answered — and a determinate bar at zero claims a number
             // nobody has.
-            ProgressView().progressViewStyle(.linear)
+            ProgressStripe(fraction: 0, isIndeterminate: true)
         case .running, .stopping:
-            ProgressView(value: transfer.fraction).progressViewStyle(.linear)
+            ProgressStripe(fraction: transfer.fraction)
         case .finished:
-            ProgressView(value: 1).progressViewStyle(.linear).tint(.green)
+            ProgressStripe(fraction: 1)
         case .paused:
-            ProgressView(value: transfer.fraction).progressViewStyle(.linear).tint(.orange)
+            ProgressStripe(fraction: transfer.fraction)
         case .failed:
             EmptyView()
         }
@@ -138,50 +140,41 @@ struct DownloadBanner: View {
     private func actions(for transfer: ModelTransfer) -> some View {
         switch transfer.state {
         case .waiting, .running:
-            Button("Stop") { model.cancelDownload(transfer.record) }
-                .font(.caption.weight(.medium))
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            hideButton(transfer)
+            LinkPill(title: "Stop", symbol: "stop.fill") {
+                model.cancelDownload(transfer.record)
+            }
+            closeButton("Hide this download", hint: "The download keeps running.") {
+                model.dismissDownloadBanner(transfer.id)
+            }
         case .stopping:
             // No Resume yet, on purpose: this state exists precisely because
             // we do not know what Resume would do.
             EmptyView()
         case .paused, .failed:
-            Button("Resume") { model.download(transfer.record) }
-                .font(.caption.weight(.medium))
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-            Button {
-                model.clearTransfer(transfer.id)
-            } label: {
-                Image(systemName: "xmark").font(.caption.weight(.semibold))
+            LinkPill(title: "Resume", symbol: "arrow.clockwise") {
+                model.download(transfer.record)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .accessibilityLabel("Dismiss")
+            closeButton("Dismiss") { model.clearTransfer(transfer.id) }
         case .finished:
-            Button {
-                model.clearTransfer(transfer.id)
-            } label: {
-                Image(systemName: "xmark").font(.caption.weight(.semibold))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .accessibilityLabel("Dismiss")
+            closeButton("Dismiss") { model.clearTransfer(transfer.id) }
         }
     }
 
-    private func hideButton(_ transfer: ModelTransfer) -> some View {
-        Button {
-            model.dismissDownloadBanner(transfer.id)
-        } label: {
-            Image(systemName: "xmark").font(.caption.weight(.semibold))
+    private func closeButton(
+        _ label: String,
+        hint: String? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.pd.inkSecondary)
+                .frame(width: 28, height: 28)
+                .contentShape(Circle())
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .accessibilityLabel("Hide this download")
-        .accessibilityHint("The download keeps running.")
+        .buttonStyle(PDPressStyle())
+        .accessibilityLabel(label)
+        .accessibilityHint(hint ?? "")
     }
 
     // MARK: Words
@@ -213,7 +206,10 @@ struct DownloadBanner: View {
             if model.loadedModelID == transfer.id {
                 return "Downloaded and loaded · ready to use"
             }
-            return "Downloaded · \(format(transfer.record.totalDownloadBytes)) · tap Load on the Models tab"
+            // Not "the Models tab": there has not been one since v2, and an
+            // instruction naming a screen the app does not have is worse than
+            // no instruction. The name above this line is the button.
+            return "Downloaded · \(format(transfer.record.totalDownloadBytes)) · tap the name to load it"
         case let .paused(message):
             return message
         case let .failed(message):
@@ -223,9 +219,8 @@ struct DownloadBanner: View {
 
     private func tint(for transfer: ModelTransfer) -> Color? {
         switch transfer.state {
-        case .paused: .orange
-        case .failed: .red
-        case .finished: .green
+        case .paused, .failed: .pd.caution
+        case .finished: .pd.positive
         case .waiting, .running, .stopping: nil
         }
     }
