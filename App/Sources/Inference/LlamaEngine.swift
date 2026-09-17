@@ -756,6 +756,17 @@ actor LlamaEngine: InferenceEngine {
         var produced = ""     // everything the model emitted, truncated at a stop
         var sent = 0          // characters already yielded downstream
         var screened = 0      // characters the screen has already passed
+        // The other end of the same problem the screen guards: not the model
+        // getting a call wrong, but the model handed a result and narrating it
+        // by copying it back out. Armed by the tool round below with the exact
+        // strings it hands over, and nil `resumeStart` — no tool round — leaves
+        // every line of the screen's behaviour untouched.
+        var echo = NarrationEcho(payloads: [])
+        var resumeStart: Int?
+        // Whether the round put anything on screen. With a card up, narration
+        // that turns out to be only the echo is left empty and the card stands
+        // alone; without one, an empty bubble reads as a crash.
+        var roundYieldedCard = false
         var reason = FinishReason.stop
         // Set when the turn ended on its own terms — a stop sequence, the token
         // limit, or cancellation. Nothing further may be generated, the tool
@@ -870,6 +881,13 @@ actor LlamaEngine: InferenceEngine {
 
                         screened = screen.safeCount(in: produced, clearedThrough: screened)
                         var safe = screened
+                        // Only the resume pass can echo a payload, because only
+                        // the resume pass has seen one. The first pass streams
+                        // exactly as it always did.
+                        if let resumeStart {
+                            let resumeText = String(produced[offset(resumeStart)...])
+                            safe = min(safe, resumeStart + echo.safeCount(in: resumeText))
+                        }
                         if holdBack > 0 { safe = min(safe, produced.count - holdBack) }
                         if safe > sent {
                             continuation.yield(.token(String(produced[offset(sent)..<offset(safe)])))
@@ -897,9 +915,18 @@ actor LlamaEngine: InferenceEngine {
                     // is narration over something the reader can already read,
                     // which is why a small model getting the narration slightly
                     // wrong costs the reader nothing.
-                    if let card = rendered.card { continuation.yield(.answerCard(card)) }
+                    if let card = rendered.card {
+                        continuation.yield(.answerCard(card))
+                        roundYieldedCard = true
+                    }
                     outputs.append((call.id, rendered.prompt))
                 }
+                // Where the narration starts, and what it is about to be
+                // narrating. `rendered.prompt` is the byte-for-byte string the
+                // resume prompt below carries, which is what makes the
+                // comparison a comparison rather than a guess.
+                resumeStart = produced.count
+                echo = NarrationEcho(payloads: outputs.map(\.1))
                 // Those bytes really do enter the next prompt, so they are
                 // counted. The duplicated prefill is not: usage describes the
                 // conversation, not the work it took to answer it.
@@ -932,6 +959,40 @@ actor LlamaEngine: InferenceEngine {
             // ever withheld text; this is where withheld tool syntax is
             // replaced by a sentence about it, and where a turn that turned out
             // to be clean gets its tail back.
+            //
+            // The echo goes first, because what it leaves behind is ordinary
+            // prose that the screen should then read as such.
+            if let resumeStart {
+                // A stop sequence can truncate the turn back past where the
+                // resume pass began.
+                let start = min(resumeStart, produced.count)
+                let head = String(produced.prefix(start))
+                if var narration = echo.resolve(String(produced[offset(start)...])) {
+                    // Nothing left and nothing on screen. Silence here is
+                    // indistinguishable from a crash; with a card above it,
+                    // silence is the card being allowed to speak for itself.
+                    if narration.isEmpty, !roundYieldedCard { narration = NarrationEcho.acknowledgement }
+                    // `head` is kept byte for byte rather than tidied, because
+                    // it has already been yielded and every index below counts
+                    // from it.
+                    produced = head
+                    if !narration.isEmpty {
+                        if !produced.isEmpty, !produced.hasSuffix("\n") { produced += "\n\n" }
+                        produced += narration
+                    }
+                    if sent > start {
+                        // Some of the resume pass had already been released:
+                        // the echo was followed by real prose, and divergence
+                        // said so one character too late. What the reader has
+                        // cannot be taken back, and sending more from a string
+                        // whose indices have just shifted underneath it would
+                        // only append a fragment of itself to it.
+                        sent = produced.count
+                    } else {
+                        sent = min(sent, produced.count)
+                    }
+                }
+            }
             if case .leaked(let keeping) = screen.resolve(produced) {
                 produced = String(produced.prefix(keeping))
                     .trimmingCharacters(in: .whitespacesAndNewlines)
