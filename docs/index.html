@@ -74,7 +74,7 @@
 
 <h1>Privacy Policy</h1>
 
-<p class="meta"><strong>Pocketd</strong> · Last updated 12 September 2026</p>
+<p class="meta"><strong>Pocketd</strong> · Last updated 17 September 2026</p>
 
 <p>Two kinds of request leave your phone: model searches and downloads, which go
 to Hugging Face, and a fixed list of usage events, which go to Mixpanel. Nothing
@@ -87,7 +87,7 @@ parts that are less tidy than the sentences are.</p>
 
 <h2>What Pocketd collects about you</h2>
 
-<p>Usage events, and nothing besides. There are fifteen of them and the complete
+<p>Usage events, and nothing besides. There are twenty-eight of them and the complete
 list is one readable file, <a href="https://github.com/dheerajjha/pocketd/blob/main/Sources/PocketdKit/Analytics/AnalyticsEvent.swift"><code>AnalyticsEvent.swift</code></a>: the app was opened;
 the intro was finished or skipped; a model download started, finished, was
 cancelled or failed; a model loaded or failed to load; a message was sent; the
@@ -151,7 +151,7 @@ Only these things cause a request:</p>
     <tr><td>You search for a model</td><td>The text you typed, as a search term, and your phone's IP address</td></tr>
     <tr><td>You open a repository to see its files</td><td>The repository's name, and your phone's IP address</td></tr>
     <tr><td>You download a model</td><td>Which repository and file you are fetching, and your phone's IP address</td></tr>
-    <tr><td>You use the app</td><td>One of the fifteen usage events, the identifier for this installation, and your phone's IP address</td></tr>
+    <tr><td>You use the app</td><td>One of the twenty-eight usage events, the identifier for this installation, and your phone's IP address</td></tr>
   </tbody>
 </table>
 </div>
@@ -162,7 +162,7 @@ download on its behalf, which sends the same things and nothing more.</p>
 <p>Neither an account nor a token is attached to any of them, because Pocketd
 has neither to attach. The identifier in the last row is one the analytics SDK generates for
 the installation; it is not the advertising identifier and it is attached to
-nothing but those fifteen events. Every download address is assembled as
+nothing but those twenty-eight events. Every download address is assembled as
 <code>huggingface.co</code>, then a repository and a filename; the search API accepts a
 repository and a filename and never a host. The stored record for a model
 carries a field that could name a different address, and nothing in the app or
@@ -172,6 +172,32 @@ its HTTP API ever sets it.</p>
 on your phone, and answering a question reads that file. The web pages Pocketd
 serves are self-contained, with no fonts, scripts or images loaded from
 anywhere.</p>
+
+<h2>What Pocketd asks permission for</h2>
+
+<p>Every one of these is declared in the app's own <code>Info.plist</code>, which is
+where the Privacy screen inside the app reads its list from — so a permission
+added to Pocketd shows up there whether or not anyone remembered to update this
+page. Nothing below is asked for at launch: each prompt appears at the moment
+you turn the thing on.</p>
+
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr><th>Permission</th><th>What it is for</th><th>Where the data goes</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Calendar (full access)</td><td>Answering what is on today, and adding an event when you ask for one</td><td>Read and written on this device. Never uploaded, and never sent to a device Pocketd is serving</td></tr>
+    <tr><td>Reminders (full access)</td><td>Answering what is due or overdue, and adding or ticking off a reminder when you ask</td><td>Read and written on this device, same as above</td></tr>
+    <tr><td>Health (read)</td><td>Answering how you slept, how active you have been, or where your heart rate sits</td><td>Read on this device. Never uploaded, never sent to a served device, never used for advertising and never sold</td></tr>
+    <tr><td>Health (write)</td><td>Nothing. iOS requires the description from any app that links HealthKit, and Pocketd never writes</td><td>Nowhere — the set of types passed to the authorisation request is empty</td></tr>
+    <tr><td>Microphone</td><td>Hearing your question while you hold the microphone button in Ask</td><td>Nothing is recorded and nothing is sent. The audio is handed to the recogniser below and discarded</td></tr>
+    <tr><td>Speech recognition</td><td>Turning that held audio into text so you can ask by speaking</td><td>On the device. <code>requiresOnDeviceRecognition</code> is set, so the recogniser never reaches Apple's servers — and where a device cannot do it locally the microphone button is hidden rather than falling back to the network one</td></tr>
+    <tr><td>Local network</td><td>Serving the model to a laptop or tablet on your own Wi-Fi, and announcing the phone over Bonjour so one can find it</td><td>Your local network only. It stops when the server stops</td></tr>
+    <tr><td>Notifications</td><td>Telling you a scheduled routine has a result waiting</td><td>Delivered by iOS on this device. The text is written on the phone</td></tr>
+  </tbody>
+</table>
+</div>
 
 <h2>Health, Calendar and Reminders</h2>
 

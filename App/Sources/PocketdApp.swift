@@ -18,7 +18,14 @@ struct PocketdApp: App {
             RootView()
                 .environment(model)
                 .environment(navigator)
-                .task { await model.bootstrap() }
+                .task {
+                    #if DEBUG
+                    // A screenshot run says which tab it wants before anything
+                    // renders. Whole call inside `#if DEBUG`; see `YouStage`.
+                    YouStage.selectTabIfRequested(navigator)
+                    #endif
+                    await model.bootstrap()
+                }
                 .onChange(of: scenePhase) { _, phase in
                     // Both the socket and the resident model are torn down by
                     // suspension — one by iOS, one by us — so every transition

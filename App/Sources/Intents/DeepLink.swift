@@ -31,6 +31,12 @@ enum DeepLink: String, Equatable, Sendable {
     /// cannot host a button, has a spelling to use that already works.
     case ask
 
+    /// `pocketd://you` — the profile. Nothing on a home screen sends it yet; it
+    /// is here so that a Shortcut, and the screenshot harness under `#if
+    /// DEBUG`, can reach the tab by the same spelling as the other two rather
+    /// than by a second mechanism that only one of them understands.
+    case you
+
     static let scheme = "pocketd"
 
     /// `nil` for anything this app did not put on a home screen.

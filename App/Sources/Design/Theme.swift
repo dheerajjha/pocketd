@@ -208,6 +208,12 @@ extension Font {
         static let body = Font.system(size: 17)
         static let secondary = Font.system(size: 15)
         static let caption = Font.system(size: 15)
+        /// The sentence *under* a card rather than in it — the footnote that
+        /// answers the objection the card has just raised, and the caveat a
+        /// row is not big enough to carry. Smaller than `secondary` on
+        /// purpose: it is a margin note, and a margin note set at body size
+        /// competes with the body it is annotating.
+        static let footnote = Font.system(size: 13)
         /// A control's label. Bigger than body, which is what makes a CTA read
         /// as one from across a room.
         static let buttonLabel = Font.system(size: 18, weight: .semibold)
