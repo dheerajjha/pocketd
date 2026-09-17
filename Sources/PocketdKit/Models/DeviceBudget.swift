@@ -1,27 +1,75 @@
 import Foundation
 
-/// How much memory this process may actually use before the kernel kills it.
+/// How much memory this app may hold resident, and whether a given model fits
+/// inside it.
 ///
-/// iOS *does* publish this number — `os_proc_available_memory()`, wrapped in
-/// `AvailableMemory` — but only on hardware, and only as a snapshot of this
-/// instant. What it publishes unconditionally is total physical RAM, which is
-/// roughly double what a single app is allowed to touch, and reporting that to
-/// a user is how a "fits comfortably" badge turns into a jetsam crash. So there
-/// are two answers here: a learned one from `MemoryCalibration`, used whenever
-/// this device has taught the app anything, and the fractions below, which are
-/// what a cold start has to work with and are conservative on purpose.
+/// There are two memory questions and they are not the same question. This type
+/// keeps them apart:
+///
+/// 1. **Does this model fit on this device?** A property of the hardware and
+///    the entitlement, and therefore a constant for as long as the app is
+///    installed. It is `fit(for:)`, and it is what the Models tab badges every
+///    row with.
+/// 2. **Is there room right now?** A property of this instant, which moves
+///    every time anything is allocated — including by this app, doing the thing
+///    it exists to do. It is `pressure`, it has its own words, and it never
+///    reaches a fit badge.
+///
+/// Collapsing the two is the bug this shape exists to prevent, and it shipped.
+/// `usableBytes` used to prefer whatever had been learned from
+/// `os_proc_available_memory()` and from the last successful load, so the
+/// Models screen read "Usable memory 15.46 GB, everything Fits" on a fresh
+/// launch and "683.8 MB, everything Too large" after loading SmolLM2 360M —
+/// 683.8 MB being, exactly, SmolLM2's own estimate. The app had answered the
+/// second question in the first question's badge, and so contradicted itself
+/// the moment it did its job: the model running fine right then was labelled
+/// too large to run.
+///
+/// So the verdict is arithmetic on numbers that do not move — physical RAM
+/// times the fraction iOS allows one app — and the live reading is a separate
+/// signal with a separate sentence.
 public struct DeviceBudget: Sendable, Equatable {
+
+    /// Where this build is running, because the simulator's numbers describe a
+    /// Mac and its limits do not.
+    ///
+    /// Injected rather than read at the point of use so the Kit's tests — which
+    /// compile for macOS, where `targetEnvironment(simulator)` is false — can
+    /// exercise the simulator rules at all.
+    public enum Environment: Sendable, Equatable {
+        case device
+        case simulator
+
+        public static var current: Environment {
+            #if targetEnvironment(simulator)
+            .simulator
+            #else
+            .device
+            #endif
+        }
+    }
+
     public var physicalMemoryBytes: Int64
     /// True when the app ships `com.apple.developer.kernel.increased-memory-limit`.
     public var hasIncreasedMemoryLimit: Bool
+    public var environment: Environment
 
-    /// What this device has been shown to hold, from `MemoryCalibration`.
+    /// The largest estimate that has actually loaded on this device, from
+    /// `MemoryCalibration`.
     ///
-    /// `nil` means nothing has been learned yet — a first launch, or any
-    /// simulator, where `os_proc_available_memory()` has no limit to report
-    /// against. That is the only case in which the fraction is still the
-    /// answer.
-    public var calibratedCeilingBytes: Int64?
+    /// A **floor**, never a ceiling. A model that loaded here is proof this
+    /// device holds at least that much, so it can only ever widen the budget;
+    /// reading it as "and no more than that" is what collapsed the budget to
+    /// the size of the last thing loaded. `nil` until a load has succeeded.
+    public var provenLoadBytes: Int64?
+
+    /// The most recent `os_proc_available_memory()` reading, or `nil` where
+    /// there is no such number — every macOS build, every simulator.
+    ///
+    /// Feeds `pressure` and nothing else. It is deliberately not part of
+    /// `usableBytes`: it drops by the size of whatever is resident, which makes
+    /// any verdict computed from it a function of the app's own success.
+    public var availableNowBytes: Int64?
 
     /// The context length this phone is configured to serve.
     ///
@@ -36,70 +84,92 @@ public struct DeviceBudget: Sendable, Equatable {
         physicalMemoryBytes: Int64,
         hasIncreasedMemoryLimit: Bool,
         servedContextTokens: Int = 4096,
-        calibratedCeilingBytes: Int64? = nil
+        environment: Environment = .current,
+        provenLoadBytes: Int64? = nil,
+        availableNowBytes: Int64? = nil
     ) {
         self.servedContextTokens = servedContextTokens
         self.physicalMemoryBytes = physicalMemoryBytes
         self.hasIncreasedMemoryLimit = hasIncreasedMemoryLimit
-        self.calibratedCeilingBytes = calibratedCeilingBytes
+        self.environment = environment
+        self.provenLoadBytes = provenLoadBytes
+        self.availableNowBytes = availableNowBytes
     }
 
-    /// The budget for this device, folding in everything previous launches
-    /// learned and taking a fresh reading while doing it.
-    ///
-    /// Launch is the cleanest this process is ever going to be — no model, no
-    /// conversation, no request log — so it is the best moment there is to ask
-    /// the kernel how much room there is, and the reading is ratcheted in on
-    /// the spot. On anything that cannot answer, `AvailableMemory.bytes` is
-    /// `nil` and nothing is written.
+    /// The budget for this device, folding in what previous launches proved and
+    /// taking a live reading for the pressure signal while it is here.
     public static func current(
         hasIncreasedMemoryLimit: Bool,
         servedContextTokens: Int = 4096,
         calibration: MemoryCalibration = .standard,
-        available: AvailableMemory = .system
+        available: AvailableMemory = .system,
+        environment: Environment = .current
     ) -> DeviceBudget {
-        calibration.recordAvailableMemory(available.bytes)
+        // Launch is the cleanest this process is ever going to be, so the
+        // reading is worth keeping as a high-water mark — even though nothing
+        // about the verdict depends on it any more.
+        let reading = available.bytes
+        calibration.recordAvailableMemory(reading)
         return DeviceBudget(
             physicalMemoryBytes: Int64(ProcessInfo.processInfo.physicalMemory),
             hasIncreasedMemoryLimit: hasIncreasedMemoryLimit,
             servedContextTokens: servedContextTokens,
-            calibratedCeilingBytes: calibration.ceilingBytes
+            environment: environment,
+            provenLoadBytes: calibration.largestSuccessfulLoadBytes,
+            availableNowBytes: reading
         )
     }
 
-    /// Bytes this app can reasonably hold resident.
-    ///
-    /// The calibrated ceiling wins outright when there is one, including when
-    /// it is *lower* than the fraction. That is the entire point: a measured
-    /// 2.1 GB is better information than a guessed 3.4 GB, and preferring
-    /// whichever is larger would quietly reinstate the guess on every device
-    /// where the guess was too generous — which is the failure this replaces.
-    ///
-    /// It is capped at the machine's own RAM as a floor under the arithmetic,
-    /// not as a policy. Nothing this process holds can exceed the memory that
-    /// physically exists, so a value above it can only have come from a corrupt
-    /// stored number or from a successful load recorded against an overstated
-    /// catalogue size — and this project has shipped a catalogue entry that was
-    /// out by 1.3 GB.
-    public var usableBytes: Int64 {
-        if let calibrated = calibratedCeilingBytes, calibrated > 0 {
-            return min(calibrated, physicalMemoryBytes)
-        }
-        let fraction = hasIncreasedMemoryLimit ? 0.58 : 0.45
-        return Int64(Double(physicalMemoryBytes) * fraction)
+    // MARK: - The stable budget
+
+    /// The share of physical RAM iOS lets one app dirty without the
+    /// entitlement. Documented in the README, and the number the fit table
+    /// there is computed from.
+    public static let unentitledFraction = 0.45
+    /// The same share with `com.apple.developer.kernel.increased-memory-limit`.
+    public static let entitledFraction = 0.58
+    /// Under this share of the budget a model is `.comfortable` rather than
+    /// `.tight` — room for a conversation, a request log and a compute buffer
+    /// on top of the weights.
+    public static let comfortableFraction = 0.7
+
+    public var entitlementFraction: Double {
+        hasIncreasedMemoryLimit ? Self.entitledFraction : Self.unentitledFraction
     }
 
-    /// True when `usableBytes` is measured rather than guessed. The UI should
-    /// check it before promising anything: "needs 4.2 GB of the 5.1 GB this
-    /// phone has" and "…of the 5.1 GB this phone probably has" are different
-    /// claims, the same way `MemoryEstimate.isMeasured` is.
-    public var isCalibrated: Bool { (calibratedCeilingBytes ?? 0) > 0 }
+    /// Bytes this app can hold resident — physical RAM times the entitlement
+    /// fraction, and nothing else that moves.
+    ///
+    /// No further reserve is subtracted here. The fraction *is* the reserve:
+    /// 45% of a 6 GB phone is already less than half of it, chosen because that
+    /// is roughly where iOS starts killing, and the README's table of which
+    /// models fit which phone is computed from exactly this arithmetic.
+    /// `MemoryCalibration.loadReserveBytes` is still held back where it belongs
+    /// — from the live reading, which is what `pressure` reads — but taking it
+    /// off the verdict as well would move two published rows (Llama 3.2 3B on a
+    /// 6 GB phone, Qwen3 4B on an 8 GB one) and make the documentation false.
+    ///
+    /// A proven load raises it and never lowers it, capped at the RAM that
+    /// physically exists so a proof recorded against an overstated catalogue
+    /// size — this project has shipped one out by 1.3 GB — cannot invent
+    /// memory.
+    public var usableBytes: Int64 {
+        let fraction = Int64(Double(physicalMemoryBytes) * entitlementFraction)
+        guard let proven = provenLoadBytes, proven > fraction else { return fraction }
+        return min(proven, physicalMemoryBytes)
+    }
 
-    /// Records that `model` loaded here, and folds the widened ceiling back in.
+    /// True when a model has actually loaded here, so `usableBytes` is backed
+    /// by something that happened rather than by the fraction alone.
+    public var isProven: Bool { (provenLoadBytes ?? 0) > 0 }
+
+    /// Records that `model` loaded here, widening the budget if it was the
+    /// biggest yet.
     ///
     /// Call it on the success path of a load, with the context the engine was
-    /// actually given. The estimate recorded is the same one the download gate
-    /// computed, so what gets proven is exactly the number that was doubted.
+    /// actually given. Because the proof is a floor, recording a load can never
+    /// change the verdict of a model that already fitted — which is the
+    /// property `fit(for:)` promises and the one the old code broke.
     ///
     /// The store keeps its own copy of the budget, so this is followed by
     /// `await store.updateBudget(budget)` the same way a context-limit change is.
@@ -110,23 +180,114 @@ public struct DeviceBudget: Sendable, Equatable {
     ) {
         let context = contextTokens ?? min(model.contextLength, servedContextTokens)
         calibration.recordSuccessfulLoad(estimatedBytes: model.memoryEstimate(atContext: context).totalBytes)
-        calibratedCeilingBytes = calibration.ceilingBytes
+        provenLoadBytes = calibration.largestSuccessfulLoadBytes
     }
 
-    /// Takes a clean-state reading and folds it in.
+    // MARK: - The other signal: how much room there is right now
+
+    /// Held back from the live reading before calling any of it room. The same
+    /// number the calibration holds back, for the same reason: a reading taken
+    /// with nothing loaded is not a promise that all of it can be spent.
+    public static var pressureReserveBytes: Int64 { MemoryCalibration.loadReserveBytes }
+
+    /// What the kernel says is left for this process right now, or `nil` where
+    /// nothing says.
     ///
-    /// Call it where the context has just been released — unload, idle offload,
-    /// backgrounding — and nowhere else. A reading taken with a model resident
-    /// measures the model, not the device, and while the ratchet would discard
-    /// it harmlessly, the habit of sampling at arbitrary moments is what makes
-    /// a running maximum meaningless.
+    /// Named so that no call site can mistake it for a budget. This is the
+    /// number that drops by the size of whatever is resident.
+    public var headroomNowBytes: Int64? { availableNowBytes }
+
+    /// How close this process is to the kill line at this instant.
+    ///
+    /// Entirely separate from `Fit`, with its own words. "Too large" is a claim
+    /// about a model and a phone; "under pressure" is a claim about right now,
+    /// and the fix for it is unloading rather than choosing differently.
+    public enum Pressure: Sendable, Equatable {
+        /// No reading to be had — macOS, and the simulator, where there is no
+        /// jetsam limit to have bytes remaining against.
+        case unknown
+        case easy
+        case tight
+        case critical
+
+        /// True when the honest advice is to free the resident model.
+        public var suggestsUnloading: Bool { self == .critical }
+
+        /// The sentence to show. Never a fit verdict, and never about whether a
+        /// model is too large for this phone — it is about this minute.
+        public var message: String? {
+            switch self {
+            case .unknown, .easy:
+                return nil
+            case .tight:
+                return "Memory is tight right now. Closing other apps, or unloading the model, frees room."
+            case .critical:
+                return "This phone is nearly out of memory. Unload the model to make room."
+            }
+        }
+    }
+
+    public var pressure: Pressure {
+        guard let headroom = availableNowBytes, headroom > 0 else { return .unknown }
+        if headroom < Self.pressureReserveBytes { return .critical }
+        if headroom < Self.pressureReserveBytes * 2 { return .tight }
+        return .easy
+    }
+
+    /// Takes a live reading, whenever. Cheap, and safe at any moment precisely
+    /// because nothing it feeds is a verdict.
+    public mutating func refreshHeadroom(_ available: AvailableMemory = .system) {
+        availableNowBytes = available.bytes
+    }
+
+    /// Takes a reading where nothing is resident and keeps it as a high-water
+    /// mark as well.
+    ///
+    /// Call it straight after an unload and nowhere else: the mark is only
+    /// meaningful if every sample is comparable. It no longer moves any
+    /// verdict, so a misplaced call is now a bad diagnostic rather than a
+    /// screen full of wrong badges.
     public mutating func recordCleanStateMemory(
         _ available: AvailableMemory = .system,
         calibration: MemoryCalibration = .standard
     ) {
-        calibration.recordAvailableMemory(available.bytes)
-        calibratedCeilingBytes = calibration.ceilingBytes
+        let reading = available.bytes
+        calibration.recordAvailableMemory(reading)
+        availableNowBytes = reading
     }
+
+    // MARK: - The simulator
+
+    /// What a simulated app process actually gets before it is killed: 722 MB,
+    /// the figure a Models screen was caught reporting as "usable memory" on a
+    /// Mac with 32 GB of RAM.
+    ///
+    /// The simulator runs llama.cpp on the Mac's CPU with no Metal and no
+    /// jetsam, so `ProcessInfo.physicalMemory` reports the Mac and
+    /// `os_proc_available_memory()` reports nothing worth having. Writing the
+    /// number down here makes it a documented constant rather than something
+    /// the app discovers at runtime and reports as a fact about a device.
+    public static let simulatorProcessCeilingBytes: Int64 = 722 * 1024 * 1024
+
+    /// The largest estimate the simulator is allowed to call `.comfortable`.
+    ///
+    /// One gigabyte: comfortably above the 722 MB a simulated process really
+    /// gets, and low enough that a 3 GB model on a 32 GB Mac cannot wear a
+    /// "Fits" badge that says nothing about any phone.
+    public static let simulatorComfortableCeilingBytes: Int64 = 1024 * 1024 * 1024
+
+    /// What the UI should say about these numbers when they came from a Mac.
+    public var environmentNote: String? {
+        guard environment == .simulator else { return nil }
+        let ceiling = Self.simulatorProcessCeilingBytes / (1024 * 1024)
+        return """
+        These figures come from this Mac, not a phone. The simulator runs \
+        llama.cpp on the CPU and holds the app process to roughly \(ceiling) MB, \
+        so only models under 1 GB are reported as fitting.
+        """
+    }
+
+    // MARK: - Verdicts
 
     /// Ordered worst to best, so a caller can ask for "at least tight" rather
     /// than enumerating the two verdicts that satisfy it.
@@ -137,7 +298,21 @@ public struct DeviceBudget: Sendable, Equatable {
         case tight
         case comfortable
 
-        public var allowsDownload: Bool { self != .willNotFit }
+        /// True when a plain Download button is an honest offer.
+        ///
+        /// False does not mean "hide the button": it means the only honest path
+        /// is the oversize override, which puts both numbers on screen before
+        /// anyone spends the bandwidth. See `needsOverride`.
+        public var isDownloadable: Bool { self != .willNotFit }
+
+        /// True when downloading has to go through the override — the user is
+        /// shown what they are overriding and says go ahead anyway.
+        public var needsOverride: Bool { self == .willNotFit }
+
+        /// The name this had before `needsOverride` existed as its other half.
+        /// Identical to `isDownloadable`; kept so call sites need not all move
+        /// at once.
+        public var allowsDownload: Bool { isDownloadable }
     }
 
     /// The verdict at a given context length.
@@ -162,9 +337,24 @@ public struct DeviceBudget: Sendable, Equatable {
 
     public func fit(for estimate: MemoryEstimate) -> Fit {
         let needed = estimate.totalBytes
-        if needed <= Int64(Double(usableBytes) * 0.7) { return .comfortable }
-        if needed <= usableBytes { return .tight }
-        return .willNotFit
+        let verdict: Fit
+        if needed <= Int64(Double(usableBytes) * Self.comfortableFraction) {
+            verdict = .comfortable
+        } else if needed <= usableBytes {
+            verdict = .tight
+        } else {
+            verdict = .willNotFit
+        }
+        // On a Mac the arithmetic above is true and meaningless — 45% of 32 GB
+        // is not what the app process gets. Demote rather than refuse: the
+        // simulator has to stay usable for demos, and a model that loads there
+        // does load there. What it must not do is claim a phone would be fine.
+        if environment == .simulator,
+           verdict == .comfortable,
+           needed >= Self.simulatorComfortableCeilingBytes {
+            return .tight
+        }
+        return verdict
     }
 
     /// How far over the limit a configuration is, in bytes; zero when it fits.

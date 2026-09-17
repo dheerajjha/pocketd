@@ -45,6 +45,33 @@ enum DownloadActivityController {
     /// not spend an hour asserting a stale percentage.
     private static let freshness: TimeInterval = 120
 
+    /// How long a failed `Activity.request` is left alone before this file
+    /// will try again for the same transfer.
+    ///
+    /// AUDIT FINDING (UX audit, on a simulator): `sync` used to call `end()`
+    /// and then `Activity.request` again on EVERY progress tick whenever the
+    /// activity ActivityKit reported back did not match the transfer this
+    /// file expected. `request`'s result was `try?`-discarded, so a request
+    /// that kept failing — Live Activities off in Settings, unavailable, or
+    /// just the simulator, which does not support them — never stopped
+    /// mismatching: the very next progress tick tried again, and the one
+    /// after that, for the life of the download. Measured effect: the widget
+    /// extension was relaunched roughly 50 times a second for the whole
+    /// download — benign when Live Activities work, a battery and thermal
+    /// bug on every download when they do not. `lastRequestFailure` plus
+    /// this interval are the fix: try once, remember that it failed, and
+    /// leave it alone for 30 seconds. Do not "simplify" this back out.
+    private static let retryInterval: TimeInterval = 30
+
+    /// The last time `Activity.request` failed, keyed by transfer id.
+    ///
+    /// Per id rather than one flag: `FileDownloader`'s session is serial, so
+    /// at most one transfer is ever live at once (see `sync`), but a resumed
+    /// download or a later, different one gets its own id and deserves its
+    /// own first attempt rather than inheriting an unrelated failure from a
+    /// transfer that is long gone.
+    private static var lastRequestFailure: [String: Date] = [:]
+
     static func sync(_ transfers: [String: ModelTransfer]) {
         // Only what is actually moving. `FileDownloader`'s session is serial, so
         // at most one transfer is ever running; anything else in the dictionary
@@ -78,14 +105,45 @@ enum DownloadActivityController {
         // Reading a String out of the activity is not sending the activity.
         let existing = Activity<DownloadActivityAttributes>.activities.first?.attributes.modelName
         if existing == live.record.displayName {
+            // The activity on screen already belongs to this transfer:
+            // update it in place. Never end-and-re-request on this branch —
+            // that used to happen on every tick and is the bug described on
+            // `retryInterval` above.
             Task {
                 guard let activity = Activity<DownloadActivityAttributes>.activities.first else { return }
                 await activity.update(content(state))
             }
         } else {
-            end()
-            start(named: live.record.displayName, state: state)
+            reconcile(id: live.id, name: live.record.displayName, state: state)
         }
+    }
+
+    /// Ends whatever activity is showing and asks for one that matches this
+    /// transfer — but only when that is actually worth attempting.
+    ///
+    /// `sync` reaches this on a progress tick, which fires many times a
+    /// second while a transfer is running. The two guards below are what
+    /// keep that from becoming the retry storm described on `retryInterval`.
+    private static func reconcile(
+        id: String,
+        name: String,
+        state: DownloadActivityAttributes.ContentState
+    ) {
+        // Asking is not the same as being allowed, and it is worth knowing
+        // BEFORE paying for an `end()` + `request` round trip rather than
+        // after: the user can switch Live Activities off for this app in
+        // Settings, or this build can simply be running somewhere — the
+        // simulator — that does not support them. Either way, no request.
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+
+        // Already tried and failed for this exact transfer recently: leave
+        // it alone rather than asking again on the next tick.
+        if let last = lastRequestFailure[id], Date().timeIntervalSince(last) < retryInterval {
+            return
+        }
+
+        end()
+        start(named: name, id: id, state: state)
     }
 
     private static func content(
@@ -96,20 +154,26 @@ enum DownloadActivityController {
 
     private static func start(
         named name: String,
+        id: String,
         state: DownloadActivityAttributes.ContentState
     ) {
-        // Asking is not the same as being allowed. The user can switch Live
-        // Activities off for this app in Settings, and `request` throws if they
-        // have; there is nothing to tell them about it, because they are the
-        // one who turned it off.
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
-        // The result is discarded deliberately: the system's list is what this
-        // file reads back, so keeping a copy would just be a second answer that
-        // can disagree with it.
-        _ = try? Activity.request(
-            attributes: DownloadActivityAttributes(modelName: name),
-            content: content(state)
-        )
+        do {
+            _ = try Activity.request(
+                attributes: DownloadActivityAttributes(modelName: name),
+                content: content(state)
+            )
+            // A later mismatch for this id (a rename, or ActivityKit losing
+            // track of it) deserves a fresh attempt, not a memory of this
+            // success standing in the way.
+            lastRequestFailure[id] = nil
+        } catch {
+            lastRequestFailure[id] = Date()
+            // `code` is a short, stable identifier chosen right here — never
+            // `error` or its description. `DiagnosticLog` exists to be
+            // copied off the device, and what `Activity.request` throws is
+            // not this file's call to make safe to send.
+            DiagnosticLog.record(.failure(area: .widgets, code: "liveActivityRequestFailed"))
+        }
     }
 
     private static func end() {

@@ -5,47 +5,67 @@
 [![Swift 6](https://img.shields.io/badge/swift-6.0-orange.svg)](Package.swift)
 [![iOS 18+](https://img.shields.io/badge/iOS-18%2B-lightgrey.svg)](project.yml)
 
-`pocketd` turns an iPhone into an inference server. Load a model, press Start,
-and every device on your Wi-Fi can talk to it through the OpenAI and Ollama
-APIs they already speak — no account, and not one prompt or reply leaving
-your network.
+`pocketd` is an assistant that lives on your iPhone. It reads your calendar,
+your reminders and your health data on the device, and writes you a short
+brief each morning — a paragraph about your actual day, not a dashboard. Ask
+it what's next, what's overdue, or how you slept, by typing, by holding the
+mic button, or from Control Center. Tell it to set a reminder or add an event
+and it does. Nothing you say and nothing it reads ever leaves the phone.
 
-```bash
-curl http://192.168.1.42:11434/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer pk-…" \
-  -d '{"model":"gemma-4-e2b","messages":[{"role":"user","content":"hello"}]}'
-```
+![The Today tab: a morning brief in a few sentences, Read aloud and Refresh buttons, and four tiles for Up next, Due, Sleep and Steps](docs/screenshot-today.png)
 
-That is a phone answering. The port is Ollama's default on purpose: a client
-already pointed at a desktop Ollama needs its host changed and nothing else.
+Four tiles under the brief show what's next, what's due, how you slept and how
+many steps you've taken, each with a plain footnote against your own usual
+rather than a national average. A Home Screen widget carries the same brief a
+tap away, with no need to open the app at all.
 
-![The Server tab: the phone's address in large monospace, a six-digit pairing code, and a setup URL to open on a laptop](docs/screenshot-server.png)
+## Ask
 
-## Chat from your laptop, with nothing installed
+Ask is the conversation: type a question, or hold the mic button and speak it.
+Speech recognition runs on the device — `requiresOnDeviceRecognition` is set
+once and never unset — so on a phone or in a locale where that isn't
+available, the mic button hides itself rather than quietly sending your voice
+to a server. An answer that touches your calendar, reminders or health comes
+back as a card instead of a wall of text: a timeline of events, a checklist of
+reminders you can tick off without leaving the bubble, a small grid of health
+numbers. If a question needs an ability that's switched off, Ask offers to
+turn it on right there rather than answering as though it doesn't exist.
 
-The phone already runs a web server, so it serves the client too. Open its
-address in a browser and you get a chat window — streaming, model picker,
-system prompt, stop button, history kept locally, tokens per second per reply.
-No Docker, no account, no extension.
+![The Ask tab: a question answered with a timeline of tomorrow's events, and the microphone held to ask by voice](docs/screenshot-ask.png)
 
-![The chat client served by the phone, showing a streamed reply and 20.6 tokens per second](docs/screenshot-chat.png)
+## Routines
 
-The page asks once for the six digits shown on the phone and remembers the key.
-`/setup` has the same handshake and hands back ready-to-paste configs for curl,
-Continue, opencode, the OpenAI SDKs, Open WebUI and Aider.
+Routines are what runs on its own. Tap a template to set up a morning brief,
+an evening wrap-up, a weekly review, or a watcher for reminders that have
+slipped past their date — each one an ordinary scheduled task from the moment
+it's created, editable like anything you built by hand. A watcher needs no
+model and no GPU: it's a deterministic read over your calendar or reminders
+that can run to completion in the background, so it still fires days after you
+last opened the app. Every card shows its schedule in a sentence, when it runs
+next, and a preview of what it produced last time.
 
-## It can see
+![The Routines tab: a morning brief and an overdue-reminders watcher, each showing its schedule and a preview of its last result](docs/screenshot-routines.png)
 
-Load a vision model and send it a picture — from the chat page, or as an OpenAI
-`image_url` content part, or in Ollama's `images` array. The attach button only
-appears for a model that can actually see; models that can are marked `◉`.
+## You
 
-![The chat client with a vision model selected and an image staged for sending](docs/screenshot-vision.png)
+You is the profile: what the assistant can see — Calendar, Reminders, Health,
+each its own row and its own switch — its "brain" (which model is loaded, and
+a search across Hugging Face for another), other devices (the same server
+pocketd has always run, now one row instead of one tab), and privacy, which
+walks through what leaves the phone screen by screen. Notifications, how the
+brain behaves, diagnostics and the rest of Settings live here too.
 
-Verified on a physical iPhone 14: a solid green image comes back "Green.", a
-solid yellow one "Yellow." — a control run, because a half-red-half-blue image
-answered "Blue." and one colour out of two proves nothing on its own.
+![The You tab: what the assistant can see, its brain, and other devices, each a row with its current state](docs/screenshot-you.png)
+
+## First run
+
+First run downloads a model sized for your phone — it checks the phone's RAM
+and recommends one that fits, instead of listing all of them — asks once each
+for Calendar, Reminders and Health with a plain sentence about why, asks what
+to call you, and sets a time for the morning brief. About two minutes, and
+Today has something real to read by the time it's done.
+
+![Onboarding: a recommended brain sized for this iPhone, with its download size and an estimated time on Wi-Fi](docs/screenshot-onboarding.png)
 
 ## Why this exists
 
@@ -75,6 +95,46 @@ open Pocketd.xcodeproj
 Set your team in Signing & Capabilities, then run on a device. A free Apple
 developer account works; the provisioning profile expires after seven days and
 you re-sign.
+
+## Also, a server for your laptop
+
+`pocketd` turns an iPhone into an inference server too. Load a model, press
+Start, and every device on your Wi-Fi can talk to it through the OpenAI and
+Ollama APIs they already speak — no account, and not one prompt or reply
+leaving your network.
+
+```bash
+curl http://192.168.1.42:11434/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer pk-…" \
+  -d '{"model":"gemma-4-e2b","messages":[{"role":"user","content":"hello"}]}'
+```
+
+That is a phone answering. The port is Ollama's default on purpose: a client
+already pointed at a desktop Ollama needs its host changed and nothing else.
+
+![You › Other devices: the phone's address in large monospace, a six-digit pairing code, and a setup URL to open on a laptop](docs/screenshot-server.png)
+
+## Chat from your laptop, with nothing installed
+
+The phone already runs a web server, so it serves the client too. Open its
+address in a browser and you get a chat window — streaming, model picker,
+system prompt, stop button, history kept locally, tokens per second per reply.
+No Docker, no account, no extension.
+
+The page asks once for the six digits shown on the phone and remembers the key.
+`/setup` has the same handshake and hands back ready-to-paste configs for curl,
+Continue, opencode, the OpenAI SDKs, Open WebUI and Aider.
+
+## It can see
+
+Load a vision model and send it a picture — from the chat page, or as an OpenAI
+`image_url` content part, or in Ollama's `images` array. The attach button only
+appears for a model that can actually see; models that can are marked `◉`.
+
+Verified on a physical iPhone 14: a solid green image comes back "Green.", a
+solid yellow one "Yellow." — a control run, because a half-red-half-blue image
+answered "Blue." and one colour out of two proves nothing on its own.
 
 ## What you can point at it
 
@@ -111,17 +171,14 @@ Errors come back in the dialect you asked in: OpenAI's nested `{"error":{…}}`
 or Ollama's flat `{"error":"…"}`, because a client fed the wrong one reports
 "unknown error" and hides the reason.
 
-![The Models tab, with each model badged against a real device memory budget](docs/screenshot-models.png)
-
 ## Desk mode
 
-The honest instruction is to keep the app on screen, which otherwise means an
-iPhone at full brightness for hours. Desk mode dims to what is worth reading
-across a desk and drifts it slowly so no pixel holds a colour — and because the
-display draws from the same thermal budget as the GPU, a dark screen is worth
-real tokens per second on a device already close to throttling.
-
-![Desk mode: a dim screen showing the address, port, model and request count](docs/screenshot-desk.png)
+Reachable from You › Other devices. The honest instruction is to keep the app
+on screen, which otherwise means an iPhone at full brightness for hours. Desk
+mode dims to what is worth reading across a desk and drifts it slowly so no
+pixel holds a colour — and because the display draws from the same thermal
+budget as the GPU, a dark screen is worth real tokens per second on a device
+already close to throttling.
 
 ## Any model, searched from your laptop
 
@@ -153,12 +210,21 @@ than the obvious one.
 
 An iPhone 14 has 6 GB of RAM and iOS lets one app touch roughly 45% of it —
 about 58% with the `com.apple.developer.kernel.increased-memory-limit`
-entitlement this app ships. The Models tab labels every model against that
-budget and makes you confirm a download that will not fit, with the two numbers
-on screen, rather than letting you find out after 2 GB of bandwidth.
+entitlement this app ships. Brain, under You, labels every model against that
+budget and makes you confirm a download that will not fit, with the two
+numbers on screen, rather than letting you find out after 2 GB of bandwidth.
 
 Every size below is the real `Content-Length` of the file, checked by
 `scripts/verify-catalogue.sh`, not a number inferred from the parameter count.
+
+The badge is that arithmetic and nothing else — RAM times the fraction — so it
+does not move while you use the app. It deliberately ignores how much memory is
+free at this instant, because that number falls by the size of whatever is
+loaded: a verdict computed from it labelled the running model too large to run.
+"How much room is there right now" is a separate signal with separate words, and
+its advice is to unload rather than to choose differently. In the simulator the
+numbers describe your Mac: llama.cpp runs on the CPU there and the app process
+gets roughly 722 MB, so only models under 1 GB are reported as fitting.
 
 | Model | File | iPhone 14 (6 GB) | iPhone 16 Pro (8 GB) |
 | --- | --- | --- | --- |
@@ -236,6 +302,10 @@ These are not bugs, and pretending otherwise would waste your afternoon.
   `use_gpu = true` for the projector at `package` scope, so it cannot be turned
   off from here. The app refuses to load a vision model on a simulator instead
   of crashing. Use a device.
+- **Voice does not work in the Simulator either.** On-device speech
+  recognition doesn't exist there; `VoiceInput.isSupported` reports `false`
+  and the mic button hides itself instead of pretending to listen. Use a
+  device.
 - **Client-supplied tools are not implemented.** `AnyLLMTool` in the pinned
   dependency only accepts a compile-time schema, so an agent sending its own
   tool definitions over HTTP cannot be served. Tools we define ourselves are a
@@ -259,7 +329,7 @@ simulator, with real SmolLM2 360M weights and real llama.cpp:
 - request log reporting live throughput per client
 
 Three of those checks exist because the feature was broken and shipping when it
-was written. The package suite is 251 tests and needs no simulator.
+was written. The package suite is 1,026 tests and needs no simulator.
 
 ## Repository layout
 
@@ -268,10 +338,16 @@ Sources/PocketdKit/      the server, the wire formats, the model store
   Inference/             InferenceEngine protocol — the seam
   Models/                catalogue, downloads, device memory budget
   Server/                lifecycle, routes, SSE and NDJSON streaming
-Tests/PocketdKitTests/   251 tests, no simulator, no GPU
+  Brief/                 the daily brief: snapshot, prompt, cache, widget mirror
+Tests/PocketdKitTests/   1,026 tests, no simulator, no GPU
 scripts/smoke.sh         probes a RUNNING server the way a client would
 App/Sources/             the SwiftUI app
+  Design/                colour, type, spacing and the shared component set
+  Views/                 Today/, Ask/, Routines/, You/, Onboarding/, Shell/
+  State/Navigator.swift  which tab, which sheet, which hand-off is pending
+  Speech/                on-device speech-to-text and read-aloud
   Inference/             llama.cpp adapter (LocalLLMClient)
+App/Widgets/             TodayWidget.swift reads the brief the app mirrors for it
 project.yml              XcodeGen spec; the .xcodeproj is generated
 ```
 
@@ -289,11 +365,12 @@ make test        # the package: fast, no simulator
 make app         # regenerate the Xcode project
 make build-sim   # compile the app target (slow: builds llama.cpp)
 make smoke BASE=http://192.168.1.42:11434 KEY=pk-...   # probe a running server
+scripts/sim-demo.sh <udid>      # seed a simulator with demo Calendar/Reminders (DEBUG only)
 ```
 
 `make test` covers the routes against a mock engine. `make smoke` covers what it
 cannot: a real model, a real device, and a real network hop. Read the base URL
-and key off the app's Server tab.
+and key off You › Other devices.
 
 The simulator runs llama.cpp on the CPU. It is the right place to check that
 things compile and the UI behaves, and useless for measuring tokens per second.
@@ -351,6 +428,13 @@ and a switch in Settings turns them off; the complete list is
 `AnalyticsEvent.swift`, which is twenty-eight cases long and is meant to be read
 in a minute.
 
+Voice works the same way. Holding the mic button asks for the microphone and
+speech recognition, once each, and both stop the instant you let go.
+Recognition runs on the device — `requiresOnDeviceRecognition` is set once and
+never unset, so there is no fallback to a server recognizer — and nothing you
+say is ever recorded or uploaded. Reading a brief or an answer back out loud
+uses the same on-device voice synthesis as the rest of iOS.
+
 What stays is the part worth promising. Inference is local and the HTTP server
 only answers, so nothing you type and nothing the model says back is ever
 transmitted. Health, calendar and reminder data are read on-device and are
@@ -359,7 +443,7 @@ by the origin gate in `RequestOrigin.swift`. The assistant can also add events
 and reminders — including repeating ones, as a native `EKRecurrenceRule` rather
 than anything this app simulates — behind a second and stricter gate in the same
 file:
-`mayWritePersonalData` admits only the chat tab, so a network client cannot
+`mayWritePersonalData` admits only the Ask tab, so a network client cannot
 change anything and neither can a scheduled run, which reads at an hour when
 nobody is watching and shares its context with calendar titles that strangers
 wrote. No usage event can carry any of it
@@ -368,9 +452,9 @@ banned ones, and a test fails the build when an event names a prompt, a file, an
 address or a health figure. There is no crash reporting and no account.
 
 The page also spells out the parts that are less tidy: the Bonjour broadcast,
-the hand-off to Safari, and the system pasteboard. The app's own Data screen
-makes the same argument interactively, by walking the container and accounting
-for every byte in it.
+the hand-off to Safari, and the system pasteboard. The app's own Privacy
+screen, in You, makes the same argument interactively, by walking the
+container and accounting for every byte in it.
 
 ## License
 

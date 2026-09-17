@@ -30,6 +30,36 @@ actor EventAccess {
     /// sentence is written where the rows are rendered.
     static let rowLimit = PersonalDataTools.rowLimit
 
+    /// What this app has added to the user's own data recently, so that a card
+    /// reporting a write can offer to take it back.
+    ///
+    /// Kept here because this is the only place both halves exist at once: the
+    /// save mints the identifier, and the tool payload above it deliberately
+    /// never carries one — an opaque handle in the prompt costs tokens and says
+    /// nothing the model can use. If the write does not remember it on the way
+    /// out, nothing downstream can.
+    ///
+    /// In memory only, and deliberately. `WriteUndo.window` is five minutes; a
+    /// ledger that survived a relaunch would be offering to delete something
+    /// from a session the reader has forgotten, and a list of what the user
+    /// asked for is exactly the kind of thing this app promises not to keep.
+    private var ledger: [PersonalDataWrite] = []
+
+    /// The writes still inside the undo window, newest first.
+    ///
+    /// Trims as it reads rather than on a timer: the list is at most a handful
+    /// of entries, and an actor with a repeating task in it is a thing that has
+    /// to be stopped.
+    func recentWrites(now: Date = Date()) -> [PersonalDataWrite] {
+        ledger.removeAll { WriteUndo.isExpired($0, now: now) }
+        return ledger.sorted { $0.madeAt > $1.madeAt }
+    }
+
+    private func remember(_ write: PersonalDataWrite) {
+        ledger.removeAll { WriteUndo.isExpired($0) }
+        ledger.append(write)
+    }
+
     // MARK: - Permission
 
     /// EventKit's own status, one entity at a time.
@@ -326,6 +356,13 @@ actor EventAccess {
 
         do {
             try store.save(reminder, commit: true)
+            // After the save, because the identifier is only real once EventKit
+            // has written it.
+            remember(PersonalDataWrite(
+                kind: .reminder,
+                identifier: reminder.calendarItemIdentifier,
+                title: new.title
+            ))
             return .written
         } catch {
             DiagnosticLog.record(.failure(area: .eventKit, code: "reminder_save_failed"))
@@ -388,11 +425,84 @@ actor EventAccess {
             // carrying a recurrence rule is the spelling that means "detach
             // this one occurrence", which is not what a create means.
             try store.save(event, span: .futureEvents, commit: true)
+            remember(PersonalDataWrite(
+                kind: .event,
+                identifier: event.eventIdentifier,
+                title: new.title
+            ))
             return .written
         } catch {
             DiagnosticLog.record(.failure(area: .eventKit, code: "event_save_failed"))
             return .failed
         }
+    }
+
+    /// Takes one of this app's own recent writes back out again.
+    ///
+    /// The one place in this file that deletes anything, and the only reason it
+    /// is allowed to exist: it can only ever remove something this app created
+    /// minutes ago, by an identifier the ledger minted, for a person who is
+    /// looking at the card that says it was created. That is a different act
+    /// from a model deciding to delete — `CalendarTool` has no `delete` verb
+    /// and `PersonalDataWrites.completeReminder` ticks off rather than removes,
+    /// both deliberately, because an assistant driven by a 1.7B model reading
+    /// stranger-written titles must not be able to destroy anything.
+    ///
+    /// Gated on `RequestOrigin.onDeviceChat.mayWritePersonalData` like every
+    /// other write here. That origin is not a claim this method accepts from a
+    /// caller — it is the only origin an Undo button can have, because the
+    /// button is on this phone's screen and a network client has no screen
+    /// here. Written as the constant rather than a parameter precisely so that
+    /// nothing can pass a different one: a `.network` caller reaching this
+    /// would be a bug in the caller, and an argument would let it through.
+    func undo(_ write: PersonalDataWrite) async -> WriteResult {
+        guard RequestOrigin.onDeviceChat.mayWritePersonalData else { return .failed }
+
+        switch write.kind {
+        case .reminder:
+            let authorization = await requestReadAccess(to: .reminders)
+            guard authorization.canRead else { return .unauthorised(authorization) }
+            guard let item = store.calendarItem(withIdentifier: write.identifier) as? EKReminder else {
+                // Already gone — deleted in the Reminders app, or undone twice.
+                // Forgetting it is what stops the card offering again.
+                forget(write)
+                return .failed
+            }
+            do {
+                try store.remove(item, commit: true)
+                forget(write)
+                return .written
+            } catch {
+                DiagnosticLog.record(.failure(area: .eventKit, code: "reminder_undo_failed"))
+                return .failed
+            }
+
+        case .event:
+            let authorization = await requestReadAccess(to: .calendar)
+            // Full access rather than `canWrite`: EventKit will not hand back an
+            // event by identifier under a write-only grant, so a removal there
+            // would fail at the lookup with nothing useful to say.
+            guard authorization.canRead else { return .unauthorised(authorization) }
+            guard let event = store.event(withIdentifier: write.identifier) else {
+                forget(write)
+                return .failed
+            }
+            do {
+                // `.futureEvents` to match the span the create used, so undoing
+                // a repeating event removes the series it added rather than
+                // detaching one occurrence and leaving the rest behind.
+                try store.remove(event, span: .futureEvents, commit: true)
+                forget(write)
+                return .written
+            } catch {
+                DiagnosticLog.record(.failure(area: .eventKit, code: "event_undo_failed"))
+                return .failed
+            }
+        }
+    }
+
+    private func forget(_ write: PersonalDataWrite) {
+        ledger.removeAll { $0.id == write.id }
     }
 
     /// `EKCalendarItem.title` is imported as `String!` — it is genuinely nil

@@ -177,7 +177,7 @@ final class AppModel {
 
     var conversation: [ChatMessage] = []
     var draft = ""
-    /// Left by `AskLaunch` for `ChatView` to focus (and, where supported, start listening on) the composer once, then clear.
+    /// Left by `AskLaunch` for `AskComposer` to focus (and, where supported, start listening on) once, then clear.
     var askComposerFocusRequested = false
 
     /// An ability the last message would have used, if it were switched on.
@@ -276,6 +276,17 @@ final class AppModel {
         pendingToolOffer = nil
     }
     private(set) var isGenerating = false
+
+    /// The tool the reply in flight is running, or `nil`.
+    ///
+    /// A tool turn is two complete prefills the user cannot see — seconds of
+    /// nothing that read as a hang, which is the whole reason
+    /// `GenerationEvent.toolCallStarted` exists. Held here so the Ask screen can
+    /// say "Checking your calendar…" instead of showing an orb that looks stuck.
+    /// Cleared on the next token and again when the generation ends, so it can
+    /// never outlive the thing it describes.
+    private(set) var activeToolName: String?
+
     var systemPrompt: String = "You are a helpful assistant." {
         didSet { UserDefaults.standard.set(systemPrompt, forKey: Keys.systemPrompt) }
     }
@@ -284,7 +295,10 @@ final class AppModel {
 
     private let store: ModelStore
     private let configurationStore: ServerConfigurationStore
-    private let engine: LlamaEngine
+    /// Module-internal rather than private only so that `AppModel+Briefing`,
+    /// which is an extension in another file, can have the brief written by the
+    /// same resident model the chat uses. Nothing outside this module sees it.
+    let engine: LlamaEngine
     private let server: InferenceServer
     private var downloadTasks: [String: Task<Void, Never>] = [:]
     /// One per finished transfer, counting down its completion notice.
@@ -589,6 +603,12 @@ final class AppModel {
         // `.foreground` unconditionally: `deskMode` is deliberately not
         // persisted, so it is false at this point on every launch.
         sweepSchedule(in: .foreground)
+
+        // Last, and not awaited. The Today tab is what the app opens to, and
+        // it must not wait behind a calendar daemon: the brief publishes a
+        // template the moment EventKit answers and upgrades itself if a model
+        // turned out to be resident. Reads only — nothing here prompts.
+        Task { await refreshBrief() }
     }
 
     // MARK: - Server control
@@ -750,6 +770,12 @@ final class AppModel {
     // MARK: - Models
 
     func fit(for model: ModelRecord) -> DeviceBudget.Fit { budget.fit(for: model) }
+
+    /// How much room there is *right now*, which is a different question from
+    /// `fit(for:)` and has its own words. Never draw a fit badge from this: it
+    /// drops by the size of whatever is resident, so a badge that read it would
+    /// call the running model too large to run.
+    var memoryPressure: DeviceBudget.Pressure { budget.pressure }
 
     func isInstalled(_ model: ModelRecord) -> Bool {
         installed.contains { $0.id == model.id }
@@ -1073,8 +1099,19 @@ final class AppModel {
             // prediction — it is a measurement of what this device tolerates.
             // Recording it is what makes the next verdict better than a guess.
             budget.recordSuccessfulLoad(of: model)
+            // And take a live reading while the model is resident, which is the
+            // only moment the pressure signal is worth anything. It moves
+            // `budget.pressure` and deliberately nothing else — the fit badges
+            // on the Models tab do not shift because a model loaded.
+            budget.refreshHeadroom()
             await store.updateBudget(budget)
             if remember { UserDefaults.standard.set(model.id, forKey: Keys.loadedModel) }
+            // A brain has just arrived, and this morning's brief is still the
+            // template one. Rewriting it in the model's own words here is the
+            // whole payoff of the download, and nothing else in the app would
+            // notice the moment it became possible. Not awaited: a load during
+            // launch must not wait on EventKit.
+            Task { await refreshBriefIfStillTemplate() }
         } catch {
             // What this cannot see is the load that took the process with it:
             // running out of memory on a phone usually presents as a kill
@@ -1907,6 +1944,13 @@ final class AppModel {
     /// does not redraw on every byte a download reports.
     @ObservationIgnored let profile = Profile()
 
+    // MARK: - Today's brief
+
+    /// The daily brief and the day it is about. See `AppModel+Briefing.swift`,
+    /// which is the whole of the engine — a Swift extension cannot add a stored
+    /// property, so this one line is the engine's entire footprint here.
+    private(set) var briefing = BriefingState()
+
     // MARK: - First run
 
     /// Whether the intro has been seen.
@@ -1945,42 +1989,30 @@ final class AppModel {
 
     /// What the intro should have selected when it opens.
     ///
-    /// The middle tier, not the smallest. A 360M model downloads in seconds and
-    /// is barely coherent, so defaulting to it makes the first answer someone
-    /// ever sees the worst one this app can produce — a fast route to deciding
-    /// the whole idea does not work. The bigger download is the better trade,
-    /// and the smaller option is still right there for anyone on a slow
-    /// connection.
+    /// The rule moved to `StarterModels` in the Kit, where it can be tested
+    /// against a 4, 6 and 8 GB phone with and without the entitlement. It used
+    /// to be "the middle of the list by download size", which on the 6 GB
+    /// iPhone 14 this is developed against selected Llama 3.2 1B — a model
+    /// whose template has no notion of tools, so the first thing the app
+    /// recommended could not do the calendar, reminders or health questions it
+    /// was recommending itself for.
     var recommendedStarter: ModelRecord? {
-        let starters = starterModels
-        guard !starters.isEmpty else { return nil }
-        return starters[starters.count / 2]
+        StarterModels.recommended(budget: budget, installed: installedIDs)
     }
 
     /// Up to three models spanning what this phone can actually hold.
     ///
-    /// Built from the same fit estimate the Models tab uses, so the intro can
-    /// never offer something that will be killed on load. Comfortable entries
-    /// only, unless nothing is comfortable — on a small device an honest
-    /// "tight" beats an empty screen with nothing to choose.
+    /// Built from the same fit verdict the Models tab uses, so the intro can
+    /// never offer something that will be killed on load, and it always
+    /// contains `recommendedStarter`.
     var starterModels: [ModelRecord] {
-        // Already-downloaded models are excluded: on a replay from Settings the
-        // list would otherwise offer to fetch things this phone has had for
-        // weeks.
-        let installable = ModelCatalog.all.filter {
-            !$0.declaredCapabilities.vision.isYes && !isInstalled($0)
-        }
-        var usable = installable.filter { fit(for: $0) == .comfortable }
-        if usable.isEmpty {
-            usable = installable.filter { fit(for: $0) != .willNotFit }
-        }
-        let ordered = usable.sorted { $0.totalDownloadBytes < $1.totalDownloadBytes }
-        guard ordered.count > 3 else { return ordered }
-        // Smallest, middle and largest: the choice being offered is "how much
-        // of this phone do you want to spend", and three points make that
-        // legible where eight would not.
-        return [ordered[0], ordered[ordered.count / 2], ordered[ordered.count - 1]]
+        StarterModels.shortlist(budget: budget, installed: installedIDs)
     }
+
+    /// Already-downloaded models, by id. Excluded from the intro: on a replay
+    /// from Settings the list would otherwise offer to fetch things this phone
+    /// has had for weeks.
+    private var installedIDs: Set<String> { Set(installed.map(\.id)) }
 
     // MARK: - Residency
 
@@ -2035,6 +2067,10 @@ final class AppModel {
             } else {
                 sweepSchedule(in: .foreground)
             }
+            // The day has moved while the phone was in a pocket: a meeting has
+            // started, a reminder has come due, last night has been recorded.
+            // Not awaited, for the reason `bootstrap` gives.
+            Task { await refreshBrief() }
         case .inactive:
             break
         @unknown default:
@@ -2057,6 +2093,10 @@ final class AppModel {
         deskSweep?.cancel()
         deskSweep = nil
         await cancelScheduleSweep()
+        // Same argument, one screen up: a brief being written when the app is
+        // suspended is a generation Metal will refuse rather than slow down,
+        // and the template it would have replaced is already published.
+        cancelBriefGeneration()
 
         guard autoOffloadInBackground, releaseSuppressions.isEmpty else { return }
         guard let resident = loadedModelID else { return }
@@ -2125,6 +2165,14 @@ final class AppModel {
 
     func dismissModelSwitchNotice() { modelSwitchNotice = nil }
 
+    /// Clears a transport failure the reader has now seen.
+    ///
+    /// The next `send()` clears it too, which was the only way it ever went
+    /// away — so a failure the reader had already read stayed on screen until
+    /// they asked something else. A notice with no way to close it is a notice
+    /// that reads as a broken app.
+    func dismissGenerationError() { generationError = nil }
+
     // MARK: - Chat
 
     /// Images waiting to go with the next message.
@@ -2180,6 +2228,11 @@ final class AppModel {
         // After the guard, like the event below: a tap with an empty draft must
         // not cost somebody their morning briefing.
         scheduleSweep?.cancel()
+        // Same precedence, for the same reason: the daily brief holds the
+        // engine's gate exactly as this does, and a typed question queueing
+        // behind a paragraph nobody asked for is a chat tab sitting on an empty
+        // reply bubble. The template brief stays on the Today tab either way.
+        cancelBriefGeneration()
         // After the guard rather than at the top of the method: a tap with an
         // empty draft, or with nothing resident to answer it, sends no message.
         analytics.record(.chatMessageSent(modelID: loadedModelID ?? ""))
@@ -2280,6 +2333,10 @@ final class AppModel {
                     switch event {
                     case .token(let chunk):
                         await MainActor.run {
+                            // Compared before assigning: this runs per token,
+                            // and writing nil over nil sixty times a second
+                            // invalidates every view that reads it.
+                            if self.activeToolName != nil { self.activeToolName = nil }
                             self.checkpointConversation()
                             guard target.canWrite(to: self.currentConversationID, messages: self.conversation) else { return }
                             self.conversation[target.slot].content += chunk
@@ -2302,7 +2359,9 @@ final class AppModel {
                             notedUsefulAnswer = true
                             self.noteToolBackedAnswer()
                         }
-                    case .toolCallStarted, .finished:
+                    case .toolCallStarted(let name):
+                        await MainActor.run { self.activeToolName = name }
+                    case .finished:
                         break
                     }
                 }
@@ -2321,6 +2380,7 @@ final class AppModel {
             }
             await MainActor.run {
                 self.isGenerating = false
+                self.activeToolName = nil
                 self.resumeAutoRelease("generating")
                 self.applyIdleTimer(running: self.serverShouldRun)
                 // The transcript this reply belongs to, or nothing at all.

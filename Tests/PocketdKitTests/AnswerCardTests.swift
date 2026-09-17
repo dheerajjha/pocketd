@@ -1048,28 +1048,32 @@ struct AnswerCardAppSurfaceTests {
         )
     }
 
-    /// The card is drawn outside the bubble, at the full width of the page,
-    /// because a table needs the 40 points a bubble gives up. Being outside it
-    /// also took it out of reach of the bubble's long press — so the only part
-    /// of an answer worth copying was the only part that could not be, while
-    /// `copy(_:at:)` had been putting it on the pasteboard all along.
-    @Test("the cards under a message carry the same copy affordance the bubble does")
+    /// The card is drawn outside the prose, at the full width of the page,
+    /// because a table needs the points an indented bubble gives up. Being
+    /// outside it also took it out of reach of the bubble's long press — so the
+    /// only part of an answer worth copying was the only part that could not be,
+    /// while the copy action had been putting it on the pasteboard all along.
+    ///
+    /// Reads `AskMessageRow`, which is where the v2 Ask screen draws a turn. The
+    /// file this used to read was `ChatView.swift`, deleted when Ask replaced
+    /// it; the claim is the same one and it is worth keeping, because the
+    /// failure it catches is a card built somewhere new with nothing attached.
+    @Test("the cards under a message carry the same copy affordance the prose does")
     func cardsAreCopyable() throws {
         let source = try String(
-            contentsOf: repositoryRoot().appendingPathComponent("App/Sources/Views/ChatView.swift"),
+            contentsOf: repositoryRoot().appendingPathComponent("App/Sources/Views/Ask/AskMessageRow.swift"),
             encoding: .utf8
         )
         let cards = try #require(
-            declarationBody(startingWith: "private func cards(for message: ChatMessage, at index: Int)", in: source),
-            "ChatView must draw its cards in one place, so the affordance can be attached in one place"
+            declarationBody(startingWith: "private var assistant: some View", in: source),
+            "AskMessageRow must draw its cards in one place, so the affordance can be attached in one place"
         )
 
-        #expect(cards.contains("AnswerCardView(card: card)"))
-        #expect(cards.contains(".contextMenu"))
-        #expect(cards.contains(#"Button("Copy", systemImage: "doc.on.doc") { copy(message, at: index) }"#))
+        #expect(cards.contains("AnswerCardView("))
+        #expect(cards.contains(".contextMenu { copyButton }"))
         // A context menu is a long press, which VoiceOver spends on its own
         // gestures, so the rotor needs the same action.
-        #expect(cards.contains(#".accessibilityAction(named: "Copy message") { copy(message, at: index) }"#))
+        #expect(cards.contains(#".accessibilityAction(named: "Copy message", onCopy)"#))
         // And nowhere else: a second construction site is a second card with
         // nothing attached to it.
         #expect(source.components(separatedBy: "AnswerCardView(").count - 1 == 1)
