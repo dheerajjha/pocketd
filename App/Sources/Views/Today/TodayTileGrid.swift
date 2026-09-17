@@ -48,7 +48,7 @@ struct TodayTileGrid: View {
             value: tile.value,
             unit: tile.unit,
             footnote: tile.footnote,
-            isText: Self.isText(kind),
+            isText: Self.isText(tile.value),
             tint: Self.tint(for: tile.tone)
         ) {
             open(kind)
@@ -75,13 +75,14 @@ struct TodayTileGrid: View {
         }
     }
 
-    /// Which of the four reads as words rather than as a figure.
+    /// Whether this tile's value reads as words rather than as a figure.
     ///
-    /// UP NEXT is an event title, or "Free" when there is none — never a
-    /// number. The other three are counts and durations, and the mono face is
-    /// what keeps "6h 36m" and "6h 02m" aligned across a redraw.
-    private static func isText(_ kind: TodayTile) -> Bool {
-        kind == .upNext
+    /// Asked of the value rather than of the tile, because three of the four
+    /// are both: SLEEP is "6h 36m" on a connected phone and "Off" on one that
+    /// never granted Health, and only the first of those wants the mono face.
+    /// A value with no digit in it is a word.
+    private static func isText(_ value: String) -> Bool {
+        !value.contains(where: \.isNumber)
     }
 
     private static func symbol(for kind: TodayTile) -> String {

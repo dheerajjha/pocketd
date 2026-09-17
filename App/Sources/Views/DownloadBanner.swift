@@ -35,7 +35,12 @@ struct DownloadBanner: View {
             VStack(alignment: .leading, spacing: PDSpacing.xs) {
                 HStack(spacing: PDSpacing.s) {
                     icon(for: first)
-                        .frame(width: 20)
+                        // Pinned rather than inherited. These are glyphs in a
+                        // 20pt slot, and at an accessibility text size an
+                        // unpinned symbol grew to four times the row and spilled
+                        // out of its frame.
+                        .font(.system(size: 17, weight: .regular))
+                        .frame(width: 20, height: 20)
 
                     Button { goTo(.you) } label: {
                         Text(first.record.displayName)
@@ -109,11 +114,12 @@ struct DownloadBanner: View {
             Image(systemName: "pause.circle")
                 .foregroundStyle(Color.pd.caution)
         case .failed:
-            // Amber, not red. A download that did not finish is not a fault in
-            // the app and is not a thing to be alarmed by — this palette keeps
-            // red for a transport failure and uses amber for "your turn".
+            // Red, where paused is amber, and the split is the app's own rule:
+            // amber is "your turn", red is a transport failure. A download that
+            // could not finish is the second one, and the row for the same
+            // model under You › Brain has always said so in the same colour.
             Image(systemName: "exclamationmark.triangle")
-                .foregroundStyle(Color.pd.caution)
+                .foregroundStyle(Color.pd.danger)
         }
     }
 
@@ -219,7 +225,8 @@ struct DownloadBanner: View {
 
     private func tint(for transfer: ModelTransfer) -> Color? {
         switch transfer.state {
-        case .paused, .failed: .pd.caution
+        case .paused: .pd.caution
+        case .failed: .pd.danger
         case .finished: .pd.positive
         case .waiting, .running, .stopping: nil
         }
