@@ -37,18 +37,33 @@ public enum Ability: String, Sendable, Equatable, CaseIterable, Identifiable, Co
     /// capability. "Read calendar" — the Settings switch's label — tells a
     /// reader what the app will do and not one thing about what they get, and a
     /// switch whose payoff is unstated is a switch that stays off.
+    ///
+    /// Kept under `summaryLengthLimit`, because the row truncates. That is not
+    /// a guess: rewriting these to mention writing took the calendar line to 90
+    /// characters and the reminders line to 116, and the Abilities screen
+    /// rendered "…have new events added when y…" with the sentence cut
+    /// mid-word. The two that fitted before were 77 and 67. Health was 90 and
+    /// had been clipping since before any of this.
     public var summary: String {
         switch self {
         case .calendar:
-            "Ask what is on today or whether Thursday is free — and have new events added when you ask."
+            "Ask what is on today or whether Thursday is free, and add events by asking."
         case .reminders:
-            "Ask what is overdue or due today, set reminders — including ones that repeat — and tick them off when they are done."
+            "Ask what is due or overdue, set reminders that repeat, and tick them off."
         case .health:
-            "Ask how you slept, how active you have been, or whether your resting heart rate has moved."
+            "Ask how you slept, how active you have been, or where your heart rate sits."
         case .localServer:
-            "Use this phone's model from your laptop — point Ollama or any OpenAI client at its address."
+            "Use this phone's model from your laptop — any Ollama or OpenAI client."
         }
     }
+
+    /// The longest a `summary` may be before the Abilities row truncates it.
+    ///
+    /// Measured rather than chosen: 77 characters rendered in full on an
+    /// iPhone 17 Pro and 90 did not. Enforced by `AbilitiesCopyTests` so the
+    /// next person to improve one of these sentences finds out here rather
+    /// than in a screenshot.
+    public static let summaryLengthLimit = 80
 
     /// What the user calls the thing being read, for the sentences below.
     public var noun: String {

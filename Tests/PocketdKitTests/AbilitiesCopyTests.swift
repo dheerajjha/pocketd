@@ -290,4 +290,20 @@ struct AbilitiesCopyTests {
         #expect(abilityNetworkExclusionNote.contains("never reach"))
         #expect(abilityNetworkExclusionNote.contains("Only the assistant on this phone can"))
     }
+
+    @Test("every summary fits the row it is drawn in")
+    func summariesDoNotTruncate() {
+        // The Abilities row truncates, and a sentence cut mid-word is a bug
+        // rather than a style. Rewriting these to mention writing took the
+        // calendar line to 90 characters and the reminders line to 116, and
+        // the screen rendered "…have new events added when y…". The two that
+        // fitted were 77 and 67; health had been at 90 and clipping since
+        // before any of it.
+        for ability in Ability.allCases {
+            #expect(
+                ability.summary.count <= Ability.summaryLengthLimit,
+                "\(ability.title) summary is \(ability.summary.count) characters"
+            )
+        }
+    }
 }
