@@ -237,5 +237,7 @@ struct PocketdWidgetBundle: WidgetBundle {
     var body: some Widget {
         SchedulesWidget()
         DownloadLiveActivity()
+        // Deployment target is iOS 18, so this needs no availability check.
+        AskPocketdControl()
     }
 }
