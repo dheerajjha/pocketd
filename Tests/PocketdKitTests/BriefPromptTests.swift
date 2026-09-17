@@ -392,6 +392,22 @@ struct BriefPromptTests {
         #expect(BriefPrompt.clean("Your event is \"Standup\" at 9.") == "Your event is \"Standup\" at 9.")
     }
 
+    @Test("an opening quotation mark with no partner is dropped too")
+    func cleanStripsAnUnmatchedQuote() {
+        // The generation stopped at its token limit before the closing mark.
+        #expect(BriefPrompt.clean("\"Good morning, Dheeraj. Standup is at nine.") == "Good morning, Dheeraj. Standup is at nine.")
+        #expect(BriefPrompt.clean("\u{201C}Good morning, Dheeraj.") == "Good morning, Dheeraj.")
+        // The mirror: the opener went with a reasoning block.
+        #expect(BriefPrompt.clean("Good morning, Dheeraj.\"") == "Good morning, Dheeraj.")
+        // A real quotation anywhere inside keeps both of its marks.
+        #expect(
+            BriefPrompt.clean("\"Standup\" is at nine, Dheeraj.")
+                == "\"Standup\" is at nine, Dheeraj."
+        )
+        // An apostrophe at the end is not half a quotation.
+        #expect(BriefPrompt.clean("It is the boys'") == "It is the boys'")
+    }
+
     @Test("clean leaves a clean brief exactly as it was")
     func cleanIsIdempotent() {
         let good = "Good morning, Dheeraj. Standup at 09:30 is next, and you slept 6h 36m."

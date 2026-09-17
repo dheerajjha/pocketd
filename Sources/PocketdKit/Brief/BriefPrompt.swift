@@ -429,7 +429,29 @@ public enum BriefPrompt {
         for (open, close) in pairs where text.count > 1 && text.first == open && text.last == close {
             return String(text.dropFirst().dropLast())
         }
-        return text
+        // An opening mark with nothing to close it, which is the commonest
+        // shape of this failure rather than a rare one: a model that decides to
+        // read the brief out loud opens with a quote, and the generation then
+        // stops at its token limit before the closing one. Taking only the
+        // matched pair left a stray \" on the front of the home tab.
+        //
+        // Only the first character is considered, and only when the rest of the
+        // text has no partner for it \u2014 "He said \"yes\" at nine" keeps both of
+        // its marks, and so does a brief that genuinely quotes something.
+        guard let first = text.first else { return text }
+        for (open, close) in pairs where first == open {
+            let rest = text.dropFirst()
+            guard !rest.contains(close), !rest.contains(open) else { break }
+            return String(rest)
+        }
+        // And the mirror of it: a closing mark whose opener was eaten by the
+        // reasoning stripper. Doubles only \u2014 a trailing ' or \u2019 is far more
+        // likely to be the apostrophe in "the boys'" than half a quotation.
+        guard let last = text.last, last == "\"" || last == "\u{201D}" else { return text }
+        let head = text.dropLast()
+        let opener: Character = last == "\"" ? "\"" : "\u{201C}"
+        guard !head.contains(opener), !head.contains(last) else { return text }
+        return String(head)
     }
 
     // MARK: - Small words
