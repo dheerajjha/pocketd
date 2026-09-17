@@ -133,6 +133,7 @@ public struct DeletionPlan: Sendable, Equatable {
         public static let orphans = "model files nothing can load"
         public static let conversations = "every conversation"
         public static let scheduledTasks = "every scheduled task and its results"
+        public static let dailyBrief = "today's brief"
         public static let partialDownloads = "every unfinished download"
         public static let networkCache = "the network cache"
     }
@@ -176,6 +177,12 @@ public struct DeletionPlan: Sendable, Equatable {
         orphanBytes: Int64,
         conversationBytes: Int64,
         scheduledTaskBytes: Int64,
+        // Defaulted, unlike every other figure here, and only because it was
+        // added after the call sites. It is the one number in this list that
+        // counts bytes outside the app's own container — the widget's copy of
+        // the brief lives in the App Group — so it cannot come from the
+        // container survey and has to be measured by `DailyBriefStore`.
+        dailyBriefBytes: Int64 = 0,
         partialDownloadBytes: Int64,
         networkCacheBytes: Int64,
         downloadInFlight: Bool
@@ -189,6 +196,11 @@ public struct DeletionPlan: Sendable, Equatable {
             // or health. A delete-everything that left these behind would be
             // leaving personal data at rest under a button that says otherwise.
             Entry(name: EntryName.scheduledTasks, byteCount: scheduledTaskBytes),
+            // Beside the two above for the same reason they are beside each
+            // other: it is a paragraph about the user's calendar, reminders and
+            // sleep, written down. Deleting it removes both copies, including
+            // the one on the home screen — see `DailyBriefStore.clear`.
+            Entry(name: EntryName.dailyBrief, byteCount: dailyBriefBytes),
             Entry(
                 name: EntryName.partialDownloads,
                 byteCount: partialDownloadBytes,

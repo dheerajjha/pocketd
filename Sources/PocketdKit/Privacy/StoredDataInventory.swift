@@ -58,6 +58,19 @@ public enum StoredDataKind: String, Sendable, CaseIterable, Codable {
     /// calendar, reminders or health. A briefing that says "dentist at 11" is
     /// personal data at rest, written by a run nobody watched.
     case scheduledTasks
+    /// Today's brief, and the narrower copy of it the home screen widget reads.
+    ///
+    /// Its own kind rather than filed under scheduled tasks, because nobody
+    /// scheduled it: the Today tab writes one every morning whether or not the
+    /// user has a single routine set up, so a person who has never opened
+    /// Routines would find their day's contents under a heading about tasks they
+    /// do not have.
+    ///
+    /// It is also the only kind with a file **outside this app's container**.
+    /// The widget's copy lives in the App Group, which the container walk cannot
+    /// see, so `ContainerSurvey` counts the local file and `DailyBriefStore`
+    /// counts both — see `byteCount(fileManager:)`.
+    case dailyBrief
     /// The two halves of a download that stopped: the resume blob the app
     /// wrote, and the multi-gigabyte temporary file URLSession is holding for
     /// it. They are one thing to a user and are counted as one.
@@ -78,6 +91,7 @@ public enum StoredDataKind: String, Sendable, CaseIterable, Codable {
         case .models: "Models"
         case .conversations: "Conversations"
         case .scheduledTasks: "Scheduled tasks"
+        case .dailyBrief: "Today's brief"
         case .partialDownloads: "Unfinished downloads"
         case .preferences: "Settings and keys"
         case .networkCache: "Network cache"
@@ -96,6 +110,8 @@ public enum StoredDataKind: String, Sendable, CaseIterable, Codable {
             "Everything typed in the Chat tab and everything the model replied, one file per conversation, as plain text."
         case .scheduledTasks:
             "Each task you set to run later — its prompt or its rule — and what the last few runs produced. A run that read your calendar or your health stores the sentence it wrote about them, so this is personal data at rest even though no conversation exists for it."
+        case .dailyBrief:
+            "The paragraph on the Today tab and the numbers it was written from — your next event, what is due, last night's sleep and today's steps. Two copies: this one, and a shorter one in the shared folder the home screen widget reads, which carries one sentence, one event title and a count and nothing else."
         case .partialDownloads:
             "Bytes of a model that never finished arriving: the resume blob beside the weights, and the part-file URLSession parks in this app's own tmp folder. iOS empties tmp only when the disk comes under pressure, which is why there is a button for it here."
         case .preferences:
@@ -118,7 +134,7 @@ public enum StoredDataKind: String, Sendable, CaseIterable, Codable {
 
     public var disposal: Disposal {
         switch self {
-        case .models, .conversations, .partialDownloads, .scheduledTasks:
+        case .models, .conversations, .partialDownloads, .scheduledTasks, .dailyBrief:
             .here
         case .networkCache:
             .here
@@ -318,6 +334,20 @@ public struct ContainerSurvey: Sendable, Equatable {
         if parts.starts(with: ["Library", "Application Support", "Models"]) { return .models }
         if parts.starts(with: ["Library", "Application Support", "Conversations"]) { return .conversations }
         if parts.starts(with: ["Library", "Application Support", "ScheduledTasks"]) { return .scheduledTasks }
+        // The brief is one file rather than a folder of them, so it is matched
+        // by exact path and not by a prefix. Both copies are named from the one
+        // place: the container walk only ever meets the first, but the App Group
+        // copy is handed to this same function by anything measuring the shared
+        // folder, and a rule that knew about only one of them would file the
+        // other under "Everything else in the container".
+        //
+        // The second rule is pinned to the root of whatever container it is
+        // given — `parts.count == 1` — rather than matching the name anywhere.
+        // A loose name match would claim a `brief.json` that a future iOS wrote
+        // into Caches, which is exactly the silent misfiling `.other` exists to
+        // prevent.
+        if parts == ["Library", "Application Support", DailyBriefStore.filename] { return .dailyBrief }
+        if parts.count == 1, name == DailyBriefStore.filename || name == WidgetBrief.filename { return .dailyBrief }
         if parts.starts(with: ["Library", "Preferences"]) { return .preferences }
         if parts.starts(with: ["Library", "Saved Application State"]) { return .systemState }
         if parts.starts(with: ["Library", "SplashBoard"]) { return .systemState }
