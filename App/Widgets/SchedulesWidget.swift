@@ -236,6 +236,7 @@ struct SchedulesWidget: Widget {
 struct PocketdWidgetBundle: WidgetBundle {
     var body: some Widget {
         SchedulesWidget()
+        TodayWidget()
         DownloadLiveActivity()
         // Deployment target is iOS 18, so this needs no availability check.
         AskPocketdControl()
