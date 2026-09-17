@@ -37,3 +37,17 @@ reference/*
 # of someone else's app UI does not belong in a public repository — the notes
 # taken from them are in docs and the plan, which is the part with any value.
 NewUI&FeatureMocks/
+
+# App Store and marketing work — listing copy, competitor analysis, store
+# screenshots, the compositor that builds them, and anything staged to shoot
+# them with. None of it is the product, and this is a public MIT repository
+# whose README already carries the screenshots a reader needs.
+#
+# It lives outside the checkout entirely (../pocketd-store) rather than being
+# ignored in place, so that it cannot be added by a wildcard or a `git add -A`.
+# These patterns are a backstop for the case where someone drops one back in.
+docs/store/
+docs/app-store-listing.md
+scripts/store-shots.py
+store-assets/
+*-store-shots/
