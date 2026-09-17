@@ -49,7 +49,7 @@ struct FloatingTabBar: View {
                 .background {
                     if selection == tab {
                         Capsule(style: .continuous)
-                            .fill(Color.pd.card)
+                            .fill(Color.pd.tabSelection)
                             .frame(width: PDMetric.tabBarSelectionWidth)
                             .shadow(color: .black.opacity(0.06), radius: 6, x: 0, y: 2)
                             // Matched so the capsule slides between tabs

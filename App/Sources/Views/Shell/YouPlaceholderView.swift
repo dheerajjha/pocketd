@@ -15,6 +15,14 @@ struct YouPlaceholderView: View {
     @Environment(AppModel.self) private var model
     @Environment(Navigator.self) private var navigator
 
+    /// Abilities is presented rather than pushed, for the same reason the five
+    /// routes in `YouRoute.bringsOwnNavigationStack` are: it brings a
+    /// `NavigationStack` of its own, and pushing one of those onto a path-bound
+    /// stack kills the process. It has its own flag rather than a route because
+    /// `YouRoute` has no case for it — the abilities become rows *on* this
+    /// screen when it is rebuilt, so there is nothing to name.
+    @State private var showingAbilities = false
+
     private var brainLine: String {
         model.loadedModelID == nil ? "No brain yet" : model.loadedModelName
     }
@@ -25,11 +33,10 @@ struct YouPlaceholderView: View {
                 header
 
                 section("What it can see") {
-                    // The one row still reached by a destination rather than by
-                    // a `YouRoute`: the abilities become rows *on* this screen
-                    // when it is rebuilt, so there is no route to name.
-                    NavigationLink {
-                        AbilitiesView(goTo: { navigator.go($0) })
+                    // Presented, not pushed — see `showingAbilities`.
+                    Button {
+                        Haptics.tap()
+                        showingAbilities = true
                     } label: {
                         YouRow(
                             symbol: "sparkles",
@@ -72,9 +79,23 @@ struct YouPlaceholderView: View {
             .padding(.top, PDSpacing.xs)
         }
         .scrollIndicators(.hidden)
-        .pdCanvas()
+        // The floating bar's space, as safe area rather than padding, so the
+        // list runs under the capsule and its last row still clears it.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Color.clear.frame(height: PDMetric.tabBarClearance)
+        }
+        // Wash behind the content but in front of the flat canvas — see the
+        // note on Today, where getting this the other way round made the
+        // gradient invisible.
         .pdHeroWash()
+        .pdCanvas()
         .toolbar(.hidden, for: .navigationBar)
+        .sheet(isPresented: $showingAbilities) {
+            AbilitiesView(goTo: { destination in
+                showingAbilities = false
+                navigator.go(destination)
+            })
+        }
     }
 
     // MARK: Pieces
@@ -121,16 +142,34 @@ struct YouPlaceholderView: View {
             .frame(height: 1)
     }
 
+    /// A row that goes to a `YouRoute`.
+    ///
+    /// A `NavigationLink` where the destination can be pushed and a `Button`
+    /// where it cannot, rather than one of each written out at seven call
+    /// sites. `Navigator.openYou` makes the same decision for a route arrived
+    /// at from another tab, and both read it off the same property — see
+    /// `YouRoute.bringsOwnNavigationStack`.
+    @ViewBuilder
     private func route(
         _ route: YouRoute,
         symbol: String,
         title: String,
         detail: String
     ) -> some View {
-        NavigationLink(value: route) {
-            YouRow(symbol: symbol, title: title, detail: detail)
+        if route.bringsOwnNavigationStack {
+            Button {
+                Haptics.tap()
+                navigator.openYou(route)
+            } label: {
+                YouRow(symbol: symbol, title: title, detail: detail)
+            }
+            .buttonStyle(.plain)
+        } else {
+            NavigationLink(value: route) {
+                YouRow(symbol: symbol, title: title, detail: detail)
+            }
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
     }
 }
 

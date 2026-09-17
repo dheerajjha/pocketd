@@ -62,6 +62,34 @@ enum YouRoute: Hashable {
     case diagnostics
 }
 
+extension YouRoute: Identifiable {
+    var id: Self { self }
+
+    /// Whether this route's screen still brings a `NavigationStack` of its own.
+    ///
+    /// Not a style question — it is a crash. Pushing a view that contains its
+    /// own `NavigationStack` onto a stack whose path is bound to `[YouRoute]`
+    /// traps inside SwiftUI: `NavigationColumnState.boundPathChange` writes the
+    /// new stack back through the binding, cannot represent the nested
+    /// controller as a `YouRoute`, and the `try!` in there kills the app. Found
+    /// by tapping "Brain" in the simulator; it takes the whole process down,
+    /// not just the screen.
+    ///
+    /// So those five are presented instead of pushed, and `Navigator` decides
+    /// which is which rather than every caller remembering. Each one goes back
+    /// to being a push the moment its own workstream removes the inner stack —
+    /// delete the case from this list and the row becomes a `NavigationLink`
+    /// again.
+    var bringsOwnNavigationStack: Bool {
+        switch self {
+        case .brain, .addBrain, .devices, .privacy, .settings:
+            true
+        case .deskMode, .diagnostics:
+            false
+        }
+    }
+}
+
 /// A question handed from one tab to another.
 ///
 /// A value rather than a `String?` on the model, and it carries `send` for the
@@ -100,6 +128,14 @@ final class Navigator {
     /// You without Today knowing what a `NavigationStack` is.
     var youPath: [YouRoute] = []
 
+    /// A You route that is presented rather than pushed.
+    ///
+    /// Not in the original design, and it is here because of a crash rather
+    /// than a preference — see `YouRoute.bringsOwnNavigationStack`. It goes
+    /// away, along with that property, when the last legacy screen loses its
+    /// inner `NavigationStack`.
+    var youSheet: YouRoute?
+
     /// A question waiting for the Ask tab to pick it up.
     ///
     /// Not written straight into `AppModel.draft`, because handing over a
@@ -123,14 +159,24 @@ final class Navigator {
         tab = .ask
     }
 
-    /// Push a route inside You, from anywhere.
+    /// Open a route inside You, from anywhere.
     ///
     /// Resets the stack rather than appending to it. Arriving at Brain from a
     /// card on Today should leave one screen behind it, not whatever the
     /// person was last looking at three days ago.
+    ///
+    /// Push or present is decided here and not by the caller, because getting
+    /// it wrong crashes the app rather than looking wrong — see
+    /// `YouRoute.bringsOwnNavigationStack`.
     func openYou(_ route: YouRoute) {
         tab = .you
-        youPath = [route]
+        if route.bringsOwnNavigationStack {
+            youPath = []
+            youSheet = route
+        } else {
+            youSheet = nil
+            youPath = [route]
+        }
     }
 
     /// Take the pending question, if there is one.

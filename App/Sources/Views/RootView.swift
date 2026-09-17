@@ -52,10 +52,8 @@ private struct OnboardingViewBridge: View {
 ///
 /// Not a `TabView`. The system bar is 83pt of opaque chrome that ends every
 /// screen with a hard line, and these screens are meant to run off the bottom
-/// of the phone. There is no system tab bar to hide here because none is
-/// created; every tab's content instead gets `PDMetric.tabBarClearance` of
-/// bottom safe area so its last row clears the capsule while the rest of it
-/// scrolls underneath.
+/// of the phone. There is no system tab bar to hide here, because none is
+/// created. How each tab keeps clear of the capsule is the note on `selected`.
 private struct Shell: View {
     @Environment(AppModel.self) private var model
     @Environment(Navigator.self) private var navigator
@@ -73,13 +71,6 @@ private struct Shell: View {
             Color.pd.canvas.ignoresSafeArea()
 
             selected
-                // The space the floating bar occupies, given to the content as
-                // safe area rather than as padding: a `ScrollView` reads safe
-                // area and keeps its last row reachable, and it reads padding
-                // as a permanent gap at the bottom of the page.
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    Color.clear.frame(height: PDMetric.tabBarClearance)
-                }
 
             FloatingTabBar(selection: $navigation.tab)
                 .padding(.horizontal, PDMetric.tabBarSideMargin)
@@ -133,6 +124,16 @@ private struct Shell: View {
     /// they still bring their own; wrapping them would stack two navigation
     /// bars on one screen. Their rebuilds drop the inner one and this switch
     /// grows two wrappers.
+    ///
+    /// They also end above the capsule rather than scrolling under it, and
+    /// that is not a preference. Both are bottom-anchored screens — a composer,
+    /// a toolbar — and a `safeAreaInset` applied from out here does not reach
+    /// past their own `NavigationStack`: the first build put the chat composer
+    /// half off the bottom of the phone, under the tab bar. A real spacer in a
+    /// `VStack` cannot be ignored by anything inside it.
+    ///
+    /// Today and You do scroll under, and own that inset themselves — see
+    /// `PDMetric.tabBarClearance` where their scroll views apply it.
     @ViewBuilder
     private var selected: some View {
         switch navigator.tab {
@@ -141,11 +142,25 @@ private struct Shell: View {
                 TodayPlaceholderView()
             }
         case .ask:
-            ChatView(goTo: { navigator.go($0) })
+            reservingTabBar {
+                ChatView(goTo: { navigator.go($0) })
+            }
         case .routines:
-            SchedulesView(goTo: { navigator.go($0) })
+            reservingTabBar {
+                SchedulesView(goTo: { navigator.go($0) })
+            }
         case .you:
             YouTab()
+        }
+    }
+
+    /// Lays a screen out above the floating bar rather than behind it.
+    private func reservingTabBar<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(spacing: 0) {
+            content()
+            Color.clear.frame(height: PDMetric.tabBarReserve)
         }
     }
 
@@ -191,6 +206,16 @@ private struct YouTab: View {
                 .navigationDestination(for: YouRoute.self) { route in
                     YouRouteView(route: route)
                 }
+        }
+        // The five screens that still carry a `NavigationStack` of their own.
+        // Presented rather than pushed, because pushing one takes the process
+        // down — see `YouRoute.bringsOwnNavigationStack`.
+        .sheet(item: $navigation.youSheet) { route in
+            YouRouteView(route: route)
+                // Three of the five have no Done button of their own — they
+                // were tabs. The grabber is what says "pull this down" to
+                // somebody who would otherwise be stuck looking at Models.
+                .presentationDragIndicator(.visible)
         }
     }
 }

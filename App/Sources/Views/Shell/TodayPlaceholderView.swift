@@ -86,8 +86,18 @@ struct TodayPlaceholderView: View {
             .padding(.top, PDSpacing.xs)
         }
         .scrollIndicators(.hidden)
-        .pdCanvas()
+        // The floating bar's space, as safe area on this scroll view rather
+        // than as padding: the page keeps scrolling under the capsule, and the
+        // last row still comes out from under it.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Color.clear.frame(height: PDMetric.tabBarClearance)
+        }
+        // Wash first, canvas second, and the order is the whole effect.
+        // `background` puts each new layer *behind* the last, so applying the
+        // flat canvas afterwards paints it over the gradient and the top of the
+        // page goes plain white.
         .pdHeroWash()
+        .pdCanvas()
         .task {
             // Only so the bell's badge is honest on a cold launch. Cheap, and
             // it is the one number on this screen that is not decoration.

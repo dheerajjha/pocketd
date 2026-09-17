@@ -71,6 +71,13 @@ extension Color {
         /// A circular floating button's own surface, a shade brighter than the
         /// canvas so its shadow has something to sit against.
         static let floatSurface = dual(light: 0xFDFDFB, dark: 0x232120)
+        /// The capsule behind the selected tab.
+        ///
+        /// Its own token rather than `card`, because "selected" has to read as
+        /// *raised* in both appearances and `card` is darker than the bar in
+        /// dark mode — which turns the selection into a hole punched in the
+        /// capsule. Caught in a dark screenshot, not in a preview.
+        static let tabSelection = dual(light: 0xFFFFFF, dark: 0x35312C)
         /// The info bubble behind a `Callout`. The same fill as `accentSoft`.
         static let callout = dual(light: 0xECF2F9, dark: 0x1E2A3B)
 
@@ -342,8 +349,17 @@ enum PDMetric {
 
     /// What every tab's scroll view must keep clear at the bottom so its last
     /// row is not under the floating bar. Content scrolls *under* the bar, so
-    /// this is an inset on the content and never a gap in the page.
+    /// this is a bottom safe-area inset on the scroll view and never a gap in
+    /// the page.
     static let tabBarClearance: CGFloat = 96
+
+    /// Real layout space for the bar, for a screen that cannot scroll under it.
+    ///
+    /// A screen whose bottom edge is a control — a composer, a pinned CTA —
+    /// has to *end* above the capsule rather than pass beneath it. Measured
+    /// from the bottom safe area rather than from the screen edge, which is
+    /// where this sits in the shell's `ZStack`.
+    static let tabBarReserve: CGFloat = tabBarBottomInset + tabBarHeight + PDSpacing.xs
 }
 
 // MARK: - Surfaces
