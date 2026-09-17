@@ -63,6 +63,11 @@ private struct Shell: View {
     @Environment(\.requestReview) private var requestReview
 
     @State private var toasts = ToastCenter()
+    /// Whether the keyboard is up, so the strip kept clear for the floating bar
+    /// can give way to it. There is no environment value for this, and the
+    /// alternative — letting the reserve stand — leaves an empty band between
+    /// the composer and the keys.
+    @State private var keyboardIsUp = false
 
     var body: some View {
         @Bindable var navigation = navigator
@@ -75,6 +80,11 @@ private struct Shell: View {
             FloatingTabBar(selection: $navigation.tab)
                 .padding(.horizontal, PDMetric.tabBarSideMargin)
                 .padding(.bottom, PDMetric.tabBarBottomInset)
+                // The bar belongs to the phone, not to the page: without this
+                // it rides up on top of the keyboard and sits in the gap
+                // between the composer and the keys, which is the one place on
+                // Ask nobody is looking for it.
+                .ignoresSafeArea(.keyboard, edges: .bottom)
         }
         // Above the tabs rather than inside one of them: a download is the one
         // thing here that outlives the screen that started it. Slim, at the
@@ -92,12 +102,15 @@ private struct Shell: View {
         // intent caused, the second covers the app already being in memory, and
         // a phrase said twice must not ask twice — which is why `take()` clears
         // the slot rather than reading it.
-        .onAppear {
-            collectIntentQuestion()
-            applyAskHandoff()
-        }
+        .onAppear { collectIntentQuestion() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { collectIntentQuestion() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            keyboardIsUp = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardIsUp = false
         }
         // A tap on the Today widget, or a Shortcut. `DeepLink` is the whole
         // parser and anything it does not recognise is `nil`, so an unknown
@@ -110,10 +123,6 @@ private struct Shell: View {
             case .you: navigator.go(.you)
             }
         }
-        // The seam between `Navigator.ask(_:send:)` and the chat screen, which
-        // still reads `AppModel.draft`. Keyed on the handoff's id rather than
-        // its text so that tapping the same chip twice is two requests.
-        .onChange(of: navigator.askHandoff?.id) { _, _ in applyAskHandoff() }
         // Asked from here rather than from the model, because a review request
         // is a SwiftUI environment action and only a view holds one. The model
         // decides WHEN — see `ReviewMoment` — and this is only the hand that
@@ -163,12 +172,17 @@ private struct Shell: View {
     }
 
     /// Lays a screen out above the floating bar rather than behind it.
+    ///
+    /// Nothing is reserved while the keyboard is up: the capsule stays at the
+    /// bottom of the phone underneath it — see `ignoresSafeArea(.keyboard)`
+    /// above — so holding the strip open would only push the composer a bar's
+    /// height clear of the keys it is sitting on.
     private func reservingTabBar<Content: View>(
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(spacing: 0) {
             content()
-            Color.clear.frame(height: PDMetric.tabBarReserve)
+            Color.clear.frame(height: keyboardIsUp ? 0 : PDMetric.tabBarReserve)
         }
     }
 
@@ -189,17 +203,6 @@ private struct Shell: View {
         navigator.ask(question, send: model.loadedModelID != nil)
     }
 
-    /// Delivers a pending question to the chat screen.
-    ///
-    /// The chat screen reads `AppModel.draft`, which predates the `Navigator`;
-    /// this is the one place that knows both. When Ask is rebuilt it consumes
-    /// `navigator.askHandoff` itself and this method goes.
-    private func applyAskHandoff() {
-        guard let handoff = navigator.takeAskHandoff() else { return }
-        model.draft = handoff.draft
-        guard handoff.send, model.loadedModelID != nil else { return }
-        model.send()
-    }
 }
 
 // MARK: - You's stack
@@ -220,14 +223,6 @@ private struct YouTab: View {
                 .navigationDestination(for: YouRoute.self) { route in
                     YouRouteView(route: route)
                 }
-        }
-        // Nothing sets this any more: every screen under You is rebuilt and
-        // pushes cleanly, so `YouRoute.bringsOwnNavigationStack` is false
-        // everywhere. Kept wired up so the escape hatch still works the day a
-        // screen arrives carrying its own stack.
-        .sheet(item: $navigation.youSheet) { route in
-            YouRouteView(route: route)
-                .presentationDragIndicator(.visible)
         }
     }
 }

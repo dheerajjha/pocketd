@@ -67,26 +67,6 @@ enum YouRoute: Hashable {
 
 extension YouRoute: Identifiable {
     var id: Self { self }
-
-    /// Whether this route's screen still brings a `NavigationStack` of its own.
-    ///
-    /// Not a style question — it is a crash. Pushing a view that contains its
-    /// own `NavigationStack` onto a stack whose path is bound to `[YouRoute]`
-    /// traps inside SwiftUI: `NavigationColumnState.boundPathChange` writes the
-    /// new stack back through the binding, cannot represent the nested
-    /// controller as a `YouRoute`, and the `try!` in there kills the app. Found
-    /// by tapping "Brain" in the simulator; it takes the whole process down,
-    /// not just the screen.
-    ///
-    /// So those five were presented instead of pushed, and `Navigator` decided
-    /// which is which rather than every caller remembering.
-    ///
-    /// Every one of them is now a rebuilt screen with no inner stack, so this
-    /// is `false` everywhere and every route is a push again. Kept as a
-    /// property rather than deleted because it is the only place the trap is
-    /// written down, and the next screen that arrives wearing its own
-    /// `NavigationStack` needs somewhere to say so.
-    var bringsOwnNavigationStack: Bool { false }
 }
 
 /// A question handed from one tab to another.
@@ -127,14 +107,6 @@ final class Navigator {
     /// You without Today knowing what a `NavigationStack` is.
     var youPath: [YouRoute] = []
 
-    /// A You route that is presented rather than pushed.
-    ///
-    /// Not in the original design, and it is here because of a crash rather
-    /// than a preference — see `YouRoute.bringsOwnNavigationStack`. It goes
-    /// away, along with that property, when the last legacy screen loses its
-    /// inner `NavigationStack`.
-    var youSheet: YouRoute?
-
     /// A question waiting for the Ask tab to pick it up.
     ///
     /// Not written straight into `AppModel.draft`, because handing over a
@@ -164,18 +136,14 @@ final class Navigator {
     /// card on Today should leave one screen behind it, not whatever the
     /// person was last looking at three days ago.
     ///
-    /// Push or present is decided here and not by the caller, because getting
-    /// it wrong crashes the app rather than looking wrong — see
-    /// `YouRoute.bringsOwnNavigationStack`.
+    /// A push in every case. Five of these were presented as sheets while they
+    /// were still v1 screens carrying their own `NavigationStack` — pushing one
+    /// of those onto a stack bound to `[YouRoute]` traps inside SwiftUI and
+    /// takes the process down — and every one of them is now rebuilt without an
+    /// inner stack.
     func openYou(_ route: YouRoute) {
         tab = .you
-        if route.bringsOwnNavigationStack {
-            youPath = []
-            youSheet = route
-        } else {
-            youSheet = nil
-            youPath = [route]
-        }
+        youPath = [route]
     }
 
     /// Take the pending question, if there is one.

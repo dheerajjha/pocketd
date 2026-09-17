@@ -493,9 +493,9 @@ struct AboutSheet: View {
 /// What each `YouRoute` shows.
 ///
 /// A switch in one place so that adding a route is a compiler error here rather
-/// than a blank screen at runtime. Every screen behind it is pushed now: none
-/// of them carries a `NavigationStack` of its own any more, which is what
-/// `YouRoute.bringsOwnNavigationStack` used to be protecting against.
+/// than a blank screen at runtime. Every screen behind it is pushed: none of
+/// them carries a `NavigationStack` of its own, and one that did would trap
+/// inside SwiftUI on the way in rather than merely look wrong.
 struct YouRouteView: View {
     @Environment(AppModel.self) private var model
     let route: YouRoute
