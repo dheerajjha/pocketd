@@ -340,7 +340,7 @@ struct SchedulesView: View {
                     Text("No model is loaded, so there is nothing to think with yet.")
                         .font(.caption)
                         .foregroundStyle(scheduleWarningColour)
-                    Button("Choose a model") { goTo(.models) }
+                    Button("Choose a model") { goTo(.you) }
                 } else if !model.deskMode {
                     Button("Turn on Desk Mode") { model.deskMode = true }
                 }

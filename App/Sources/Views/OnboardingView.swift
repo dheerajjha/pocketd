@@ -102,7 +102,7 @@ struct OnboardingView: View {
             Spacer()
             // Reachable from every screen including the last. Someone who
             // already knows what this is should never have to read it.
-            Button("Skip") { leave(to: .models) }
+            Button("Skip") { leave(to: .you) }
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
@@ -322,7 +322,7 @@ struct OnboardingView: View {
                 Nothing in the built-in list fits this device. The Models tab \
                 can search Hugging Face for something smaller.
                 """)
-                Button("Go to Models") { leave(to: .models) }
+                Button("Go to Models") { leave(to: .you) }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
             } else {
@@ -384,13 +384,13 @@ struct OnboardingView: View {
                 icon: "bubble.left.and.bubble.right.fill",
                 title: "Chat on this phone",
                 detail: "Private, offline, and the only place it can see your day.",
-                tab: .chat
+                tab: .ask
             )
             destinationCard(
                 icon: "network",
                 title: "Connect your laptop",
                 detail: "Start the server and pocketd gives you a ready-to-paste line for curl, opencode, Continue, Open WebUI and more.",
-                tab: .server
+                tab: .you
             )
         }
     }

@@ -7,12 +7,17 @@ struct PocketdApp: App {
     /// finishes, and SwiftUI's `App` has no hook that early. See `AppDelegate`.
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model = AppModel()
+    /// Where the app is. Owned here rather than by `RootView` so that it
+    /// survives the view being torn down and rebuilt — which happens every time
+    /// onboarding finishes, desk mode ends, or the scene is restored.
+    @State private var navigator = Navigator()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(model)
+                .environment(navigator)
                 .task { await model.bootstrap() }
                 .onChange(of: scenePhase) { _, phase in
                     // Both the socket and the resident model are torn down by

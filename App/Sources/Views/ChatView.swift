@@ -38,7 +38,7 @@ struct ChatView: View {
                              : "You have a model downloaded — load it to start a conversation.")
                     } actions: {
                         Button(model.installed.isEmpty ? "Browse models" : "Go to Models") {
-                            goTo(.models)
+                            goTo(.you)
                         }
                         .buttonStyle(.borderedProminent)
                     }

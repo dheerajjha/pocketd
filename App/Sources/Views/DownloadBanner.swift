@@ -37,7 +37,7 @@ struct DownloadBanner: View {
                     icon(for: first)
                         .frame(width: 20)
 
-                    Button { goTo(.models) } label: {
+                    Button { goTo(.you) } label: {
                         Text(first.record.displayName)
                             .font(.footnote.weight(.medium))
                             .foregroundStyle(.primary)
@@ -46,7 +46,7 @@ struct DownloadBanner: View {
                             .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityHint("Opens the Models tab.")
+                    .accessibilityHint("Opens the You tab.")
 
                     // The number people actually look for, and it was nowhere
                     // on this screen: the bar said roughly-a-third and the text

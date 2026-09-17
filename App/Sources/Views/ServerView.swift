@@ -115,7 +115,7 @@ struct ServerView: View {
                 } else {
                     // A disabled button beside grey text is not guidance.
                     Button {
-                        goTo(.models)
+                        goTo(.you)
                     } label: {
                         Label("Load a model to start", systemImage: "shippingbox")
                             .font(.footnote)
