@@ -272,7 +272,10 @@ struct AbilitiesSection: View {
             case .noBrain, .none:
                 return "Nothing can read \(ability.noun) until a brain is loaded."
             case .brainCannotLookThingsUp:
-                return "The brain in use cannot look things up, so \(ability.noun) stays unread. A larger one can."
+                // "so your reminders stays unread" — `Ability.noun` is plural
+                // for two of the three, and the verb cannot agree with all of
+                // them, so the sentence is built without one.
+                return "The brain in use cannot look things up, so nothing is read from \(ability.noun). A larger one can."
             case .noRoom:
                 return "There is not enough room for everything at once, so this one was left out. Turning another off makes room."
             }

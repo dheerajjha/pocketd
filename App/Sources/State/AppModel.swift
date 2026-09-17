@@ -1148,14 +1148,14 @@ final class AppModel {
         await cancelScheduleSweep()
         if isGenerating {
             stopGenerating()
-            generationError = "Stopped the reply to offload the model."
+            generationError = "Stopped the reply to free the memory."
         }
         await engine.unload()
         await recalibrateAfterUnload()
         syncLoadedModel(nil)
         offloadNotice = serverShouldRun
             ? "Memory freed. The next request from a connected device loads it again."
-            : "Memory freed. The model is still on this phone."
+            : "Memory freed. The brain is still on this phone."
     }
 
     /// Shown after an offload, because otherwise the row simply reverts to
@@ -2147,13 +2147,13 @@ final class AppModel {
             // because the download is expensive; the transcript was thrown
             // away silently, and it is the thing that cannot be recovered.
             if previous != nil, !conversation.isEmpty {
-                modelSwitchNotice = "Switched to \(id ?? "another model"). "
-                    + "This conversation was started with \(previous ?? "a different model")."
+                modelSwitchNotice = "Switched to \(id ?? "another brain"). "
+                    + "This conversation was started with \(previous ?? "a different brain")."
             } else {
                 modelSwitchNotice = nil
             }
         } else if previous != nil, !conversation.isEmpty {
-            modelSwitchNotice = "A request from another device loaded \(id ?? "another model"). This conversation was started with \(previous ?? "a different model")."
+            modelSwitchNotice = "A request from another device loaded \(id ?? "another brain"). This conversation was started with \(previous ?? "a different brain")."
         }
     }
 
