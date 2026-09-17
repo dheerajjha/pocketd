@@ -284,7 +284,10 @@ final class AppModel {
 
     private let store: ModelStore
     private let configurationStore: ServerConfigurationStore
-    private let engine: LlamaEngine
+    /// Module-internal rather than private only so that `AppModel+Briefing`,
+    /// which is an extension in another file, can have the brief written by the
+    /// same resident model the chat uses. Nothing outside this module sees it.
+    let engine: LlamaEngine
     private let server: InferenceServer
     private var downloadTasks: [String: Task<Void, Never>] = [:]
     /// One per finished transfer, counting down its completion notice.
@@ -589,6 +592,12 @@ final class AppModel {
         // `.foreground` unconditionally: `deskMode` is deliberately not
         // persisted, so it is false at this point on every launch.
         sweepSchedule(in: .foreground)
+
+        // Last, and not awaited. The Today tab is what the app opens to, and
+        // it must not wait behind a calendar daemon: the brief publishes a
+        // template the moment EventKit answers and upgrades itself if a model
+        // turned out to be resident. Reads only — nothing here prompts.
+        Task { await refreshBrief() }
     }
 
     // MARK: - Server control
@@ -1075,6 +1084,12 @@ final class AppModel {
             budget.recordSuccessfulLoad(of: model)
             await store.updateBudget(budget)
             if remember { UserDefaults.standard.set(model.id, forKey: Keys.loadedModel) }
+            // A brain has just arrived, and this morning's brief is still the
+            // template one. Rewriting it in the model's own words here is the
+            // whole payoff of the download, and nothing else in the app would
+            // notice the moment it became possible. Not awaited: a load during
+            // launch must not wait on EventKit.
+            Task { await refreshBriefIfStillTemplate() }
         } catch {
             // What this cannot see is the load that took the process with it:
             // running out of memory on a phone usually presents as a kill
@@ -1907,6 +1922,13 @@ final class AppModel {
     /// does not redraw on every byte a download reports.
     @ObservationIgnored let profile = Profile()
 
+    // MARK: - Today's brief
+
+    /// The daily brief and the day it is about. See `AppModel+Briefing.swift`,
+    /// which is the whole of the engine — a Swift extension cannot add a stored
+    /// property, so this one line is the engine's entire footprint here.
+    private(set) var briefing = BriefingState()
+
     // MARK: - First run
 
     /// Whether the intro has been seen.
@@ -2035,6 +2057,10 @@ final class AppModel {
             } else {
                 sweepSchedule(in: .foreground)
             }
+            // The day has moved while the phone was in a pocket: a meeting has
+            // started, a reminder has come due, last night has been recorded.
+            // Not awaited, for the reason `bootstrap` gives.
+            Task { await refreshBrief() }
         case .inactive:
             break
         @unknown default:
@@ -2057,6 +2083,10 @@ final class AppModel {
         deskSweep?.cancel()
         deskSweep = nil
         await cancelScheduleSweep()
+        // Same argument, one screen up: a brief being written when the app is
+        // suspended is a generation Metal will refuse rather than slow down,
+        // and the template it would have replaced is already published.
+        cancelBriefGeneration()
 
         guard autoOffloadInBackground, releaseSuppressions.isEmpty else { return }
         guard let resident = loadedModelID else { return }
@@ -2180,6 +2210,11 @@ final class AppModel {
         // After the guard, like the event below: a tap with an empty draft must
         // not cost somebody their morning briefing.
         scheduleSweep?.cancel()
+        // Same precedence, for the same reason: the daily brief holds the
+        // engine's gate exactly as this does, and a typed question queueing
+        // behind a paragraph nobody asked for is a chat tab sitting on an empty
+        // reply bubble. The template brief stays on the Today tab either way.
+        cancelBriefGeneration()
         // After the guard rather than at the top of the method: a tap with an
         // empty draft, or with nothing resident to answer it, sends no message.
         analytics.record(.chatMessageSent(modelID: loadedModelID ?? ""))
