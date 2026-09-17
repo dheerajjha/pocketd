@@ -621,6 +621,10 @@ final class StoredDataAudit {
         // banner for a task the user erased on Tuesday, a pending request
         // having outlived the file it was armed from.
         await model.deleteAllScheduledTasks()
+        // Both copies, which is what `clear()` means: a widget still showing
+        // this morning's greeting is the "delete everything" promise visibly
+        // unkept, on a home screen, to whoever picks the phone up next.
+        AppModel.dailyBriefStore()?.clear()
         for row in models { await model.delete(row.record) }
         // The same guard the single-file delete uses, for the same reason: an
         // unmanifested `<id>.gguf` is what a vision model looks like while its
@@ -706,6 +710,10 @@ final class StoredDataAudit {
             // numbers for one directory is how a dialog ends up quoting a
             // figure the button does not free.
             scheduledTaskBytes: survey?.area(.scheduledTasks).tally.byteCount ?? 0,
+            // Measured rather than taken from the survey, because half of it is
+            // outside the container the survey walks: the widget's copy of the
+            // brief lives in the App Group. See `DailyBriefStore.byteCount`.
+            dailyBriefBytes: AppModel.dailyBriefStore()?.byteCount() ?? 0,
             partialDownloadBytes: survey?.area(.partialDownloads).tally.byteCount ?? 0,
             networkCacheBytes: survey?.area(.networkCache).tally.byteCount ?? 0,
             downloadInFlight: !downloading.isEmpty

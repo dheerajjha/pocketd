@@ -148,7 +148,7 @@ private struct Shell: View {
         switch navigator.tab {
         case .today:
             NavigationStack {
-                TodayPlaceholderView()
+                TodayView()
             }
         case .ask:
             reservingTabBar {
