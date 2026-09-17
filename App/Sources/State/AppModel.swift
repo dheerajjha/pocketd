@@ -177,7 +177,7 @@ final class AppModel {
 
     var conversation: [ChatMessage] = []
     var draft = ""
-    /// Left by `AskLaunch` for `ChatView` to focus (and, where supported, start listening on) the composer once, then clear.
+    /// Left by `AskLaunch` for `AskComposer` to focus (and, where supported, start listening on) once, then clear.
     var askComposerFocusRequested = false
 
     /// An ability the last message would have used, if it were switched on.
@@ -276,6 +276,17 @@ final class AppModel {
         pendingToolOffer = nil
     }
     private(set) var isGenerating = false
+
+    /// The tool the reply in flight is running, or `nil`.
+    ///
+    /// A tool turn is two complete prefills the user cannot see — seconds of
+    /// nothing that read as a hang, which is the whole reason
+    /// `GenerationEvent.toolCallStarted` exists. Held here so the Ask screen can
+    /// say "Checking your calendar…" instead of showing an orb that looks stuck.
+    /// Cleared on the next token and again when the generation ends, so it can
+    /// never outlive the thing it describes.
+    private(set) var activeToolName: String?
+
     var systemPrompt: String = "You are a helpful assistant." {
         didSet { UserDefaults.standard.set(systemPrompt, forKey: Keys.systemPrompt) }
     }
@@ -2125,6 +2136,14 @@ final class AppModel {
 
     func dismissModelSwitchNotice() { modelSwitchNotice = nil }
 
+    /// Clears a transport failure the reader has now seen.
+    ///
+    /// The next `send()` clears it too, which was the only way it ever went
+    /// away — so a failure the reader had already read stayed on screen until
+    /// they asked something else. A notice with no way to close it is a notice
+    /// that reads as a broken app.
+    func dismissGenerationError() { generationError = nil }
+
     // MARK: - Chat
 
     /// Images waiting to go with the next message.
@@ -2280,6 +2299,10 @@ final class AppModel {
                     switch event {
                     case .token(let chunk):
                         await MainActor.run {
+                            // Compared before assigning: this runs per token,
+                            // and writing nil over nil sixty times a second
+                            // invalidates every view that reads it.
+                            if self.activeToolName != nil { self.activeToolName = nil }
                             self.checkpointConversation()
                             guard target.canWrite(to: self.currentConversationID, messages: self.conversation) else { return }
                             self.conversation[target.slot].content += chunk
@@ -2302,7 +2325,9 @@ final class AppModel {
                             notedUsefulAnswer = true
                             self.noteToolBackedAnswer()
                         }
-                    case .toolCallStarted, .finished:
+                    case .toolCallStarted(let name):
+                        await MainActor.run { self.activeToolName = name }
+                    case .finished:
                         break
                     }
                 }
@@ -2321,6 +2346,7 @@ final class AppModel {
             }
             await MainActor.run {
                 self.isGenerating = false
+                self.activeToolName = nil
                 self.resumeAutoRelease("generating")
                 self.applyIdleTimer(running: self.serverShouldRun)
                 // The transcript this reply belongs to, or nothing at all.
