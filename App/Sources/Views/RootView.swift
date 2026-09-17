@@ -174,7 +174,7 @@ private struct Shell: View {
         // A tap on the "Ask Pocketd" control, independent of any Siri
         // question below — see AskLaunch.
         if AskLaunch.take() != nil {
-            route(to: .chat)
+            navigator.go(.ask)
             model.askComposerFocusRequested = true
         }
         guard let question = IntentInbox.take() else { return }
