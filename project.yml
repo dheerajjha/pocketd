@@ -115,6 +115,29 @@ targets:
         # its own. The API key the server requires is a shared secret compared
         # in constant time, not encryption.
         ITSAppUsesNonExemptEncryption: false
+        # The one URL scheme, and it exists because a widget cannot select a
+        # tab. The extension is a separate process; the two ways out of one are
+        # an App Intent and a URL, and `widgetURL` is the only one of those that
+        # a tap on the widget's *body* can carry. `DeepLink` is the parser on
+        # the other side.
+        #
+        # Nothing fails visibly if this block is missing: the app builds,
+        # installs and runs, the widget still draws, and a tap on it simply
+        # opens the app on whatever tab it was last on — iOS never routes the
+        # URL, so `onOpenURL` is never called and there is no error anywhere to
+        # find. That is the whole reason it is commented at this length.
+        #
+        # Deliberately not registered for `http`/`https`: universal links need a
+        # domain, an apple-app-site-association file served from it, and an
+        # associated-domains entitlement, none of which this app has and none of
+        # which a home-screen tap needs. A private scheme is claimed by whoever
+        # installs first and is therefore not a security boundary, which is why
+        # `DeepLink` carries no payload — see the note on it.
+        CFBundleURLTypes:
+          - CFBundleURLName: $(POCKETD_BUNDLE_ID)
+            CFBundleTypeRole: Viewer
+            CFBundleURLSchemes:
+              - pocketd
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
