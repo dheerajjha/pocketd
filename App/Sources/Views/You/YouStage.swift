@@ -2,7 +2,7 @@
 import PocketdKit
 import SwiftUI
 
-/// Puts a screen under You into a named state, for a screenshot.
+/// Puts a page under You into a named state, for a screenshot.
 ///
 /// Every state worth photographing on this tab is a state the simulator cannot
 /// reach on its own: a granted calendar with the switch on, a server with a
@@ -21,7 +21,10 @@ import SwiftUI
 ///         -pocketd.stage.calendar -pocketd.stage.health \
 ///         -pocketd.stage.serve -pocketd.stage.brain \
 ///         -pocketd.stage.route brain
-///     xcrun simctl openurl <udid> pocketd://you
+///
+/// `-pocketd.stage.route addBrain -pocketd.stage.search qwen3` lands on More
+/// brains › Search Hugging Face with "qwen3" typed. Any `-pocketd.stage.*`
+/// argument pushes You onto Today first.
 enum YouStage {
     private static var arguments: [String] { ProcessInfo.processInfo.arguments }
 
@@ -35,35 +38,49 @@ enum YouStage {
               arguments.indices.contains(index + 1) else { return nil }
         switch arguments[index + 1] {
         case "brain": return .brain
-        case "addBrain": return .addBrain
+        case "addBrain", "moreBrains", "search": return .addBrain
         case "brainAdvanced": return .brainAdvanced
         case "devices": return .devices
         case "privacy": return .privacy
+        case "privacyDetails": return .privacyDetails
         case "settings": return .settings
+        case "instructions": return .instructions
         case "diagnostics": return .diagnostics
         default: return nil
         }
     }
 
-    /// The value after `-pocketd.stage.sheet`: which of the You screen's three
-    /// sheets to open. Named rather than tapped for the reason the whole type
-    /// exists.
+    /// The value after `-pocketd.stage.sheet`: which of the You page's sheets
+    /// to open (`name`, `about`). Named rather than tapped for the reason the
+    /// whole type exists.
     static var sheet: String? {
         guard let index = arguments.firstIndex(of: "-pocketd.stage.sheet"),
               arguments.indices.contains(index + 1) else { return nil }
         return arguments[index + 1]
     }
 
-    /// The value after `-pocketd.stage.search`: what to type into "Add a
-    /// brain" before the screenshot.
+    /// The value after `-pocketd.stage.search`: what to type into Search
+    /// Hugging Face before the screenshot. More brains opens the search when
+    /// it is set.
     static var searchQuery: String? {
         guard let index = arguments.firstIndex(of: "-pocketd.stage.search"),
               arguments.indices.contains(index + 1) else { return nil }
         return arguments[index + 1]
     }
 
+    /// The value after `-pocketd.stage.builtIn`: Apple's model as this phone
+    /// might report it — `turnedOff`, `unsupportedLanguage`, `notEligible`,
+    /// `gettingReady` — for the Brain page states a simulator with Apple
+    /// Intelligence on cannot reach.
+    static var builtInAvailability: BuiltInBrainAvailability? {
+        guard let index = arguments.firstIndex(of: "-pocketd.stage.builtIn"),
+              arguments.indices.contains(index + 1) else { return nil }
+        return BuiltInBrainAvailability(rawValue: arguments[index + 1])
+    }
+
     /// The value after `-pocketd.stage.scrollTo`: one of the section ids on the
-    /// You screen.
+    /// You page (`abilities`, `brain`, `privacy`, `devices`, `about`,
+    /// `settings`).
     static var scrollAnchor: String? {
         guard let index = arguments.firstIndex(of: "-pocketd.stage.scrollTo"),
               arguments.indices.contains(index + 1) else { return nil }
@@ -76,11 +93,11 @@ enum YouStage {
         arguments.contains { $0.hasPrefix("-pocketd.stage.") }
     }
 
-    /// Selects the You tab before anything renders.
+    /// Pushes You onto Today before anything renders.
     ///
     /// Separate from `apply` and called from the app rather than from a view,
-    /// because the view that would ask is the one that only exists once the tab
-    /// is selected. A `pocketd://you` URL would do the same job, and iOS puts
+    /// because the view that would ask is the one that only exists once You
+    /// is on screen. A `pocketd://you` URL would do the same job, and iOS puts
     /// its own "Open in Pocketd?" alert over the screenshot when a URL arrives
     /// from outside the app.
     @MainActor
@@ -101,6 +118,13 @@ enum YouStage {
         if asked("serve") {
             await model.startServer()
             await model.newPairingCode()
+        }
+
+        if let availability = builtInAvailability {
+            // After launch's own reading has landed, or it would overwrite
+            // this one a moment later.
+            try? await Task.sleep(for: .seconds(1.5))
+            model.builtInAvailability = availability
         }
 
         if let route { navigator.push(route) }

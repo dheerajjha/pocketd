@@ -61,19 +61,21 @@ public struct ServerConfiguration: Sendable, Equatable, Codable {
     /// 1.0 models that small fall into loops often enough that "correcting"
     /// this to the documented default would be a visible regression sold as a
     /// bug fix. It is a setting now, so anyone who disagrees can move it.
-    /// Whether a reasoning model is asked to reason.
+    /// Whether a reasoning model is asked to reason — for other devices.
     ///
-    /// Qwen3 opens almost every answer with several hundred tokens of working
-    /// before the first word of the reply. On a phone that is tens of seconds
-    /// the reader spends watching a collapsed disclosure, and it is spent on
-    /// every question including "what is on today", where there is nothing to
-    /// reason about.
+    /// The phone's own chat, brief and routines never think, whatever this
+    /// says (`ThinkingPolicy`). Qwen3 opens almost every answer with several
+    /// hundred tokens of working before the first word; on a phone that is
+    /// tens of seconds behind a collapsed disclosure, and the brief, capped at
+    /// 160 tokens, ran out inside `<think>` and never got written at all. A
+    /// laptop asking over the network is somebody else's software and may
+    /// want the working, so the switch is theirs.
     ///
     /// Applied with Qwen's documented `/no_think` soft switch rather than the
     /// `enable_thinking` template flag, because the flag needs the renderer's
     /// `additionalContext`, which LocalLLMClient 0.5.0 exposes for its MLX
-    /// backend only and marks `TODO: public API`. A model that ignores the
-    /// switch costs nothing: the reasoning block is collapsed either way.
+    /// backend only and marks `TODO: public API`. See `ThinkingSwitch` for the
+    /// families it reaches and the ones it cannot.
     public var reasoningEnabled: Bool = true
 
     /// How hot this phone may get before it stops answering.

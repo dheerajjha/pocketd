@@ -47,7 +47,7 @@ public enum ClientSnippets {
         let sdkKey = apiKey ?? "not-needed"
         let curlAuth = apiKey.map { "\n  -H \"Authorization: Bearer \($0)\" \\" } ?? ""
         let noAuthNote = apiKey == nil
-            ? "Auth is off on this server, but the OpenAI SDKs refuse an empty key — any placeholder works."
+            ? "Auth is off on this server, but these SDKs refuse an empty key — any placeholder works."
             : nil
 
         return [

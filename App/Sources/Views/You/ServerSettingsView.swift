@@ -2,27 +2,36 @@ import PocketdKit
 import SwiftUI
 import UIKit
 
-/// The settings that have nowhere plainer to live.
+/// How this iPhone answers other devices, and nothing else.
 ///
-/// Everything a person who has never heard the word "model" needs is on the You
-/// screen itself. What is left here is the server's own configuration and what
-/// a generation inherits — ports, keys, context windows, samplers — and this is
-/// one of the two screens in the app where that vocabulary is allowed out. It
-/// is reached from Other devices and from Brain → Advanced, which are the two
-/// places somebody arrives already wanting it.
+/// Every control here is about the server: who can reach it, the key they
+/// need, how long and how many requests it takes on, what it does when the
+/// phone is hot or flat, and what a request inherits when it does not say.
+/// The phone's own conversations follow none of it except the context limit
+/// (one engine, one window) — thinking in particular is off for the phone
+/// whatever this page says, which is why its switch says "other devices".
+///
+/// What used to sit beside these and was about the phone — keeping the brain
+/// in memory, letting it go after a while — is gone from the app's screens:
+/// residency is automatic now.
 ///
 /// Changes are staged and applied together, because half of them restart the
 /// listener and applying each keystroke would tear the socket down under a
-/// paired laptop mid-request. The two that change app behaviour rather than the
-/// server's — background and idle unloading — are not here at all; they are on
-/// You, where they take effect immediately.
-struct SettingsView: View {
+/// paired laptop mid-request.
+struct ServerSettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(ToastCenter.self) private var toasts
 
     @State private var draft = ServerConfiguration()
+
+    /// What ships, which is not `SamplingParameters.default`: the server has
+    /// always applied a 1.1 repeat penalty (see `ServerConfiguration.sampling`),
+    /// and "put the defaults back" restoring llama.cpp's 1.0 instead would
+    /// change behaviour under a button promising to undo changes.
+    private static let shippedSampling = ServerConfiguration().sampling
     @State private var portText = ""
     @State private var showKeyWarning = false
+    @State private var showsKey = false
     @FocusState private var portFocused: Bool
 
     /// nil when the field is a usable port.
@@ -39,15 +48,12 @@ struct SettingsView: View {
 
     var body: some View {
         YouDetailScreen(
-            // Not "Advanced": Brain has a screen by that name, and two pushed
-            // screens sharing a heading is how a reader loses track of which
-            // one they are on.
-            title: "Server and generation",
-            subtitle: "How the server answers, and what a request inherits when it does not say. Nothing here changes until you apply it."
+            title: "Server settings",
+            subtitle: "How this iPhone answers other devices. Nothing changes until you tap Apply."
         ) {
             network
             access
-            generation
+            answers
             device
             sampling
             apply
@@ -57,16 +63,16 @@ struct SettingsView: View {
             portText = String(model.configuration.port)
         }
         .confirmationDialog(
-            "Generate a new API key?",
+            "Make a new key?",
             isPresented: $showKeyWarning,
             titleVisibility: .visible
         ) {
-            Button("Generate", role: .destructive) {
+            Button("Make a new key", role: .destructive) {
                 draft.apiKey = ServerConfiguration.generateAPIKey()
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Every device already paired will stop working and has to pair again. The old key cannot be recovered.")
+            Text("Every paired device stops working until it pairs again with a new code.")
         }
     }
 
@@ -74,8 +80,8 @@ struct SettingsView: View {
 
     private var network: some View {
         YouSection(
-            "NETWORK",
-            footnote: "Port 11434 is the one existing clients already expect, so most of them only need their host changed. Changing it disconnects anything already paired."
+            "Network",
+            footnote: "Most apps expect port 11434. Changing it disconnects paired devices."
         ) {
             MenuRow(
                 title: "Reachable from",
@@ -89,8 +95,10 @@ struct SettingsView: View {
                     .foregroundStyle(Color.pd.ink)
                     .keyboardType(.numberPad)
                     .multilineTextAlignment(.trailing)
-                    .frame(width: 84)
+                    .frame(minWidth: 72, maxWidth: 140)
+                    .fixedSize(horizontal: true, vertical: false)
                     .focused($portFocused)
+                    .accessibilityLabel("Port")
                     // The number pad has no Return key, so without somewhere to
                     // tap the keyboard covers the screen with no way out.
                     .toolbar {
@@ -114,29 +122,28 @@ struct SettingsView: View {
 
     private var access: some View {
         YouSection(
-            "ACCESS",
-            footnote: "Turning the key off leaves the brain open to everyone on the network. Do not do that on a network you do not control."
+            "Access",
+            footnote: "Without a key, anything on your Wi-Fi can use Pocketd. Only turn it off on a network you trust."
         ) {
-            ToggleRow(title: "Require an API key", detail: nil, isOn: $draft.requiresAuth)
+            ToggleRow(title: "Require a key", detail: nil, isOn: $draft.requiresAuth)
             if draft.requiresAuth {
                 RowDivider(inset: 0)
-                // Labelled so nobody copies a key that returns 401: this screen
-                // edits a draft while Other devices shows the live value, so the
-                // two could show different keys at once with nothing saying
-                // which one works.
-                VStack(alignment: .leading, spacing: PDSpacing.xxs) {
-                    Text(draft.apiKey == model.configuration.apiKey ? "Key" : "Key (not applied yet)")
-                        .font(Font.pd.rowTitle)
-                        .foregroundStyle(draft.apiKey == model.configuration.apiKey ? Color.pd.ink : Color.pd.caution)
-                    MonoBlock(text: breakableIdentifier(draft.apiKey))
-                }
-                .padding(.vertical, PDSpacing.s)
-                ActionRow(symbol: "doc.on.doc", title: "Copy the live key", detail: nil) {
+                keyBlock
+                RowDivider(inset: 0)
+                ActionRow(symbol: "doc.on.doc", title: "Copy the key", detail: nil) {
+                    // The live key, not the draft: a key that is not applied
+                    // yet is one no request would be accepted with.
                     UIPasteboard.general.string = model.configuration.apiKey
-                    toasts.show("Key copied")
+                    Haptics.success()
+                    toasts.show("Key copied", symbol: "doc.on.doc")
                 }
                 RowDivider()
-                ActionRow(symbol: "key", title: "Generate a new key", detail: "Everything paired has to pair again", isDestructive: true) {
+                ActionRow(
+                    symbol: "key",
+                    title: "Make a new key",
+                    detail: "Paired devices have to pair again",
+                    isDestructive: true
+                ) {
                     showKeyWarning = true
                 }
             }
@@ -145,30 +152,66 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Generation
+    /// The key, hidden until asked for: this page is the one place it can be
+    /// read, and a screen someone opens beside a friend is the wrong place to
+    /// print a working credential by default.
+    ///
+    /// Labelled when the draft differs from what is live, so nobody copies a
+    /// key the server would refuse.
+    private var keyBlock: some View {
+        let applied = draft.apiKey == model.configuration.apiKey
+        return VStack(alignment: .leading, spacing: PDSpacing.xs) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(applied ? "Key" : "New key, not applied yet")
+                    .font(Font.pd.rowTitle)
+                    .foregroundStyle(applied ? Color.pd.ink : Color.pd.caution)
+                Spacer(minLength: PDSpacing.xs)
+                Button(showsKey ? "Hide" : "Show") { showsKey.toggle() }
+                    .font(Font.pd.secondary.weight(.semibold))
+                    .foregroundStyle(Color.pd.accent)
+                    .pdHitTarget(alignment: .trailing)
+                    .accessibilityHint("Shows the key other devices use to reach this iPhone")
+            }
+            if showsKey {
+                MonoBlock(text: breakableIdentifier(draft.apiKey))
+            } else {
+                Text(redactedSecret(draft.apiKey))
+                    .font(Font.pd.code)
+                    .foregroundStyle(Color.pd.inkSecondary)
+                    .accessibilityLabel("Hidden")
+            }
+        }
+        .padding(.vertical, PDSpacing.s)
+    }
 
-    private var generation: some View {
+    // MARK: - Answers
+
+    private var answers: some View {
         YouSection(
-            "GENERATION",
-            footnote: "The KV cache grows with the context limit and competes with the weights for the same memory. More than one concurrent request makes every request slower on a single GPU.\n\nModels that reason write out their working before answering. It helps on hard questions and costs tens of seconds on a phone for easy ones; models that do not reason are unaffected either way."
+            "Answers",
+            footnote: "A longer limit uses more memory. One request at a time keeps every answer fastest."
         ) {
+            ToggleRow(
+                title: "Think before answering",
+                detail: "Other devices only. Slower, sometimes better on hard questions.",
+                isOn: $draft.reasoningEnabled
+            )
+            RowDivider(inset: 0)
             StepperRow(
                 title: "Context limit",
                 value: $draft.maxContextTokens,
                 range: 512...32_768,
                 step: 512,
-                display: { "\($0) tokens" }
+                display: { "\(Format.count($0)) tokens" }
             )
             RowDivider(inset: 0)
             StepperRow(
-                title: "Concurrent requests",
+                title: "Requests at once",
                 value: $draft.maxConcurrentRequests,
                 range: 1...4,
                 step: 1,
                 display: { "\($0)" }
             )
-            RowDivider(inset: 0)
-            ToggleRow(title: "Let the model think first", detail: nil, isOn: $draft.reasoningEnabled)
         }
     }
 
@@ -176,52 +219,54 @@ struct SettingsView: View {
 
     private var device: some View {
         YouSection(
-            "DEVICE",
-            footnote: "Generating drains the battery fast. Below the floor the server keeps listening but answers with a reason, so a client can wait rather than assume the phone has gone. Charging exempts it.\n\nRaising the heat limit does not make the phone faster — iOS throttles the processor itself once it is hot, so the server keeps answering, slowly. At the very hottest level iOS may close the app, and no setting here can stop that."
+            "This iPhone",
+            footnote: "Paused, other devices are asked to wait rather than refused. Charging lifts the battery floor."
         ) {
-            ToggleRow(title: "Keep the screen awake while serving", detail: nil, isOn: $draft.keepAwakeWhileServing)
+            ToggleRow(title: "Keep the screen awake while on", detail: nil, isOn: $draft.keepAwakeWhileServing)
             RowDivider(inset: 0)
             MenuRow(
-                title: "Stop serving when hot",
+                title: "Pause when hot",
                 selection: $draft.thermalTolerance,
                 options: ThermalTolerance.allCases.map { ($0, $0.title) }
             )
             RowDivider(inset: 0)
-            RowShell(
-                title: "Stop serving below",
-                detail: nil
-            ) {
-                Stepper(
-                    value: $draft.pauseBelowBatteryLevel,
-                    in: 0...0.5,
-                    step: 0.05
-                ) {
-                    Text(draft.pauseBelowBatteryLevel <= 0
-                         ? "never"
-                         : "\(Int(draft.pauseBelowBatteryLevel * 100))%")
+            RowShell(title: "Pause below battery", detail: nil) {
+                HStack(spacing: PDSpacing.xs) {
+                    Text(batteryFloorText)
                         .font(Font.pd.monoValue)
                         .foregroundStyle(Color.pd.ink)
+                    Stepper("", value: $draft.pauseBelowBatteryLevel, in: 0...0.5, step: 0.05)
+                        .labelsHidden()
+                        .fixedSize()
                 }
-                .labelsHidden()
-                .fixedSize()
-                .accessibilityLabel("Stop serving below battery level")
             }
-            ValueRow(
-                title: "Currently",
-                value: draft.pauseBelowBatteryLevel <= 0
-                    ? "never"
-                    : "\(Int(draft.pauseBelowBatteryLevel * 100))% battery",
-                valueTint: .pd.inkSecondary
-            )
+            // One adjustable element saying what the screen says. Left to
+            // itself the stepper read its raw value, "0.15", beside a row
+            // that shows "15%".
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Pause below battery")
+            .accessibilityValue(batteryFloorText)
+            .accessibilityAdjustableAction { direction in
+                let level = draft.pauseBelowBatteryLevel
+                switch direction {
+                case .increment: draft.pauseBelowBatteryLevel = min(0.5, level + 0.05)
+                case .decrement: draft.pauseBelowBatteryLevel = max(0, level - 0.05)
+                @unknown default: break
+                }
+            }
         }
+    }
+
+    private var batteryFloorText: String {
+        draft.pauseBelowBatteryLevel <= 0 ? "Never" : "\(Int((draft.pauseBelowBatteryLevel * 100).rounded()))%"
     }
 
     // MARK: - Sampling
 
     private var sampling: some View {
         YouSection(
-            "SAMPLING",
-            footnote: "What a request inherits when it does not say. A client that sends its own temperature or seed still wins — these are the defaults, not a ceiling. Changing them reloads the brain on its next use, because sampling is bound when the context is created."
+            "Sampling",
+            footnote: "What a request gets when it doesn't set its own. A request that sends a value still wins."
         ) {
             SliderRow(title: "Temperature", value: $draft.sampling.temperature, range: 0...2, step: 0.05)
             RowDivider(inset: 0)
@@ -249,46 +294,44 @@ struct SettingsView: View {
                         .foregroundStyle(Color.pd.ink)
                         .keyboardType(.numberPad)
                         .multilineTextAlignment(.trailing)
-                        .frame(width: 120)
+                        .frame(minWidth: 72, maxWidth: 160)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .accessibilityLabel("Seed")
                 }
             }
             RowDivider(inset: 0)
             ActionRow(symbol: "arrow.uturn.backward", title: "Put the defaults back", detail: nil) {
-                draft.sampling = .default
+                draft.sampling = Self.shippedSampling
             }
-            .disabled(draft.sampling == .default)
+            .disabled(draft.sampling == Self.shippedSampling)
         }
     }
 
     // MARK: - Apply
 
     private var apply: some View {
-        VStack(spacing: PDSpacing.s) {
-            PrimaryButton(
-                title: "Apply",
-                arrow: false,
-                isEnabled: portProblem == nil && !isUnchanged
-            ) {
-                // Guarded by `portProblem`, so the silent fallback that used to
-                // make Apply a permanent no-op cannot happen: an out-of-range
-                // port left the button enabled forever with nothing changing
-                // and no message.
-                guard let port = UInt16(portText) else { return }
-                draft.port = port
-                Task {
-                    await model.applyConfiguration(draft)
-                    toasts.show("Applied")
-                }
-            }
-            if isUnchanged {
-                Text("Nothing to apply.")
-                    .font(Font.pd.footnote)
-                    .foregroundStyle(Color.pd.inkTertiary)
+        PrimaryButton(
+            title: "Apply",
+            arrow: false,
+            isEnabled: portProblem == nil && !isUnchanged
+        ) {
+            // Guarded by `portProblem`, so the silent fallback that used to
+            // make Apply a permanent no-op cannot happen: an out-of-range
+            // port left the button enabled forever with nothing changing
+            // and no message.
+            guard let port = UInt16(portText) else { return }
+            draft.port = port
+            Task {
+                await model.applyConfiguration(draft)
+                toasts.show("Applied", symbol: "checkmark.circle", tint: .pd.positive)
             }
         }
         .padding(.top, PDSpacing.xs)
     }
 }
+
+/// `YouRouteView` still says `SettingsView()`; the page's name is the one above.
+typealias SettingsView = ServerSettingsView
 
 // MARK: - Controls
 
@@ -341,23 +384,32 @@ private struct StepperRow: View {
                     .fixedSize()
             }
         }
-        .accessibilityElement(children: .contain)
+        // One adjustable element with the value as displayed ("4,096 tokens"),
+        // not the stepper's bare number beside a separate label.
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)
         .accessibilityValue(display(value))
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: value = min(range.upperBound, value + step)
+            case .decrement: value = max(range.lowerBound, value - step)
+            @unknown default: break
+            }
+        }
     }
 }
 
 // MARK: - Previews
 
-#Preview("Settings light") {
-    NavigationStack { SettingsView() }
+#Preview("Server settings light") {
+    NavigationStack { ServerSettingsView() }
         .environment(AppModel())
         .environment(Navigator())
         .environment(ToastCenter())
 }
 
-#Preview("Settings dark") {
-    NavigationStack { SettingsView() }
+#Preview("Server settings dark") {
+    NavigationStack { ServerSettingsView() }
         .environment(AppModel())
         .environment(Navigator())
         .environment(ToastCenter())

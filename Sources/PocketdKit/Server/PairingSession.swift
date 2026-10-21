@@ -12,6 +12,23 @@ import Foundation
 /// limited. Six digits with five attempts is a one-in-two-hundred-thousand
 /// chance for an attacker who is already on the network.
 public actor PairingSession {
+    /// Why the last code left the screen, when nothing replaced it.
+    ///
+    /// The phone has to say something different in each case — "paired" is
+    /// good news, "too many wrong tries" is a warning — and none of them can
+    /// be read off the counters. `failureCount` is the session's running total
+    /// and carries over to the next code on purpose (it is a record of who
+    /// tried), so a screen that keyed "that code is dead" on it went on saying
+    /// so under the fresh, working code the person had just asked for.
+    public enum Ending: Sendable, Equatable {
+        /// A device completed the handshake with it.
+        case paired
+        /// Five wrong codes in a row burned it.
+        case tooManyTries
+        /// Someone tried it after it had run out of time.
+        case expired
+    }
+
     public struct Snapshot: Sendable, Equatable {
         public var code: String?
         public var expires: Date?
@@ -23,9 +40,19 @@ public actor PairingSession {
         /// asked for it and it has no business being readable over someone's
         /// shoulder.
         public var pairedAt: Date?
+        /// Set when a code ends on its own; cleared the moment a new one opens.
+        public var ending: Ending?
 
         public var isOpen: Bool { code != nil }
         public var hasPaired: Bool { pairedAt != nil }
+
+        /// Whether the code on screen still works at `now`. A code past its
+        /// expiry is still *open* until someone tries it — the actor has no
+        /// timer — so a screen asking "can a laptop use this?" must ask this.
+        public func isLive(at now: Date) -> Bool {
+            guard code != nil, let expires else { return false }
+            return now < expires && attemptsRemaining > 0
+        }
 
         public init(
             code: String? = nil,
@@ -33,7 +60,8 @@ public actor PairingSession {
             attemptsRemaining: Int = 0,
             lastFailureAddress: String? = nil,
             failureCount: Int = 0,
-            pairedAt: Date? = nil
+            pairedAt: Date? = nil,
+            ending: Ending? = nil
         ) {
             self.code = code
             self.expires = expires
@@ -41,6 +69,7 @@ public actor PairingSession {
             self.lastFailureAddress = lastFailureAddress
             self.failureCount = failureCount
             self.pairedAt = pairedAt
+            self.ending = ending
         }
     }
 
@@ -79,6 +108,13 @@ public actor PairingSession {
         if let stamp = store.read() { state.pairedAt = stamp }
     }
 
+    /// Opens a fresh code, replacing whatever was there.
+    ///
+    /// Always allowed — after a pairing, after a burned code, over a live one.
+    /// A second laptop, a browser whose stored key was cleared, or the same
+    /// laptop after the key was replaced all need a new code, and the phone is
+    /// the only place one can come from. The guess limit is per code, which is
+    /// why only the person holding the phone can ask for another.
     @discardableResult
     public func open() -> String {
         let code = String(format: "%06d", Int.random(in: 0...999_999))
@@ -92,7 +128,8 @@ public actor PairingSession {
             attemptsRemaining: Self.maxAttempts,
             lastFailureAddress: state.lastFailureAddress,
             failureCount: state.failureCount,
-            pairedAt: state.pairedAt
+            pairedAt: state.pairedAt,
+            ending: nil
         )
         broadcast()
         return code
@@ -107,7 +144,7 @@ public actor PairingSession {
     public func redeem(_ candidate: String, from address: String?) -> Outcome {
         guard let code = state.code, let expires = state.expires else { return .expired }
         guard now() < expires, state.attemptsRemaining > 0 else {
-            close()
+            close(because: .expired)
             return .expired
         }
         guard candidate == code else {
@@ -117,26 +154,33 @@ public actor PairingSession {
             let remaining = state.attemptsRemaining
             if remaining == 0 {
                 // Burn the code rather than leaving a dead one on screen; the
-                // UI reads failureCount to explain why.
+                // UI reads `ending` to explain why.
                 state.code = nil
                 state.expires = nil
+                state.ending = .tooManyTries
             }
             broadcast()
             return remaining == 0 ? .expired : .wrongCode(attemptsRemaining: remaining)
         }
         let when = now()
-        close()
         state.pairedAt = when
         store.write(when)
-        broadcast()
+        close(because: .paired)
         return .paired
     }
 
+    /// Takes the code off screen. Called when the server stops, so a code is
+    /// never left open for a listener that is not there.
     public func close() {
+        close(because: nil)
+    }
+
+    private func close(because ending: Ending?) {
         state = Snapshot(
             lastFailureAddress: state.lastFailureAddress,
             failureCount: state.failureCount,
-            pairedAt: state.pairedAt
+            pairedAt: state.pairedAt,
+            ending: ending
         )
         broadcast()
     }

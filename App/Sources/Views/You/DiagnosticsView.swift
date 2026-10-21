@@ -20,11 +20,11 @@ struct DiagnosticsView: View {
     var body: some View {
         YouDetailScreen(
             title: "Diagnostics",
-            subtitle: "What the app has been doing, in order. Copy it out if something is going wrong and you want to show somebody."
+            subtitle: "What Pocketd has been doing, in order. Copy it if something goes wrong and you want to show someone."
         ) {
             YouSection(
-                "WHAT IS IN IT",
-                footnote: "Brain loads, which tools the assistant was given and why, permission answers, tool calls and their outcomes, and failures. Never your calendar, your reminders, your health data, what you typed or what the assistant replied — there is no field in this log that can hold any of them."
+                "What is in it",
+                footnote: "Brain loads, permission answers, what Pocketd looked up and what failed. Never your calendar, reminders or health, or what you or Pocketd said."
             ) {
                 HStack(spacing: PDSpacing.xs) {
                     PillButton(
@@ -43,7 +43,7 @@ struct DiagnosticsView: View {
                 ActionRow(
                     symbol: "trash",
                     title: "Clear the log",
-                    detail: "Starts it again from empty",
+                    detail: "Starts it again, empty",
                     isDestructive: true
                 ) {
                     DiagnosticLog.clear()
@@ -53,8 +53,8 @@ struct DiagnosticsView: View {
             }
 
             YouSection(
-                "LOG",
-                footnote: "Capped at \(DiagnosticLog.capacity) entries and \(DiagnosticLog.exportByteLimit / 1024)KB. When it is full the oldest go first, so whatever just happened is always still here."
+                "Log",
+                footnote: "Keeps the last \(Format.count(DiagnosticLog.capacity)) entries, so whatever just happened is always here."
             ) {
                 if text.isEmpty {
                     Text("Nothing has been recorded yet.")
@@ -66,7 +66,7 @@ struct DiagnosticsView: View {
                     // Monospaced because the log is columns — a clock, an
                     // event, then numbers — and a proportional font turns
                     // scanning it into reading it.
-                    MonoBlock(text: text, size: 11)
+                    MonoBlock(text: text)
                         .padding(.vertical, PDSpacing.xs)
                 }
             }

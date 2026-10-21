@@ -1,77 +1,38 @@
 import PocketdKit
 import SwiftUI
 
-/// The pieces every screen in You is built from.
+/// The pieces every screen under You is built from.
 ///
-/// Six screens live under this tab and in v1 they were six different list
-/// styles, three navigation bars and two ideas of what a row is. They are one
-/// thing now: a mono section label, a card, rows inside it with a hairline
-/// between them, and a footnote under the card for the sentence the rows are
-/// not big enough to carry.
+/// One grammar: a mono section label, a white card, rows inside it with a
+/// hairline between them, and — only where a row cannot carry it — a short
+/// footnote under the card.
 ///
 /// Written here rather than in `Design/Components` because none of it is
 /// general — a `NavRow` is a row in a settings card, not a component another
-/// tab would want. The moment a second tab wants one, it moves.
+/// screen would want. The moment one does, it moves.
 
 // MARK: - A pushed screen
 
 /// Every screen under You that is not the root.
 ///
-/// Its own back button and its own 27pt title rather than the system bar, for
-/// the reason the tab bar is not a `TabView`: the system bar ends a screen with
-/// an opaque strip and a hard rule, and these screens are meant to run off the
-/// top and bottom of the phone. The swipe-back gesture is untouched — hiding
-/// the bar in a `NavigationStack` does not disable it.
+/// The system navigation bar and the system back button, with the in-page
+/// heading `DetailPage` draws — the bar's own title fades in once the heading
+/// has scrolled under it. These screens used to hide the bar and draw their
+/// own back circle, which left scrolled content running into the status bar
+/// with no backdrop, and a hand-made back button that VoiceOver, the swipe
+/// and the long-press history menu all treated as a stranger. A detail page
+/// on Today and a page under You are now the same thing, so they are drawn by
+/// the same shell.
 struct YouDetailScreen<Content: View>: View {
     let title: String
+    /// One grey sentence under the heading. One — a second is a footnote.
     var subtitle: String?
-    /// One optional circular button at the top right.
-    var actionSymbol: String?
-    var actionLabel: String = ""
-    var action: (() -> Void)?
     @ViewBuilder var content: () -> Content
 
-    @Environment(\.dismiss) private var dismiss
-
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: PDSpacing.cardGap) {
-                header
-                content()
-            }
-            .padding(.horizontal, PDSpacing.gutter)
-            .padding(.top, PDSpacing.xs)
+        DetailPage(title: title, summary: subtitle) {
+            content()
         }
-        .scrollIndicators(.hidden)
-        // The floating bar's space as a safe-area inset rather than padding,
-        // so content scrolls *under* the capsule and the last row still clears
-        // it. See `PDMetric.tabBarClearance`.
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            Color.clear.frame(height: PDMetric.tabBarClearance)
-        }
-        .pdCanvas()
-        .toolbar(.hidden, for: .navigationBar)
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: PDSpacing.s) {
-            HStack {
-                CircleIconButton(symbol: "chevron.left", label: "Back") { dismiss() }
-                Spacer(minLength: 0)
-                if let actionSymbol, let action {
-                    CircleIconButton(symbol: actionSymbol, label: actionLabel, action: action)
-                }
-            }
-            Text(title)
-                .font(Font.pd.titleDetail)
-                .foregroundStyle(Color.pd.ink)
-                .accessibilityAddTraits(.isHeader)
-            if let subtitle {
-                Text(subtitle).pdSubtitle()
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(.bottom, PDSpacing.xs)
     }
 }
 
@@ -80,13 +41,13 @@ struct YouDetailScreen<Content: View>: View {
 /// A mono label, a card of rows, and the footnote under it.
 ///
 /// The footnote is a parameter rather than something the caller appends,
-/// because "under the card, 13pt, secondary" is the whole reason those
-/// sentences read as annotations instead of as more rows.
+/// because "under the card, small, grey" is the whole reason those sentences
+/// read as annotations instead of as more rows. Keep it to one sentence.
 struct YouSection<Content: View>: View {
     let title: String
     var footnote: String?
     /// The card's inner padding. Rows carry their own vertical padding, so the
-    /// default is the tighter one — 20 on top of a row's own 10 is a gap.
+    /// default is the tighter one — 20 on top of a row's own 12 is a gap.
     var padding: CGFloat = PDSpacing.m
     @ViewBuilder var content: () -> Content
 
@@ -105,6 +66,7 @@ struct YouSection<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: PDSpacing.s) {
             SectionLabel(title)
+                .padding(.horizontal, PDSpacing.xxs)
             PDCard(padding: padding) {
                 VStack(spacing: 0) { content() }
             }
@@ -112,7 +74,7 @@ struct YouSection<Content: View>: View {
                 Text(footnote)
                     .font(Font.pd.footnote)
                     .foregroundStyle(Color.pd.inkSecondary)
-                    .lineSpacing(3)
+                    .modifier(PDLineSpacing(3, relativeTo: .footnote))
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, PDSpacing.xxs)
             }
@@ -133,73 +95,118 @@ struct RowDivider: View {
             .fill(Color.pd.divider)
             .frame(height: 1)
             .padding(.leading, inset)
+            .accessibilityHidden(true)
     }
 }
 
 // MARK: - Rows
 
+/// Where a row's trailing control goes when the words need the room.
+enum RowTrailing {
+    /// Beside the title while the title fits on one line next to it; under the
+    /// words otherwise (`AccessoryRowLayout`). For switches, values, menus and
+    /// pills — anything wide enough to squeeze a title into "Remind / ers".
+    case adaptive
+    /// Always at the trailing edge, centred on the row. For a chevron or an ↗,
+    /// which are narrow, and which mean nothing anywhere else.
+    case pinned
+}
+
 /// The shared skeleton of every row: an optional icon tile, a title, a detail
 /// line, and whatever sits at the trailing edge.
+///
+/// At least 44pt tall, every word in a text style, and nothing truncated: the
+/// detail wraps, and a wide trailing control moves under the words rather
+/// than squeezing them.
 struct RowShell<Trailing: View>: View {
     var symbol: String?
     var symbolTint: Color = .pd.accent
     var symbolFill: Color = .pd.accentSoft
     let title: String
     var detail: String?
-    var detailTint: Color = .pd.inkSecondary
-    /// Wrapped rather than truncated. A detail line that says why a row needs
-    /// attention is the line most worth reading and the one most likely to be
-    /// long.
-    var detailLines: Int?
-    /// A pill beside the title rather than at the trailing edge.
-    ///
-    /// At the trailing edge it competes with the chevron for the same space and
-    /// what gives way is the detail line, which then wraps to three. Beside the
-    /// title it is on the row's short line, where there is room.
+    /// A pill beside the title. Prefer plain words in `detail` — a coloured
+    /// pill on a settings row is the "Needs attention" look this app left
+    /// behind (ideal-ui §1.7).
     var status: (kind: StatusPill.Kind, text: String)?
+    var trailingPlacement: RowTrailing = .adaptive
     @ViewBuilder var trailing: () -> Trailing
 
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     var body: some View {
-        HStack(spacing: PDSpacing.s) {
+        HStack(alignment: typeSize.isAccessibilitySize ? .top : .center, spacing: PDSpacing.s) {
             if let symbol {
                 IconTile.small(symbol, fill: symbolFill, tint: symbolTint)
             }
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: PDSpacing.xs) {
-                    Text(title)
-                        .font(Font.pd.rowTitle)
-                        .foregroundStyle(Color.pd.ink)
-                        .multilineTextAlignment(.leading)
-                    if let status {
-                        StatusPill(status.kind, status.text)
-                    }
-                }
-                if let detail {
-                    Text(detail)
-                        .font(Font.pd.secondary)
-                        .foregroundStyle(detailTint)
-                        .multilineTextAlignment(.leading)
-                        .lineLimit(detailLines)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            Spacer(minLength: PDSpacing.xs)
-            trailing()
+            words
         }
         .padding(.vertical, PDSpacing.s)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: PDMetric.minHitTarget, alignment: .leading)
         .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private var words: some View {
+        if Trailing.self == EmptyView.self {
+            textColumn
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else if trailingPlacement == .pinned {
+            HStack(spacing: PDSpacing.xs) {
+                textColumn
+                Spacer(minLength: PDSpacing.xs)
+                trailing()
+            }
+        } else {
+            // Each part wrapped in one container, so the layout always sees
+            // exactly title, detail and accessory — a trailing builder that
+            // produced two views would otherwise be read as a missing part.
+            AccessoryRowLayout(spacing: PDSpacing.s) {
+                titleLine
+                if let detail { detailText(detail) }
+                HStack(spacing: PDSpacing.xs) { trailing() }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var textColumn: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            titleLine
+            if let detail { detailText(detail) }
+        }
+    }
+
+    private var titleLine: some View {
+        HStack(spacing: PDSpacing.xs) {
+            Text(title)
+                .font(Font.pd.rowTitle)
+                .foregroundStyle(Color.pd.ink)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+            if let status {
+                StatusPill(status.kind, status.text)
+            }
+        }
+    }
+
+    private func detailText(_ detail: String) -> some View {
+        Text(detail)
+            .font(Font.pd.secondary)
+            .foregroundStyle(Color.pd.inkSecondary)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
-/// The trailing chevron, at the weight the reference draws it.
+/// The trailing chevron: decoration, so tertiary ink, in the chevron token
+/// that grows with the row's text.
 struct RowChevron: View {
     var symbol: String = "chevron.right"
 
     var body: some View {
         Image(systemName: symbol)
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(Color.pd.inkSecondary)
+            .font(Font.pd.chevron)
+            .foregroundStyle(Color.pd.inkTertiary)
             .accessibilityHidden(true)
     }
 }
@@ -217,18 +224,18 @@ struct NavRow: View {
             Haptics.tap()
             action()
         } label: {
-            RowShell(symbol: symbol, title: title, detail: detail, status: status) {
+            RowShell(symbol: symbol, title: title, detail: detail, status: status, trailingPlacement: .pinned) {
                 RowChevron()
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PDPressStyle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel(announcement)
         .accessibilityAddTraits(.isButton)
     }
 
     private var announcement: String {
-        [title, detail, status?.text].compactMap { $0 }.joined(separator: ". ")
+        [title, detail, status?.text].compactMap { $0 }.joined(separator: ", ")
     }
 }
 
@@ -260,14 +267,14 @@ struct ActionRow: View {
                 EmptyView()
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PDPressStyle())
         .accessibilityElement(children: .combine)
-        .accessibilityLabel([title, detail].compactMap { $0 }.joined(separator: ". "))
+        .accessibilityLabel([title, detail].compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(.isButton)
     }
 }
 
-/// A row that leaves the app — iOS Settings, Safari, the App Store sheet.
+/// A row that leaves the app — iOS Settings, Safari, the App Store.
 ///
 /// `arrow.up.right` rather than a chevron, because the two mean different
 /// things and a reader who has learned one has learned the other.
@@ -282,18 +289,23 @@ struct LinkRow: View {
             Haptics.tap()
             action()
         } label: {
-            RowShell(symbol: symbol, title: title, detail: detail) {
+            RowShell(symbol: symbol, title: title, detail: detail, trailingPlacement: .pinned) {
                 RowChevron(symbol: "arrow.up.right")
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PDPressStyle())
         .accessibilityElement(children: .combine)
-        .accessibilityLabel([title, detail].compactMap { $0 }.joined(separator: ". "))
+        .accessibilityLabel([title, detail].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityHint("Opens outside Pocketd")
         .accessibilityAddTraits(.isButton)
     }
 }
 
 /// A row whose whole content is a switch.
+///
+/// The switch is the one accessibility element and carries the row's words,
+/// so VoiceOver reads "Require an API key, switch, on" once rather than the
+/// title, then the detail, then an unlabelled switch.
 struct ToggleRow: View {
     var symbol: String?
     let title: String
@@ -302,20 +314,23 @@ struct ToggleRow: View {
 
     var body: some View {
         RowShell(symbol: symbol, title: title, detail: detail) {
-            Toggle("", isOn: $isOn)
+            Toggle(title, isOn: $isOn)
                 .labelsHidden()
                 .tint(Color.pd.accent)
-                .accessibilityLabel(title)
         }
-        .accessibilityElement(children: .contain)
+        .accessibilityRepresentation {
+            Toggle(title, isOn: $isOn)
+                .accessibilityHint(detail ?? "")
+        }
     }
 }
 
 /// A row that shows a number rather than a destination.
 ///
-/// The value is monospaced and right-aligned, which is the one typographic rule
-/// this whole design rests on: every unit, size and count is mono, every human
-/// sentence is proportional.
+/// The value is monospaced and right-aligned — a column of these is a column
+/// of figures, and the reason to put them in a column is so they line up.
+/// At the accessibility sizes it moves under the title instead of squeezing
+/// it.
 struct ValueRow: View {
     var symbol: String?
     let title: String
@@ -329,9 +344,10 @@ struct ValueRow: View {
                 .font(Font.pd.monoValue)
                 .foregroundStyle(valueTint)
                 .multilineTextAlignment(.trailing)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(title), \(value)")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([title, value, detail].compactMap { $0 }.joined(separator: ", "))
     }
 }
 
@@ -367,12 +383,14 @@ struct MenuRow<Value: Hashable>: View {
                         .font(Font.pd.secondary.weight(.medium))
                         .foregroundStyle(Color.pd.ink)
                     Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(Font.pd.tick)
                         .foregroundStyle(Color.pd.inkSecondary)
                 }
                 .padding(.horizontal, PDSpacing.s)
-                .frame(height: PDMetric.linkPillHeight + 8)
+                .padding(.vertical, PDSpacing.xxs)
+                .frame(minHeight: PDMetric.linkPillHeight + PDSpacing.xs)
                 .background(Color.pd.chip, in: Capsule(style: .continuous))
+                .pdHitTarget()
             }
             .accessibilityLabel(title)
             .accessibilityValue(currentLabel)
@@ -385,18 +403,6 @@ struct MenuRow<Value: Hashable>: View {
 }
 
 // MARK: - Small pieces
-
-/// The dot beside whatever is loaded right now.
-struct LoadedDot: View {
-    var label: String = "Loaded"
-
-    var body: some View {
-        Circle()
-            .fill(Color.pd.positive)
-            .frame(width: 7, height: 7)
-            .accessibilityLabel(label)
-    }
-}
 
 /// A destructive control that does not look like a warning until it is read.
 ///
@@ -416,13 +422,16 @@ struct DangerButton: View {
         } label: {
             HStack(spacing: PDSpacing.xs) {
                 if let symbol {
-                    Image(systemName: symbol).font(.system(size: 14, weight: .regular))
+                    Image(systemName: symbol).font(Font.pd.secondary)
                 }
-                Text(title).font(Font.pd.secondary.weight(.semibold))
+                Text(title)
+                    .font(Font.pd.secondary.weight(.semibold))
+                    .multilineTextAlignment(.center)
             }
-            .foregroundStyle(isEnabled ? Color.pd.danger : Color.pd.inkTertiary)
+            .foregroundStyle(isEnabled ? Color.pd.danger : Color.pd.inkSecondary)
             .padding(.horizontal, PDSpacing.m)
-            .frame(maxWidth: .infinity, minHeight: PDMetric.pillHeight)
+            .padding(.vertical, PDSpacing.xs)
+            .frame(maxWidth: .infinity, minHeight: PDMetric.minHitTarget)
             .background(
                 isEnabled ? Color.pd.dangerSoft : Color.pd.chip,
                 in: Capsule(style: .continuous)
@@ -438,10 +447,10 @@ struct DangerButton: View {
 /// A word you can tap, at the leading edge of whatever it belongs to.
 ///
 /// Not `SecondaryLink`: that one takes the full width and centres itself,
-/// because it is the escape hatch under a full-width primary button and that is
-/// exactly where it belongs. Inside a card, "Cancel" under a download has to
-/// start where the sentence above it starts, or it floats in the middle of the
-/// row with nothing explaining what it cancels.
+/// because it is the escape hatch under a full-width primary button. Inside a
+/// card, "Cancel" under a download has to start where the sentence above it
+/// starts, or it floats in the middle of the row with nothing explaining what
+/// it cancels. Drawn as tall as its line, tappable at 44.
 struct InlineLink: View {
     let title: String
     var tint: Color = .pd.accent
@@ -461,24 +470,28 @@ struct InlineLink: View {
             Text(title)
                 .font(Font.pd.secondary.weight(.semibold))
                 .foregroundStyle(tint)
-                .padding(.vertical, PDSpacing.xxs)
-                .contentShape(Rectangle())
+                .multilineTextAlignment(.leading)
+                .pdHitTarget(alignment: .leading)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PDPressStyle())
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityLabel(title)
     }
 }
 
 /// A block of monospaced text that is meant to be read character by character —
-/// a log, a code snippet, a path.
+/// a log, a code snippet, a key.
+///
+/// `size` picks between the two mono text styles rather than a point size, so
+/// the block grows with Dynamic Type: 11 or less is `caption2`, anything else
+/// the `code` token (`footnote`).
 struct MonoBlock: View {
     let text: String
     var size: CGFloat = 12
 
     var body: some View {
         Text(text)
-            .font(.system(size: size, design: .monospaced))
+            .font(size <= 11 ? .system(.caption2, design: .monospaced) : Font.pd.code)
             .foregroundStyle(Color.pd.ink)
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -490,60 +503,18 @@ struct MonoBlock: View {
     }
 }
 
-/// A disclosure that matches the rest of the card.
-///
-/// The system `DisclosureGroup` brings its own font, its own chevron placement
-/// and a label that cannot be a row, so a card with one in it has two ideas of
-/// what a row looks like.
-struct RowDisclosure<Content: View>: View {
-    let title: String
-    var detail: String?
-    var symbol: String?
-    @Binding var isExpanded: Bool
-    @ViewBuilder var content: () -> Content
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Button {
-                Haptics.tap()
-                withAnimation(PDMotion.standard) { isExpanded.toggle() }
-            } label: {
-                RowShell(symbol: symbol, title: title, detail: detail) {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color.pd.inkSecondary)
-                        .rotationEffect(.degrees(isExpanded ? 0 : -90))
-                        .accessibilityHidden(true)
-                }
-            }
-            .buttonStyle(.plain)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(title)
-            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
-            .accessibilityAddTraits(.isButton)
-
-            if isExpanded {
-                VStack(spacing: 0) { content() }
-                    .padding(.bottom, PDSpacing.xs)
-            }
-        }
-    }
-}
-
-// MARK: - Formatting
-
 // MARK: - Pushing inside You
 
 extension Navigator {
-    /// Push a route onto the You stack without resetting it.
+    /// Push a page one level deeper than the one on screen.
     ///
-    /// `openYou(_:)` is for arriving from another tab: it replaces the stack,
-    /// because landing on Brain from a card on Today should leave one screen
-    /// behind it and not whatever somebody was looking at three days ago. From
-    /// inside You that is exactly wrong — it would make Back from "Add a brain"
-    /// go to the profile rather than to Brain.
+    /// `openYou(_:)` is for arriving from somewhere else: it lands on
+    /// Today › You › the page, because arriving at Brain from a notice should
+    /// leave You behind it and nothing else. From inside You that is exactly
+    /// wrong — it would make Back from "More brains" go to You rather than to
+    /// Brain.
     func push(_ route: YouRoute) {
-        youPath.append(route)
+        path.append(.youPage(route))
     }
 }
 
@@ -567,13 +538,14 @@ func pdFitWords(_ fit: DeviceBudget.Fit) -> String {
     }
 }
 
-/// The pill beside a model in a list, from the same verdict.
-func pdFitPill(_ fit: DeviceBudget.Fit) -> (kind: StatusPill.Kind, text: String) {
-    switch fit {
-    case .comfortable: (.positive, "Fits well")
-    case .tight: (.caution, "Tight fit")
-    case .willNotFit: (.caution, "Too big")
-    }
+/// A "·"-joined line that wraps after a separator, never before one.
+///
+/// "Nothing to download · Ready" broke as "Nothing to download / · Ready",
+/// starting a line with a dot. A no-break space before each dot ties it to
+/// the word it follows, so the line ends on the dot and the next starts with
+/// a word.
+func pdSeparated(_ line: String) -> String {
+    line.replacingOccurrences(of: " · ", with: "\u{00A0}· ")
 }
 
 /// "1.1 GB · about 4 minutes on Wi-Fi".

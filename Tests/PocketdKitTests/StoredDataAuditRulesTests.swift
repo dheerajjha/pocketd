@@ -85,7 +85,7 @@ struct StoredDataAuditRulesTests {
         // beside a Delete button is a small lie on a screen that has no room
         // for any.
         let projector = orphans.first { $0.file.name == "smolvlm-500m.mmproj.gguf" }
-        #expect(projector?.explanation.contains("image projector") == true)
+        #expect(projector?.explanation.contains("image part") == true)
         #expect(orphans.first { $0.file.name == "smolvlm-500m.gguf" }?.explanation.contains("Weights") == true)
     }
 
@@ -152,7 +152,7 @@ struct StoredDataAuditRulesTests {
         #expect(plan.included.reduce(0) { $0 + $1.byteCount } == plan.byteCount)
         // Empty categories are not named. "every conversation" beside a zero
         // reads as a promise about something.
-        #expect(plan.included.map(\.name) == ["every model", "every conversation", "the network cache"])
+        #expect(plan.included.map(\.name) == [DeletionPlan.EntryName.models, DeletionPlan.EntryName.conversations, DeletionPlan.EntryName.networkCache])
         #expect(plan.isEmpty == false)
 
         let nothing = DeletionPlan.deleteEverything(
@@ -176,7 +176,7 @@ struct StoredDataAuditRulesTests {
             downloadInFlight: false
         )
         #expect(plan.byteCount == 900)
-        #expect(plan.included.map(\.name) == ["model files nothing can load"])
+        #expect(plan.included.map(\.name) == [DeletionPlan.EntryName.orphans])
     }
 
     // MARK: - What the freed line is allowed to claim
@@ -290,6 +290,27 @@ struct StoredDataAuditRulesTests {
         #expect(sentences.joined(separator: " ").contains("nothing here left") == false)
     }
 
+    @Test("the confirmation quotes the same plan, skips included, and promises no backup")
+    func confirmationMatchesThePlan() {
+        let plan = DeletionPlan.deleteEverything(
+            installedModelBytes: 2_000_000, orphanBytes: 0, conversationBytes: 4_000,
+            scheduledTaskBytes: 0,
+            partialDownloadBytes: 900_000, networkCacheBytes: 0,
+            downloadInFlight: true
+        )
+        let dialog = DeletionNarrative.confirmation(plan: plan).joined(separator: " ")
+        #expect(dialog.contains(formattedByteCount(plan.byteCount)))
+        #expect(dialog.contains("\(DeletionPlan.EntryName.models) and \(DeletionPlan.EntryName.conversations)"))
+        #expect(dialog.contains("It leaves every unfinished download"))
+        #expect(dialog.hasSuffix("no copy anywhere to bring back."))
+
+        let empty = DeletionPlan.deleteEverything(
+            installedModelBytes: 0, orphanBytes: 0, conversationBytes: 0, scheduledTaskBytes: 0,
+            partialDownloadBytes: 0, networkCacheBytes: 0, downloadInFlight: false
+        )
+        #expect(DeletionNarrative.confirmation(plan: empty).first == "There is nothing here left for this screen to delete.")
+    }
+
     @Test("the footer quotes the plan's own number and names its own parts")
     func footerMatchesThePlan() {
         let plan = DeletionPlan.deleteEverything(
@@ -304,7 +325,7 @@ struct StoredDataAuditRulesTests {
         ).joined(separator: " ")
 
         #expect(footer.contains(formattedByteCount(plan.byteCount)))
-        #expect(footer.contains("every model, every conversation and the network cache"))
+        #expect(footer.contains("every downloaded brain, every conversation and the network cache"))
         // The skipped category is named with its reason rather than folded into
         // a total the button then does not free.
         #expect(footer.contains("It leaves every unfinished download"))

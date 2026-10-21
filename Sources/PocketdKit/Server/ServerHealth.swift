@@ -22,7 +22,28 @@ public enum ServeCondition: String, Sendable, Codable, Equatable {
         switch self {
         case .ok: "Serving."
         case .thermal: "The phone is too hot to generate right now. It will resume when it cools."
-        case .battery: "The phone's battery is below the level set for serving. Charge it, or lower the floor in Settings."
+        case .battery: "The phone's battery is below the level set for serving. Charge it, or lower the floor in Pocketd's Server settings."
+        }
+    }
+
+    /// What the person holding the phone is told, in one sentence, or nothing
+    /// when there is nothing to say. Not `message`: that one is for a terminal
+    /// on the other end of a 503, and "generate" is not a word for the phone.
+    public var phoneSentence: String? {
+        switch self {
+        case .ok: nil
+        case .thermal: "Paused while your iPhone cools down."
+        case .battery: "Paused because the battery is low. Plugging in resumes it."
+        }
+    }
+
+    /// The small caps word desk mode shows for this condition. Never the raw
+    /// value: "THERMAL" is an enum case, not a status.
+    public var statusWord: String {
+        switch self {
+        case .ok: "Serving"
+        case .thermal: "Cooling down"
+        case .battery: "Battery low"
         }
     }
 

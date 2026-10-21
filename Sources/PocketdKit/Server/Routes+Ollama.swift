@@ -229,57 +229,57 @@ extension InferenceServer {
         headers[.contentType] = "application/x-ndjson"
         headers[.cacheControl] = "no-cache"
 
-        return HTTPResponse.streaming(headers: headers) { [weak self] continuation in
-            Task {
-                let started = ContinuousClock.now
-                let encoder = JSONEncoder()
-                var usage = TokenUsage()
-                var status = 200
+        return HTTPResponse.streaming(headers: headers, stoppingWhenClientLeaves: { [weak self] continuation in
+            let started = ContinuousClock.now
+            let encoder = JSONEncoder()
+            var usage = TokenUsage()
+            var status = 200
 
-                func emit(_ value: some Encodable) {
-                    guard var data = try? encoder.encode(value) else { return }
-                    data.append(0x0A)
-                    continuation.yield(data)
-                }
-
-                do {
-                    for try await event in try await engine.generate(generation) {
-                        switch event {
-                        case .token(let text):
-                            emit(ollamaBody(shape: shape, model: model.id, text: text, done: false,
-                                            reason: nil, usage: nil, elapsed: nil))
-                        case .toolCallStarted, .answerCard:
-                            // Not on the wire, for the same reason as the
-                            // OpenAI route: the tool ran here, Ollama's
-                            // `tool_calls` field means "client, run this", and
-                            // a card is a rendering only the app can draw.
-                            break
-                        case .finished(let reason, let tokenUsage):
-                            usage = tokenUsage
-                            emit(ollamaBody(shape: shape, model: model.id, text: "", done: true,
-                                            reason: reason.rawValue, usage: tokenUsage,
-                                            elapsed: started.duration(to: .now).timeInterval))
-                        }
-                    }
-                } catch {
-                    status = 500
-                    emit(Ollama.ErrorResponse(error: String(describing: error)))
-                }
-
-                continuation.finish()
-                await self?.endRequest()
-                let elapsed = started.duration(to: .now).timeInterval
-                let finalStatus = status
-                let finalUsage = usage
-                await log.update(id: logID) { entry in
-                    entry.statusCode = finalStatus
-                    entry.model = model.id
-                    entry.promptTokens = finalUsage.promptTokens
-                    entry.completionTokens = finalUsage.completionTokens
-                    entry.duration = elapsed
-                }
+            func emit(_ value: some Encodable) {
+                guard var data = try? encoder.encode(value) else { return }
+                data.append(0x0A)
+                continuation.yield(data)
             }
-        }
+
+            do {
+                for try await event in try await engine.generate(generation) {
+                    switch event {
+                    case .token(let text):
+                        emit(ollamaBody(shape: shape, model: model.id, text: text, done: false,
+                                        reason: nil, usage: nil, elapsed: nil))
+                    case .toolCallStarted, .answerCard:
+                        // Not on the wire, for the same reason as the
+                        // OpenAI route: the tool ran here, Ollama's
+                        // `tool_calls` field means "client, run this", and
+                        // a card is a rendering only the app can draw.
+                        break
+                    case .finished(let reason, let tokenUsage):
+                        usage = tokenUsage
+                        emit(ollamaBody(shape: shape, model: model.id, text: "", done: true,
+                                        reason: reason.rawValue, usage: tokenUsage,
+                                        elapsed: started.duration(to: .now).timeInterval))
+                    }
+                }
+            } catch {
+                status = 500
+                emit(Ollama.ErrorResponse(error: String(describing: error)))
+            }
+
+            // See the OpenAI route: a hang-up is logged as one.
+            if Task.isCancelled { status = InferenceServer.clientClosedRequest }
+            continuation.finish()
+            await self?.endRequest()
+            let elapsed = started.duration(to: .now).timeInterval
+            let finalStatus = status
+            let finalUsage = usage
+            await log.update(id: logID) { entry in
+                entry.statusCode = finalStatus
+                entry.model = model.id
+                entry.promptTokens = finalUsage.promptTokens
+                entry.completionTokens = finalUsage.completionTokens
+                entry.duration = elapsed
+            }
+        })
     }
 }
 

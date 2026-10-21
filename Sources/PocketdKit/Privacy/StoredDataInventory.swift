@@ -86,49 +86,54 @@ public enum StoredDataKind: String, Sendable, CaseIterable, Codable {
     /// when a future iOS starts writing somewhere new.
     case other
 
+    /// The words the privacy details page uses. The app's own vocabulary —
+    /// brain, conversation, routine — rather than the code's, because this is
+    /// read by the person whose data it is.
     public var title: String {
         switch self {
-        case .models: "Models"
+        case .models: "Brains"
         case .conversations: "Conversations"
-        case .scheduledTasks: "Scheduled tasks"
+        case .scheduledTasks: "Routines"
         case .dailyBrief: "Today's brief"
         case .partialDownloads: "Unfinished downloads"
-        case .preferences: "Settings and keys"
+        case .preferences: "Settings"
         case .networkCache: "Network cache"
-        case .shaderCache: "GPU shader cache"
-        case .systemState: "What iOS keeps about this app"
-        case .other: "Everything else in the container"
+        case .shaderCache: "Graphics cache"
+        case .systemState: "What iOS keeps about Pocketd"
+        case .other: "Everything else"
         }
     }
 
-    /// What is actually in it, in the terms a person would use.
+    /// What is actually in it, in the terms a person would use. One sentence
+    /// each: the details page is one level below the promises, not a manual.
     public var detail: String {
         switch self {
         case .models:
-            "The weights you downloaded, and the file listing them. Nothing here is about you."
+            "The brains you downloaded. Nothing in them is about you."
         case .conversations:
-            "Everything typed in the Chat tab and everything the model replied, one file per conversation, as plain text."
+            "What you asked and what Pocketd answered, one file per conversation."
         case .scheduledTasks:
-            "Each task you set to run later — its prompt or its rule — and what the last few runs produced. A run that read your calendar or your health stores the sentence it wrote about them, so this is personal data at rest even though no conversation exists for it."
+            // Named as personal on purpose: a routine that read your calendar
+            // keeps the sentence it wrote about it, with no conversation to
+            // show for it.
+            "Each routine you set up and what its last runs said, which can mention your calendar, reminders or health."
         case .dailyBrief:
-            "The paragraph on the Today tab and the numbers it was written from — your next event, what is due, last night's sleep and today's steps. Two copies: this one, and a shorter one in the shared folder the home screen widget reads, which carries one sentence, one event title and a count and nothing else."
+            "Today's brief and the facts it was written from, plus the shorter copy the widget shows."
         case .partialDownloads:
-            "Bytes of a model that never finished arriving: the resume blob beside the weights, and the part-file URLSession parks in this app's own tmp folder. iOS empties tmp only when the disk comes under pressure, which is why there is a button for it here."
+            "Parts of a brain download that stopped before it finished."
         case .preferences:
-            "This app's own settings, including the API key other devices use to reach it."
+            "Your choices in Pocketd, including the key your laptop uses to connect."
         case .networkCache:
-            // Named for both callers rather than for Hugging Face alone. The
-            // analytics SDK reaches the network through the same URLSession
-            // machinery, so whatever it leaves behind is counted here too, and
-            // a sentence naming only the model search would be describing part
-            // of the bytes this screen is showing.
-            "What the system's HTTP client kept from the requests this app makes: Hugging Face search results and any cookies its CDN set, plus whatever the analytics SDK's own requests leave behind. Nothing you typed is in here."
+            // Both callers, not only brain search: the usage-count library
+            // reaches the network through the same system client, so whatever
+            // it leaves behind is counted here too.
+            "What iOS kept from Pocketd's downloads, searches and usage counts. Nothing you typed is in it."
         case .shaderCache:
-            "Compiled GPU code for running a model on this phone's graphics hardware. It describes the app, not you."
+            "Prepared graphics code that helps a brain start faster. It describes the app, not you."
         case .systemState:
-            "Snapshots of the last screen you were on, taken when you switch away so the app can reappear instantly, plus the window state to restore. iOS writes these; the app is never asked."
+            "The picture of your last screen iOS shows when you switch back to Pocketd."
         case .other:
-            "Anything in this app's container that this screen does not have a name for. Listed with its real path rather than left out."
+            "Files in Pocketd's folder this page has no name for."
         }
     }
 
@@ -139,13 +144,13 @@ public enum StoredDataKind: String, Sendable, CaseIterable, Codable {
         case .networkCache:
             .here
         case .preferences:
-            .onlyByDeletingTheApp("Every setting in it can be changed from this app and the API key replaced above. The file itself is written by iOS on the app's behalf and goes when the app does.")
+            .onlyByDeletingTheApp("Every setting in it can be changed from this app. iOS removes the file when Pocketd is deleted.")
         case .shaderCache:
-            .systemManaged("iOS rebuilds it the next time a model loads, so deleting it would cost a slower load and free nothing for long.")
+            .systemManaged("iOS rebuilds it the next time a brain starts, so deleting it would only slow that start down.")
         case .systemState:
-            .systemManaged("SpringBoard owns these and writes a fresh snapshot every time you leave the app. No app can delete its own, including this one.")
+            .systemManaged("iOS writes a fresh one every time you leave Pocketd. No app can delete its own.")
         case .other:
-            .unclassified("This screen has no name for these bytes, so it will not offer to delete them. Deleting the app removes them.")
+            .unclassified("This page can't say what these are, so it won't delete them. Deleting the app removes them.")
         }
     }
 

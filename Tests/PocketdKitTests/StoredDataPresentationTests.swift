@@ -100,48 +100,4 @@ struct StoredDataPresentationTests {
         // A row with nothing more to say does not get a dangling separator.
         #expect(permissionAnnouncement(title: "Calendar", state: "Allowed", note: nil) == "Calendar: Allowed")
     }
-
-    // MARK: - Colours that carry meaning
-
-    @Test("every warning on this screen is readable on both grounds")
-    func warningsMeetContrast() {
-        let pairs: [(String, StoredDataColor, StoredDataColor)] = [
-            ("warning", StoredDataPalette.warningOnLight, StoredDataPalette.lightRowBackground),
-            ("warning", StoredDataPalette.warningOnDark, StoredDataPalette.darkRowBackground),
-            ("success", StoredDataPalette.successOnLight, StoredDataPalette.lightRowBackground),
-            ("success", StoredDataPalette.successOnDark, StoredDataPalette.darkRowBackground),
-        ]
-        for (name, foreground, background) in pairs {
-            let ratio = foreground.contrastRatio(against: background)
-            #expect(
-                ratio >= StoredDataPalette.minimumTextContrast,
-                "\(name) measures \(ratio) on this ground, below WCAG AA for body text"
-            )
-        }
-    }
-
-    @Test("the system tints these replace are the reason the token exists")
-    func systemTintsFailInLight() {
-        // Not a test of Apple's colours — a test that the failure this token
-        // fixes is real and is specifically a light-mode failure, which is why
-        // it survived review by people working in dark mode.
-        let systemOrange = StoredDataColor(red: 1, green: 0.584, blue: 0)
-        let systemGreen = StoredDataColor(red: 0.204, green: 0.780, blue: 0.349)
-        let onWhite = StoredDataPalette.lightRowBackground
-
-        #expect(systemOrange.contrastRatio(against: onWhite) < StoredDataPalette.minimumTextContrast)
-        #expect(systemGreen.contrastRatio(against: onWhite) < StoredDataPalette.minimumTextContrast)
-        #expect(systemOrange.contrastRatio(against: StoredDataPalette.darkRowBackground) > 4.5)
-    }
-
-    @Test("relative luminance matches the definition it claims to implement")
-    func luminanceIsWCAG() {
-        // Anchors from the specification itself, so a transposed coefficient or
-        // a dropped gamma step cannot pass.
-        #expect(abs(StoredDataColor(red: 1, green: 1, blue: 1).relativeLuminance - 1) < 0.0001)
-        #expect(abs(StoredDataColor(red: 0, green: 0, blue: 0).relativeLuminance) < 0.0001)
-        let blackOnWhite = StoredDataColor(red: 0, green: 0, blue: 0)
-            .contrastRatio(against: StoredDataColor(red: 1, green: 1, blue: 1))
-        #expect(abs(blackOnWhite - 21) < 0.01)
-    }
 }

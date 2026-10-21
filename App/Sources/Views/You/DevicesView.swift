@@ -2,348 +2,451 @@ import PocketdKit
 import SwiftUI
 import UIKit
 
-/// Letting a laptop on the same Wi-Fi use this phone's brain.
+/// Use from your laptop: this iPhone answering a browser on another device,
+/// over the same Wi-Fi.
 ///
-/// v1 called this the Server tab and led with a socket. It is a bonus, not the
-/// headline — "your iPhone is the server" is a developer's answer to a
-/// developer's question — so it is a section on You, and the words are about
-/// what it is for: another device you own, using the brain you already have.
+/// One status card holds what a person looks at, in the order they look at it
+/// with the laptop open beside them: the switch, the address to type there,
+/// and the code that page will ask for. Everything else — who asked for what,
+/// ports and keys — is one row further down.
 ///
-/// The section is the same view wherever it appears. The You screen shows it
-/// inline; `DevicesView` is the pushed screen with the parts a developer wants
-/// under it, and that is the only screen in this app where the jargon is
-/// allowed out.
-struct OtherDevicesSection: View {
+/// There is no "Setup guide" any more. It opened the setup page in Safari *on
+/// the phone*: the wrong device for the task, and it left Pocketd, whose
+/// listener iOS closes the moment the app is in the background. The address is
+/// the guide now; the page the laptop opens asks for the code itself.
+///
+/// The client snippets, key reveal and the rest of the old pushed screen are
+/// gone with it. That screen could not be reached in a release build, and it
+/// was the only place this app printed another vendor's name. A laptop gets
+/// the snippets from the page it pairs on (`POST /pair`), which is where they
+/// are any use.
+struct OtherDevicesView: View {
     @Environment(AppModel.self) private var model
+    @Environment(Navigator.self) private var navigator
     @Environment(ToastCenter.self) private var toasts
-    @Environment(\.openURL) private var openURL
+    @Environment(ProStore.self) private var pro: ProStore?
 
-    /// Shown on the pushed screen and not on the You root: on the root the
-    /// section is a summary, and a request log is the opposite of one.
-    var showsRequests = true
+    /// The promo is for the first visit only, and "first" has to survive a
+    /// relaunch: someone who said Not now has heard the pitch.
+    @AppStorage("pocketd.laptopPromoSeen") private var promoSeen = false
+    @State private var showsPromo = false
+    @State private var showsRequests = false
 
-    /// The mono label. Different on the pushed screen, whose own title is
-    /// already "Other devices" — a label repeating the heading two lines above
-    /// it is the sort of thing nobody notices and everybody feels.
-    var title = "OTHER DEVICES"
-
-    @State private var requestsExpanded = false
+    /// What the person asked for, rather than what the socket is doing: iOS
+    /// closes the listener whenever Pocketd is in the background, and a switch
+    /// that flicked off and on again with every trip to the home screen would
+    /// be describing iOS, not the choice.
+    private var isOn: Bool { model.serverShouldRun || model.serverState.isRunning }
 
     var body: some View {
-        YouSection(title, footnote: footnote) {
-            toggleRow
-
-            if model.serverState.isRunning {
-                RowDivider(inset: 0)
-                addressBlock
+        YouDetailScreen(
+            title: "Use from your laptop",
+            subtitle: "Ask Pocketd from a browser on your laptop. This iPhone does the answering, over your Wi-Fi."
+        ) {
+            statusCard
+            if needsDownloadedBrain {
+                brainCard
             }
-
-            if let error = model.lastServerError {
-                RowDivider(inset: 0)
-                Callout(symbol: "exclamationmark.triangle", text: error, tint: .pd.caution, fill: .pd.cautionSoft)
-                    .padding(.vertical, PDSpacing.s)
+            if isOn {
+                deskModeCard
             }
-
-            if !model.condition.isServing {
-                RowDivider(inset: 0)
-                Callout(
-                    symbol: model.condition == .thermal ? "thermometer.high" : "battery.25",
-                    text: model.condition.message,
-                    tint: .pd.caution,
-                    fill: .pd.cautionSoft
-                )
-                .padding(.vertical, PDSpacing.s)
-            }
-
-            if model.serverState.isRunning, model.loadedModelID == nil {
-                RowDivider(inset: 0)
-                Callout(
-                    symbol: "exclamationmark.triangle",
-                    text: "Running, but there is no brain loaded — every request will fail until one is.",
-                    tint: .pd.caution,
-                    fill: .pd.cautionSoft
-                )
-                .padding(.vertical, PDSpacing.s)
-            }
-
-            if showsRequests {
-                RowDivider(inset: 0)
-                RowDisclosure(
-                    title: "Recent requests",
-                    detail: model.log.isEmpty ? "Nothing yet" : "\(model.log.count) served this session",
-                    symbol: "list.bullet.rectangle",
-                    isExpanded: $requestsExpanded
-                ) {
-                    requestList
-                }
-            }
+            moreCard
+        }
+        .sheet(isPresented: $showsPromo, onDismiss: { promoSeen = true }) {
+            promo
+        }
+        .navigationDestination(isPresented: $showsRequests) {
+            RecentRequestsView()
+        }
+        .task {
+            // Only to someone who has not turned it on: the sheet's whole
+            // job is to say what turning it on is for. And only with Pocketd
+            // Pro — a "Turn on" that opens a price is a bait; without Pro the
+            // switch's "Pro" capsule and the Pro sheet say what this is for.
+            await pro?.settle()
+            if !promoSeen, !isOn, pro?.isPro ?? true { showsPromo = true }
         }
     }
 
-    // MARK: - The switch
+    // MARK: - The first visit
 
-    private var toggleRow: some View {
-        ToggleRow(
+    private var promo: some View {
+        PromoSheet(
             symbol: "laptopcomputer",
-            title: "Let my laptop use it",
-            detail: toggleDetail,
-            isOn: Binding(
-                get: { model.serverShouldRun || model.serverState.isRunning },
-                set: { on in
-                    Haptics.tap()
-                    Task { on ? await model.startServer() : await model.stopServer() }
+            title: "Use Pocketd from your laptop.",
+            benefits: [
+                .init("bubble.left.and.bubble.right", "Private chat in your browser"),
+                .init("square.grid.2x2", "Works with apps you already have"),
+                .init("wifi", "Stays on your Wi-Fi"),
+            ],
+            primaryTitle: "Turn on",
+            // iOS asks once, the first time the phone shows itself on the
+            // network; on later visits nothing appears and the line is merely
+            // early.
+            primer: "Next, tap **Allow** so your laptop can find this iPhone.",
+            onPrimary: {
+                promoSeen = true
+                showsPromo = false
+                // Shown only with Pro (see `.task`); checked again so no path
+                // here turns the server on without it.
+                if pro?.isPro ?? true {
+                    Task { await model.startServer() }
                 }
-            )
+            },
+            onSecondary: {
+                promoSeen = true
+                showsPromo = false
+            }
         )
     }
 
-    private var toggleDetail: String {
-        switch model.serverState {
-        case .starting: "Starting…"
-        case .running: "Anything on this Wi-Fi can reach it"
-        case .failed: "It could not start."
-        case .stopped:
-            model.loadedModelID == nil
-                ? "Choose a brain first — there would be nothing to serve"
-                : "Off. Nothing else on your network can reach this phone"
+    // MARK: - The status card
+
+    private var statusCard: some View {
+        PDCard(padding: PDSpacing.m) {
+            VStack(alignment: .leading, spacing: 0) {
+                // Turning it on is Pocketd Pro; turning it off never is.
+                ProToggleRow(
+                    feature: .laptop,
+                    symbol: "laptopcomputer",
+                    title: "Allow other devices",
+                    detail: switchDetail,
+                    isOn: Binding(
+                        get: { isOn },
+                        set: { on in
+                            Haptics.tap()
+                            Task { on ? await model.startServer() : await model.stopServer() }
+                        }
+                    )
+                )
+
+                if let address = model.laptopAddress {
+                    RowDivider(inset: 0)
+                    addressBlock(address)
+                    // With the key off there is nothing to pair: a code on
+                    // screen would contradict the line above it.
+                    if model.configuration.requiresAuth {
+                        RowDivider(inset: 0)
+                        PairingBlock()
+                    }
+                }
+
+                if model.serverState.isRunning, let sentence = model.condition.phoneSentence {
+                    RowDivider(inset: 0)
+                    problem(sentence, symbol: model.condition == .thermal ? "thermometer.high" : "battery.25")
+                }
+                if let error = model.lastServerError {
+                    RowDivider(inset: 0)
+                    problem(error, symbol: "exclamationmark.triangle")
+                }
+            }
         }
     }
 
-    // MARK: - Address, code, and the two pills
+    private var switchDetail: String {
+        switch model.serverState {
+        case .starting:
+            return "Starting…"
+        case .running:
+            return model.configuration.requiresAuth
+                ? "On. A new device needs the code below."
+                : "On. Anything on this Wi-Fi can ask, with no code."
+        case .failed:
+            return "It couldn't start."
+        case .stopped:
+            return model.serverShouldRun ? "Starting…" : "Off. Nothing else can reach this iPhone."
+        }
+    }
 
-    @ViewBuilder
-    private var addressBlock: some View {
-        VStack(alignment: .leading, spacing: PDSpacing.m) {
-            if let url = model.serverURL {
-                VStack(alignment: .leading, spacing: PDSpacing.xxs) {
-                    MiniLabel("THE ADDRESS")
-                    Button {
-                        copy(url.absoluteString, saying: "Address copied")
-                    } label: {
-                        Text(url.absoluteString)
-                            .font(Font.pd.monoValue)
-                            .foregroundStyle(Color.pd.ink)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.6)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Address \(url.absoluteString). Double tap to copy.")
+    /// The address, big enough to read off a phone propped beside a laptop,
+    /// and a tap copies it — the laptop may be the same person's Mac, where
+    /// Universal Clipboard carries it across.
+    private func addressBlock(_ address: String) -> some View {
+        VStack(alignment: .leading, spacing: PDSpacing.xs) {
+            MiniLabel("Open this address on your laptop")
+            Button {
+                guard let url = model.serverURL else { return }
+                UIPasteboard.general.string = url.absoluteString
+                Haptics.success()
+                toasts.show("Address copied", symbol: "doc.on.doc")
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: PDSpacing.s) {
+                    Text(address)
+                        .font(Font.pd.statText.monospacedDigit())
+                        .foregroundStyle(Color.pd.ink)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    Image(systemName: "doc.on.doc")
+                        .font(Font.pd.secondary)
+                        .foregroundStyle(Color.pd.inkSecondary)
+                        .accessibilityHidden(true)
                 }
+                .pdHitTarget(alignment: .leading)
             }
-
-            pairing
-
-            HStack(spacing: PDSpacing.xs) {
-                if let setup = model.setupURL {
-                    PillButton(title: "Setup guide", symbol: "arrow.up.right", symbolTrails: true) {
-                        openURL(setup)
-                    }
-                }
-                PillButton(title: "Desk mode", symbol: "moon.stars") {
-                    model.deskMode = true
-                }
-                Spacer(minLength: 0)
-            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Address, \(address)")
+            .accessibilityHint("Copies it")
         }
         .padding(.vertical, PDSpacing.s)
     }
 
-    /// The six digits, and the one button the expiry warning names.
-    ///
-    /// Gated on an open code rather than on whether pairing has ever happened:
-    /// asking for a second code has to show it, and a card that only ever
-    /// appears once cannot do that.
-    @ViewBuilder
-    private var pairing: some View {
-        if model.pairing.isOpen || !model.pairing.hasPaired {
-            VStack(alignment: .leading, spacing: PDSpacing.xxs) {
-                MiniLabel("PAIRING CODE")
-                HStack(alignment: .firstTextBaseline, spacing: PDSpacing.m) {
-                    if let code = model.pairing.code {
-                        Text(code)
-                            .font(Font.pd.statValue.weight(.semibold))
-                            .foregroundStyle(Color.pd.ink)
-                            .kerning(5)
-                            .dynamicTypeSize(...DynamicTypeSize.accessibility1)
-                            .minimumScaleFactor(0.6)
-                            .lineLimit(1)
-                            .accessibilityLabel("Pairing code \(code.map(String.init).joined(separator: " "))")
-                    } else {
-                        Text("— — — — — —")
-                            .font(Font.pd.statValue)
-                            .foregroundStyle(Color.pd.inkTertiary)
-                            .accessibilityLabel("No pairing code open")
-                    }
-                    Spacer(minLength: 0)
-                    Button {
-                        Haptics.tap()
-                        Task { await model.newPairingCode() }
-                    } label: {
-                        Text("New code")
-                            .font(Font.pd.secondary.weight(.semibold))
-                            .foregroundStyle(Color.pd.accent)
-                    }
-                    .buttonStyle(.plain)
-                }
-                expiry
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var expiry: some View {
-        if let expires = model.pairing.expires, model.pairing.code != nil {
-            // SwiftUI's relative style renders a past date as a bare magnitude
-            // with no "ago", so an expired code read as "Expires 57 sec" —
-            // indistinguishable from time remaining, while the server was
-            // already refusing it.
-            if expires > .now {
-                Text("Expires \(expires, style: .relative)")
-                    .font(Font.pd.footnote)
-                    .foregroundStyle(Color.pd.inkSecondary)
-            } else {
-                Text("Expired — tap New code")
-                    .font(Font.pd.footnote)
-                    .foregroundStyle(Color.pd.caution)
-            }
-        }
-        if model.pairing.failureCount >= PairingSession.maxAttempts,
-           let address = model.pairing.lastFailureAddress {
-            Text("\(model.pairing.failureCount) wrong codes from \(address). That code is dead — tap New code.")
-                .font(Font.pd.footnote)
+    private func problem(_ sentence: String, symbol: String) -> some View {
+        Label {
+            Text(sentence)
+                .font(Font.pd.secondary)
                 .foregroundStyle(Color.pd.caution)
                 .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    // MARK: - Requests
-
-    @ViewBuilder
-    private var requestList: some View {
-        if model.log.isEmpty {
-            Text("Nothing has asked this phone for anything yet.")
+        } icon: {
+            Image(systemName: symbol)
                 .font(Font.pd.secondary)
-                .foregroundStyle(Color.pd.inkSecondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, PDSpacing.xs)
-        } else {
-            VStack(spacing: 0) {
-                ForEach(Array(model.log.prefix(12).enumerated()), id: \.element.id) { index, entry in
-                    if index > 0 { RowDivider(inset: 0) }
-                    requestRow(entry)
-                }
-                if model.log.count > 12 {
-                    Text("and \(model.log.count - 12) more this session")
-                        .font(Font.pd.footnote)
-                        .foregroundStyle(Color.pd.inkTertiary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, PDSpacing.xs)
-                }
-            }
+                .foregroundStyle(Color.pd.caution)
         }
+        .padding(.vertical, PDSpacing.s)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func requestRow(_ entry: RequestLogEntry) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: PDSpacing.s) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(entry.clientAddress ?? "this phone")
-                    .font(Font.pd.secondary.weight(.medium))
+    // MARK: - A brain for other devices
+
+    /// The server answers with a downloaded brain and never with Apple's, so a
+    /// phone without one — one that uses the built-in brain, or has none yet —
+    /// has nothing to serve. Said before anyone turns the switch on, because
+    /// discovering it from a laptop's "no model loaded" error is the bad way.
+    private var needsDownloadedBrain: Bool {
+        model.installed.isEmpty
+    }
+
+    private var recommended: ModelRecord? {
+        BrainRecommendation.recommended(for: model.budget)
+    }
+
+    private var brainCard: some View {
+        PDCard(padding: PDSpacing.m) {
+            VStack(alignment: .leading, spacing: PDSpacing.s) {
+                Text("Other devices use a downloaded brain.")
+                    .font(Font.pd.rowTitle)
                     .foregroundStyle(Color.pd.ink)
-                    .lineLimit(1)
-                Text(entry.model ?? entry.path)
-                    .font(Font.pd.footnote)
-                    .foregroundStyle(Color.pd.inkSecondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer(minLength: PDSpacing.xs)
-            VStack(alignment: .trailing, spacing: 2) {
-                if let rate = entry.tokensPerSecond {
-                    Text(String(format: "%.1f tok/s", rate))
-                        .font(Font.pd.footnote.monospaced())
-                        .foregroundStyle(Color.pd.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
+                if let record = recommended {
+                    if let transfer = model.transfer(for: record.id), transfer.isActive {
+                        VStack(alignment: .leading, spacing: PDSpacing.xs) {
+                            Text("Downloading \(record.displayName) · \(Int((transfer.fraction * 100).rounded(.down)))%")
+                                .font(Font.pd.secondary)
+                                .foregroundStyle(Color.pd.inkSecondary)
+                            ProgressView(value: transfer.fraction)
+                                .tint(Color.pd.accent)
+                                .accessibilityHidden(true)
+                        }
+                    } else {
+                        Text("\(record.displayName) · \(pdDownloadLine(record.totalDownloadBytes))")
+                            .font(Font.pd.secondary)
+                            .foregroundStyle(Color.pd.inkSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        PillButton(title: "Download", symbol: "arrow.down") {
+                            model.download(record)
+                        }
+                        .accessibilityLabel("Download \(record.displayName)")
+                    }
                 } else {
-                    Text("\(entry.statusCode)")
-                        .font(Font.pd.footnote.monospaced())
-                        .foregroundStyle(entry.statusCode == 200 ? Color.pd.positive : Color.pd.caution)
+                    Text("This iPhone doesn't have room for one.")
+                        .font(Font.pd.secondary)
+                        .foregroundStyle(Color.pd.inkSecondary)
                 }
-                Text(entry.date, style: .time)
-                    .font(Font.pd.footnote.monospaced())
-                    .foregroundStyle(Color.pd.inkTertiary)
             }
         }
-        .padding(.vertical, PDSpacing.xs)
-        .accessibilityElement(children: .combine)
     }
 
-    // MARK: - Copy
+    // MARK: - Below the card
 
-    private var footnote: String {
-        model.serverState.isRunning
-            ? "iOS closes the connection when this app is in the background, so keep Pocketd on screen while another device is using it. While it is on, the phone announces itself to everything on this Wi-Fi so a laptop can find it without typing the address. Requests that arrive this way can never reach your calendar, reminders or health data."
-            : "Turning this on lets another device you own send questions to the brain on this phone, over your own Wi-Fi. Nothing goes to the internet, and a request that arrives this way can never reach your calendar, reminders or health data."
-    }
-
-    private func copy(_ value: String, saying message: String) {
-        UIPasteboard.general.string = value
-        Haptics.success()
-        toasts.show(message)
-    }
-}
-
-// MARK: - The pushed screen
-
-/// Other devices, with the parts a developer came for.
-///
-/// One of the two screens where the vocabulary is allowed to be technical —
-/// this one and Brain → Advanced. Somebody who has pushed into a screen called
-/// "Other devices" to find a code snippet is not going to be confused by the
-/// word "API".
-struct DevicesView: View {
-    @Environment(AppModel.self) private var model
-    @Environment(Navigator.self) private var navigator
-    @Environment(ToastCenter.self) private var toasts
-    @State private var snippetIndex = 0
-    @State private var showKey = false
-
-    var body: some View {
-        YouDetailScreen(
-            title: "Other devices",
-            // "It speaks the two APIs those clients already know" was the first
-            // wording, and API is on the list of words this screen may not use
-            // — only the setup guide behind it may.
-            subtitle: "A laptop or a tablet on this Wi-Fi can send questions to the brain on this phone. Chat apps that already run on those devices can talk to it as they are."
-        ) {
-            OtherDevicesSection(title: "ON THIS WI-FI")
-
-            if model.pairing.hasPaired {
-                connect
-            }
-
-            YouSection(
-                "ADVANCED",
-                footnote: "Which addresses the server answers on, the port, the key, and what a request inherits when it does not say."
+    private var deskModeCard: some View {
+        PDCard(padding: PDSpacing.m) {
+            ActionRow(
+                symbol: "moon.stars",
+                title: "Desk mode",
+                detail: "A dim screen for an iPhone left answering on a charger"
             ) {
+                model.deskMode = true
+            }
+        }
+    }
+
+    private var moreCard: some View {
+        PDCard(padding: PDSpacing.m) {
+            VStack(spacing: 0) {
+                NavRow(
+                    symbol: "list.bullet.rectangle",
+                    title: "Recent requests",
+                    detail: model.log.isEmpty
+                        ? "None yet"
+                        : Format.counted(model.log.count, "request") + " since Pocketd opened"
+                ) {
+                    showsRequests = true
+                }
+                RowDivider()
                 NavRow(
                     symbol: "slider.horizontal.3",
-                    title: "Server and generation settings",
-                    detail: "Port, key, context, sampling"
+                    title: "Server settings",
+                    detail: "Port, key and limits"
                 ) {
                     navigator.push(.settings)
                 }
-                if !model.log.isEmpty {
-                    RowDivider()
-                    ActionRow(
-                        symbol: "trash",
-                        title: "Clear the request log",
-                        detail: "\(model.log.count) entries, held in memory only",
-                        isDestructive: true
-                    ) {
+            }
+        }
+    }
+}
+
+/// `YouRouteView` still says `DevicesView()`; the page's name is the one above.
+typealias DevicesView = OtherDevicesView
+
+// MARK: - The pairing code
+
+/// The six digits, and the button that replaces them — always there while
+/// the phone is serving.
+///
+/// The old card disappeared, button and all, once anything had paired: a code
+/// is only needed until someone uses one, the reasoning went. Which left a
+/// second laptop, or the first one after its browser forgot the key, with no
+/// way in short of turning the whole thing off and on. Now there is always a
+/// "New code", and when there is no code on screen the card says why.
+///
+/// Its own view so the gentle clock below re-renders only this block, and
+/// only every fifteen seconds: a countdown ticking every second cost battery
+/// on a phone left serving, and made the whole page churn for nothing.
+private struct PairingBlock: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 15)) { _ in
+            // The real clock, not the timeline entry's date: that is the
+            // last scheduled tick, up to fifteen seconds behind, and a code
+            // opened in between read "works for 11 more minutes" for a
+            // ten-minute code. The timeline only decides when to look again.
+            let now = Date.now
+            let snapshot = model.pairing
+            let live = snapshot.isLive(at: now)
+            VStack(alignment: .leading, spacing: PDSpacing.xs) {
+                MiniLabel("Pairing code")
+                let layout = typeSize.isAccessibilitySize
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: PDSpacing.xs))
+                    : AnyLayout(HStackLayout(alignment: .center, spacing: PDSpacing.s))
+                layout {
+                    if live, let code = snapshot.code {
+                        codeText(code)
+                    } else {
+                        Text(absentSentence(snapshot, now: now))
+                            .font(Font.pd.secondary)
+                            .foregroundStyle(snapshot.ending == .tooManyTries ? Color.pd.caution : Color.pd.inkSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if !typeSize.isAccessibilitySize { Spacer(minLength: 0) }
+                    PillButton(title: "New code", symbol: "arrow.clockwise") {
+                        Task { await model.newPairingCode() }
+                    }
+                    .accessibilityHint("Shows a fresh six-digit code for another device")
+                }
+                if live, let expires = snapshot.expires {
+                    Text(liveSentence(expires: expires, now: now))
+                        .font(Font.pd.footnote)
+                        .foregroundStyle(Color.pd.inkSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.vertical, PDSpacing.s)
+        }
+    }
+
+    /// "483 920": two groups of three, because six digits read off one screen
+    /// and typed into another are read three at a time anyway.
+    private func codeText(_ code: String) -> some View {
+        let grouped = code.count == 6 ? "\(code.prefix(3)) \(code.suffix(3))" : code
+        return Text(grouped)
+            .font(Font.pd.statValue.weight(.semibold))
+            .foregroundStyle(Color.pd.ink)
+            .accessibilityLabel("Pairing code, \(code.map(String.init).joined(separator: " "))")
+    }
+
+    private func liveSentence(expires: Date, now: Date) -> String {
+        let minutes = max(1, Int((expires.timeIntervalSince(now) / 60).rounded(.up)))
+        return "Type it on your laptop when it asks. It works for \(Format.counted(minutes, "more minute"))."
+    }
+
+    /// Why there is no code to show, from what ended the last one.
+    private func absentSentence(_ snapshot: PairingSession.Snapshot, now: Date) -> String {
+        if snapshot.isOpen {
+            // Open but past its time: the actor only notices when someone
+            // tries it, so the clock here says it first.
+            return "That code ran out of time."
+        }
+        switch snapshot.ending {
+        case .paired: return "Paired. Another device needs a new code."
+        case .tooManyTries: return "Too many wrong tries, so that code stopped working."
+        case .expired: return "That code ran out of time."
+        case nil:
+            return snapshot.hasPaired
+                ? "Paired devices reconnect by themselves."
+                : "Get a code to pair your laptop."
+        }
+    }
+}
+
+// MARK: - Recent requests
+
+/// What other devices asked this iPhone since Pocketd opened.
+///
+/// The phone's own record of who has been using it, so it says it in the
+/// phone's words — "Question · Answered", "Pairing · Wrong code" — rather than
+/// as paths and status numbers. Held in memory only and never written down;
+/// the point of the app is that requests do not leave the device, and that
+/// includes not keeping them.
+struct RecentRequestsView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(ToastCenter.self) private var toasts
+
+    /// Plenty for "who has been asking", short enough to stay a list.
+    private static let shown = 50
+
+    var body: some View {
+        YouDetailScreen(
+            title: "Recent requests",
+            subtitle: "What other devices asked this iPhone since Pocketd opened. Kept in memory only."
+        ) {
+            if model.log.isEmpty {
+                PDCard(padding: PDSpacing.m) {
+                    Text("Nothing has asked yet.")
+                        .font(Font.pd.secondary)
+                        .foregroundStyle(Color.pd.inkSecondary)
+                        .padding(.vertical, PDSpacing.s)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                PDCard(padding: PDSpacing.m) {
+                    VStack(spacing: 0) {
+                        ForEach(Array(model.log.prefix(Self.shown).enumerated()), id: \.element.id) { index, entry in
+                            if index > 0 { RowDivider(inset: 0) }
+                            DataRow(
+                                title: entry.requestKind,
+                                subtitle: subtitle(for: entry),
+                                value: Format.time(entry.date)
+                            )
+                            .padding(.vertical, PDSpacing.s)
+                            .accessibilityElement(children: .combine)
+                        }
+                        if model.log.count > Self.shown {
+                            Text("and \(Format.counted(model.log.count - Self.shown, "earlier one"))")
+                                .font(Font.pd.footnote)
+                                .foregroundStyle(Color.pd.inkSecondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, PDSpacing.s)
+                        }
+                    }
+                }
+                PDCard(padding: PDSpacing.m) {
+                    ActionRow(symbol: "trash", title: "Clear the list", isDestructive: true) {
                         Task {
                             await model.clearLog()
-                            toasts.show("Request log cleared")
+                            toasts.show("Cleared")
                         }
                     }
                 }
@@ -351,91 +454,27 @@ struct DevicesView: View {
         }
     }
 
-    // MARK: - Once something has paired
-
-    private var snippets: [ClientSnippet] {
-        ClientSnippets.all(
-            baseURL: model.serverURL ?? URL(string: "http://127.0.0.1")!,
-            apiKey: model.configuration.requiresAuth ? model.configuration.apiKey : nil,
-            model: model.loadedModelID ?? "your-model"
-        )
-    }
-
-    @ViewBuilder
-    private var connect: some View {
-        let list = snippets
-        let snippet = list.indices.contains(snippetIndex) ? list[snippetIndex] : list.first
-
-        YouSection(
-            "CONNECTED",
-            footnote: snippet?.note ?? "Point the tools on your laptop at the address above; the setup guide has the exact lines."
-        ) {
-            if model.configuration.requiresAuth {
-                RowShell(symbol: "key", title: "API key", detail: showKey ? nil : "Hidden until you ask") {
-                    Button(showKey ? "Hide" : "Show") { showKey.toggle() }
-                        .font(Font.pd.secondary.weight(.semibold))
-                        .foregroundStyle(Color.pd.accent)
-                        .accessibilityHint("Reveals the key other devices use to reach this phone")
-                }
-                if showKey {
-                    MonoBlock(text: breakableIdentifier(model.configuration.apiKey))
-                        .padding(.bottom, PDSpacing.xs)
-                }
-                ActionRow(symbol: "doc.on.doc", title: "Copy the key", detail: nil) {
-                    UIPasteboard.general.string = model.configuration.apiKey
-                    Haptics.success()
-                    toasts.show("Key copied")
-                }
-                RowDivider()
-            }
-
-            if let snippet {
-                MenuRow(
-                    symbol: "curlybraces",
-                    title: "For",
-                    detail: nil,
-                    selection: $snippetIndex,
-                    options: Array(list.enumerated()).map { ($0.offset, $0.element.title) }
-                )
-                MonoBlock(text: snippet.body, size: 11)
-                    .padding(.top, PDSpacing.xs)
-                HStack(spacing: PDSpacing.xs) {
-                    PillButton(title: "Copy", symbol: "doc.on.doc") {
-                        UIPasteboard.general.string = snippet.body
-                        Haptics.success()
-                        toasts.show("Copied for \(snippet.title)")
-                    }
-                    ShareLink(item: snippet.body) {
-                        HStack(spacing: PDSpacing.xs) {
-                            Image(systemName: "square.and.arrow.up")
-                                .font(.system(size: 14, weight: .regular))
-                            Text("Share").font(Font.pd.secondary.weight(.semibold))
-                        }
-                        .foregroundStyle(Color.pd.ink)
-                        .padding(.horizontal, PDSpacing.m)
-                        .frame(height: PDMetric.pillHeight)
-                        .background(Color.pd.chip, in: Capsule(style: .continuous))
-                        .overlay(Capsule(style: .continuous).strokeBorder(Color.pd.cardStroke, lineWidth: 1))
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(.top, PDSpacing.xs)
-            }
-        }
+    /// "Answered · 192.168.1.9 · Qwen3 1.7B". The brain by its name or not at
+    /// all — an id is what the client typed, not what the phone calls it.
+    private func subtitle(for entry: RequestLogEntry) -> String {
+        let brain = entry.model.flatMap { id in (model.installed + model.catalog).first { $0.id == id }?.displayName }
+        return [entry.outcome ?? "Answering…", entry.clientAddress ?? "this iPhone", brain]
+            .compactMap { $0 }
+            .joined(separator: " · ")
     }
 }
 
 // MARK: - Previews
 
-#Preview("Devices light") {
-    NavigationStack { DevicesView() }
+#Preview("Other devices light") {
+    NavigationStack { OtherDevicesView() }
         .environment(AppModel())
         .environment(Navigator())
         .environment(ToastCenter())
 }
 
-#Preview("Devices dark") {
-    NavigationStack { DevicesView() }
+#Preview("Other devices dark") {
+    NavigationStack { OtherDevicesView() }
         .environment(AppModel())
         .environment(Navigator())
         .environment(ToastCenter())

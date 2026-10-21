@@ -1,3 +1,4 @@
+import Combine
 import PocketdKit
 import SwiftUI
 
@@ -30,12 +31,14 @@ struct DeskModeView: View {
         return model.condition.isServing ? .pd.positive : .pd.caution
     }
 
+    /// Plain words in the small caps label. Never the condition's raw value:
+    /// "THERMAL" is an enum case, not something a person reads off a desk.
     private var statusWord: String {
         guard model.serverState.isRunning else {
-            if case .failed = model.serverState { return "FAILED" }
-            return "STOPPED"
+            if case .failed = model.serverState { return "Couldn't start" }
+            return "Stopped"
         }
-        return model.condition.isServing ? "SERVING" : model.condition.rawValue.uppercased()
+        return model.condition.statusWord
     }
 
     var body: some View {
@@ -47,41 +50,41 @@ struct DeskModeView: View {
                     Circle()
                         .fill(statusTint)
                         .frame(width: 7, height: 7)
-                    Text(statusWord)
+                    Text(statusWord.uppercased())
                         .font(Font.pd.label)
                         .tracking(1.4)
                         .foregroundStyle(statusTint)
                 }
 
                 if case let .running(host, port) = model.serverState {
+                    // A text style, so the one thing this screen exists to
+                    // show grows with the reader's text size like everything
+                    // else; the scale factor only keeps a long address on one
+                    // line on a narrow phone.
                     Text(host)
-                        .font(.system(size: 30, weight: .medium, design: .monospaced))
+                        .font(.system(.largeTitle, design: .monospaced, weight: .medium))
                         .foregroundStyle(.white.opacity(0.78))
                         .minimumScaleFactor(0.5)
                         .lineLimit(1)
                     Text(":\(String(port))")
                         .font(Font.pd.monoValue)
-                        .foregroundStyle(.white.opacity(0.42))
+                        .foregroundStyle(.white.opacity(0.55))
                 }
 
-                if let id = model.loadedModelID {
-                    Text(id)
+                // The brain other devices are answered by, by its name — or
+                // nothing. A raw id ("smollm2-360m") is what a client types,
+                // not what the phone calls it.
+                if let name = model.servedBrainName {
+                    Text(name)
                         .font(Font.pd.footnote)
-                        .foregroundStyle(.white.opacity(0.42))
+                        .foregroundStyle(.white.opacity(0.55))
                         .lineLimit(1)
-                        .truncationMode(.middle)
                         .padding(.horizontal, PDSpacing.xl)
                 }
 
-                if let recent = model.log.first, let rate = recent.tokensPerSecond {
-                    Text(String(format: "%.1f tok/s", rate))
-                        .font(Font.pd.footnote.monospaced())
-                        .foregroundStyle(.white.opacity(0.42))
-                }
-
-                Text("\(model.log.count) requests")
-                    .font(Font.pd.footnote.monospaced())
-                    .foregroundStyle(.white.opacity(0.28))
+                Text(Format.counted(model.log.count, "request"))
+                    .font(Font.pd.footnote)
+                    .foregroundStyle(.white.opacity(0.55))
 
                 if let error = model.lastServerError {
                     Text(error)
@@ -98,7 +101,7 @@ struct DeskModeView: View {
                 if showHint {
                     Text("Tap anywhere to exit")
                         .font(Font.pd.footnote)
-                        .foregroundStyle(.white.opacity(0.28))
+                        .foregroundStyle(.white.opacity(0.55))
                         .padding(.top, PDSpacing.xl)
                         .transition(.opacity)
                 }
@@ -107,10 +110,7 @@ struct DeskModeView: View {
             .animation(.easeInOut(duration: 8), value: drift)
         }
         .contentShape(Rectangle())
-        .onTapGesture {
-            showHint = false
-            model.deskMode = false
-        }
+        .onTapGesture(perform: exit)
         .onReceive(timer) { _ in
             // A slow wander, bounded well inside the safe area. Reduce Motion
             // means what it says: the whole point of the drift is burn-in, and
@@ -121,7 +121,26 @@ struct DeskModeView: View {
         }
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
-        .accessibilityLabel("Desk mode. \(statusWord). Double tap to exit.")
+        // One element that says everything on screen and leaves on a double
+        // tap, rather than a handful of mono fragments with no way out.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(spokenSummary)
+        .accessibilityHint("Exits desk mode")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { exit() }
+    }
+
+    private var spokenSummary: String {
+        var parts = ["Desk mode", statusWord]
+        if case let .running(host, port) = model.serverState { parts.append("\(host), port \(port)") }
+        if let name = model.servedBrainName { parts.append(name) }
+        parts.append(Format.counted(model.log.count, "request"))
+        return parts.joined(separator: ". ")
+    }
+
+    private func exit() {
+        showHint = false
+        model.deskMode = false
     }
 }
 

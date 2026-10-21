@@ -23,7 +23,6 @@ final class StoredDataAudit {
     /// leak that delete can never be called on".
     private(set) var orphanedModelFiles: [OrphanRow] = []
     private(set) var conversations = ConversationSummary()
-    private(set) var defaults: [DefaultsRow] = []
     private(set) var permissions: [PermissionRow] = []
     /// The last thing a delete actually did, in bytes, so the screen can prove
     /// the button was not decorative.
@@ -101,14 +100,6 @@ final class StoredDataAudit {
         var unreadableCount: Int { max(0, fileCount - readableCount) }
     }
 
-    struct DefaultsRow: Identifiable, Equatable {
-        var key: String
-        var summary: String
-        /// Written by iOS rather than by this app.
-        var isSystem: Bool
-        var id: String { key }
-    }
-
     struct PermissionRow: Identifiable, Equatable {
         var title: String
         var infoKey: String
@@ -144,13 +135,14 @@ final class StoredDataAudit {
             }
         }
 
-        /// Whether the row needs to catch the eye. "Not reported" does: it is
-        /// the honest answer and it is also the one a reader will assume is a
-        /// dodge unless it is given the weight of a warning and a reason.
+        /// Whether the row needs to catch the eye: only when Pocketd is
+        /// actually kept from something. "Not reported" is iOS's design, not a
+        /// problem, and nobody can act on it — four amber labels saying so
+        /// read as four warnings. Its row carries the reason instead.
         var isConcern: Bool {
             switch self {
-            case .granted, .notAsked, .unavailable: false
-            case .denied, .restricted, .addOnly, .neverReported: true
+            case .granted, .notAsked, .unavailable, .neverReported: false
+            case .denied, .restricted, .addOnly: true
             }
         }
     }
@@ -160,6 +152,9 @@ final class StoredDataAudit {
         var host: String
         var sends: String
         var when: String
+        /// The one connection the usage-count switch governs, so the details
+        /// page can anchor that promise's proof on it.
+        var carriesUsageCounts = false
         var id: String { host + when }
     }
 
@@ -167,66 +162,135 @@ final class StoredDataAudit {
 
     /// Every outbound connection this app makes.
     ///
-    /// Two of the three come from a grep of the whole repository for
-    /// `URLSession` and `URLRequest`, both to Hugging Face, both about model
-    /// files. Inference never calls out — the weights are a file on this
-    /// phone. The HTTP server does: `GET /api/search`, `POST /api/pull` and
-    /// `POST /api/models/add` all reach Hugging Face because a network peer
-    /// asked them to, which is why both of those rows say "or when a paired
-    /// device asks".
+    /// Two come from a grep of the whole repository for `URLSession` and
+    /// `URLRequest`, both to Hugging Face, both about brain files. Thinking
+    /// never calls out — the brain is a file on this phone, or Apple's model,
+    /// which also runs on it. The server does call out, but only because a
+    /// device on the Wi-Fi asked it to search or to fetch a brain, which is
+    /// why both rows say so.
     ///
-    /// The third is the analytics SDK, and it is written out here precisely
-    /// because that grep cannot find it: the requests are made inside a
-    /// dependency, so nothing in this repository's own source would ever
-    /// mention them. A connection nobody remembered to type is exactly how
-    /// this list stopped being true the first time.
+    /// The third is the usage-count library, and it is written out here
+    /// precisely because that grep cannot find it: its requests are made inside
+    /// a dependency, so nothing in this repository's own source mentions them.
+    /// A connection nobody remembered to type is exactly how this list stopped
+    /// being true the first time.
     ///
     /// Hardcoded rather than observed, and that is the weakness of this
     /// section: it is a claim about the source, checked when it was written.
-    /// The claim is worth making anyway because it is the one thing a user
-    /// most wants to know and cannot find out for themselves.
+    /// `StoredDataAuditRulesTests` reads this file for promises the shipped
+    /// events disprove.
     let destinations: [Destination] = [
         Destination(
-            host: "huggingface.co",
-            sends: "The name of the repository you searched for, and this phone's IP address.",
-            when: "Only while a model search is open, or when a paired device asks this phone to search."
+            host: "Hugging Face, for brain search",
+            sends: "The name you searched for, and this iPhone's network address.",
+            when: "Only while you search for a brain, or a device on your Wi-Fi asks this iPhone to."
         ),
         Destination(
-            host: "huggingface.co, redirecting to its CDN",
-            sends: "Which model file you are fetching, and this phone's IP address. No account, no token, no identifier of yours.",
-            when: "Only while a model is downloading."
+            host: "Hugging Face, for brain downloads",
+            sends: "Which brain file to send, and this iPhone's network address. No account and nothing about you.",
+            when: "Only while a brain downloads."
         ),
         Destination(
-            host: "api.mixpanel.com",
-            sends: "Usage events, and only the \(StoredDataAudit.analyticsEventCount) listed in AnalyticsEvent.swift: the app opened, a model downloaded or loaded or failed to, a message sent, the server started or stopped, a client answered. Each carries a model id, a size, a duration, a bucketed RAM class or a failure reason, and an identifier for this install. Never a message of yours, never the model's reply, never a filename, an address, or anything from Health, Calendar or Reminders.",
-            when: "While you use the app, unless you have turned Usage events off in Settings. It is on by default."
+            host: "Mixpanel, for usage counts",
+            sends: "Counts of \(StoredDataAudit.analyticsEventCount) kinds of event, such as the app opening, a brain loading or a question being asked. Never what you ask, what Pocketd answers, or anything from Health, Calendar or Reminders.",
+            when: "While you use Pocketd, unless you turn off Share anonymous usage counts. It is on at first.",
+            carriesUsageCounts: true
         ),
     ]
 
-    /// True of what leaves, and true of the things people assume leave.
+    /// What one usage count can carry, said once, for the row above.
     ///
-    /// The third line used to promise that this app measured nothing, reported
-    /// nothing, and had no server anywhere to receive any of it. That was true
-    /// when it was written and stopped being true the day usage events
-    /// shipped, and a screen whose whole argument is that every sentence on it
-    /// can be checked cannot carry one that fails the check. What replaced it
-    /// is the part of the promise that survived, stated as narrowly as it is
-    /// actually kept.
-    let assurances: [String] = [
-        "Inference is local. Nothing you type in Chat, and nothing a paired device sends, is transmitted anywhere — it goes to a file of weights on this phone and comes back.",
-        "The HTTP server never calls out on its own initiative. The only requests it makes are the two to Hugging Face above, and only when a paired device asks it to search or to pull a model.",
-        "Your conversations, the model's replies and everything read from — or written to — Health, Calendar and Reminders stay on this phone. Usage events are the one exception and they cannot carry any of it: AnalyticsSchema lists the property names an event may use, and a test refuses the build if one ever names a prompt, a file, an address or a health figure.",
-        "There is no crash reporting, and no account, so nothing sent is joined to anything you do anywhere else. Usage events are shared with Mixpanel, who process them for us — that is what the third row above means. Nothing is sold.",
-    ]
+    /// Narrow on purpose: Pocketd's code lists every field a count may carry,
+    /// and a test fails the build if one is ever named after a prompt, a
+    /// message or an answer (`AnalyticsSchema`). This is that list in words.
+    let usageCountFields = "Each count can carry a brain's name, a size or a time, a reason something failed, and a random number for this install. Never your name or anything you typed."
 
     /// The awkward corners, which belong on a page like this more than the
-    /// reassurances do.
+    /// reassurances do. Trimmed to the ones a person can act on or would
+    /// want to know; the source has the rest.
     let caveats: [String] = [
-        "While the server is running, this phone announces itself over Bonjour to everyone on the same Wi-Fi: its device name, this app's version, whether a key is required, and the id of the loaded model. That is how a laptop finds it without typing an address. It never leaves the local network.",
-        "Every download address is built as huggingface.co, then the repository and filename, and the CDN it redirects to serves the bytes. Adding a model by search does not change that: the search API takes a repository and a filename, never a host. The record type carries a field that could point somewhere else, and nothing in this app or its HTTP API sets it.",
-        "Opening a model's page hands the address to Safari. What Safari then sends is Safari's business, with Safari's cookies.",
-        "Copying the API key or the server address puts it on the system pasteboard. If Handoff is on, Universal Clipboard forwards the pasteboard to your other Apple devices through iCloud.",
+        "While Use from your laptop is on, this iPhone shows its name, Pocketd's version and its brain to devices on the same Wi-Fi, so a laptop can find it. That never leaves your network.",
+        "Opening a brain's web page hands the address to Safari, which then works as Safari always does.",
+        "Copying the address or the key puts it on the clipboard. If Handoff is on, iOS shares the clipboard with your other Apple devices.",
     ]
+
+    // MARK: - Promises
+
+    /// What each one-line promise on the Privacy page points to, and the
+    /// section of the details page that proves it.
+    enum Proof: String, Hashable, CaseIterable, Identifiable {
+        case account
+        case asking
+        case otherDevices
+        case downloads
+        case usage
+        case storage
+        case permissions
+        case deleting
+
+        var id: String { rawValue }
+
+        /// The details page's label for the section.
+        var heading: String {
+            switch self {
+            case .account: "No account"
+            case .asking: "What you ask"
+            case .otherDevices: "Other devices"
+            case .downloads: "What leaves this iPhone"
+            case .usage: "Usage counts"
+            case .storage: "On this iPhone"
+            case .permissions: "Permissions"
+            case .deleting: "Delete everything"
+            }
+        }
+
+        /// The sentence the section opens with, when it has one beyond its
+        /// own rows. Each is the promise restated as narrowly as it is kept.
+        var statement: String? {
+            switch self {
+            case .account:
+                "Pocketd has no account, no sign-in and no server of its own. No crash reports, and nothing ties what you do here to you elsewhere."
+            case .asking:
+                "Pocketd thinks on this iPhone, with a downloaded brain or Apple's built-in one. Your conversations, and what Pocketd reads from Calendar, Reminders and Health, stay here."
+            case .otherDevices:
+                "With Use from your laptop on, devices on your Wi-Fi can ask Pocketd questions. They never see your conversations, and cannot read your calendar, reminders or health."
+            case .downloads:
+                "Three connections, and nothing else. None of them carries what you ask or what Pocketd reads."
+            case .usage:
+                "Usage counts are shared with Mixpanel, who process them for us. Nothing is sold."
+            case .storage, .permissions, .deleting:
+                nil
+            }
+        }
+    }
+
+    /// One line on the Privacy page, with the proof it opens.
+    struct Promise: Identifiable {
+        let symbol: String
+        let title: String
+        var detail: String?
+        let proof: Proof
+        var id: String { title }
+    }
+
+    /// WHO CAN SEE IT.
+    static let whoCanSeeIt: [Promise] = [
+        Promise(symbol: "person.crop.circle", title: "Only you. There's no account", proof: .account),
+        Promise(symbol: "bubble.left", title: "Nothing you ask is sent anywhere", proof: .asking),
+        Promise(symbol: "laptopcomputer", title: "Other devices can't read your calendar, reminders or health", proof: .otherDevices),
+    ]
+
+    /// The first line of WHAT LEAVES THE PHONE; the usage-count switch is the
+    /// second, drawn by the page because it is a control.
+    static let brainDownloads = Promise(
+        symbol: "arrow.down.circle",
+        title: "Brain downloads",
+        detail: "Only the brain you pick, from Hugging Face. Nothing about you goes with it.",
+        proof: .downloads
+    )
+
+    /// Under the usage-count switch: what it shares, in one line.
+    static let usageCountsDetail = "Which features get used. Never what you ask or what Pocketd reads."
 
     // MARK: - Measuring
 
@@ -285,7 +349,6 @@ final class StoredDataAudit {
             directory: modelsDirectory
         )
         conversations = Self.conversationSummary(files: walk.conversationFiles, readable: model.history)
-        defaults = Self.defaultsRows()
         permissions = Self.permissionRows()
     }
 
@@ -385,32 +448,6 @@ final class StoredDataAudit {
         return summary
     }
 
-    /// What is in this app's own preferences file.
-    ///
-    /// Read from the persistent domain rather than by listing the key names
-    /// this app is known to use. The key names live in a private enum in
-    /// `AppModel`; restating them here would mean a setting added tomorrow is
-    /// stored, is real, and is invisible on the one screen that promises to
-    /// show everything.
-    private static func defaultsRows() -> [DefaultsRow] {
-        guard let bundleID = Bundle.main.bundleIdentifier,
-              let domain = UserDefaults.standard.persistentDomain(forName: bundleID)
-        else { return [] }
-
-        return domain.keys.sorted().map { key in
-            let value = domain[key]
-            let isSystem = key.hasPrefix("Apple") || key.hasPrefix("NS") || key.hasPrefix("com.apple")
-                || key.hasPrefix("AK") || key.hasPrefix("WebKit") || key.hasPrefix("METAL")
-            return DefaultsRow(
-                key: key,
-                summary: storedValueSummary(value, forKey: key),
-                isSystem: isSystem
-            )
-        }
-        // This app's own settings first: they are the ones the promise is about.
-        .sorted { ($0.isSystem ? 1 : 0, $0.key) < ($1.isSystem ? 1 : 0, $1.key) }
-    }
-
     /// Every permission this app declares, taken from its own Info.plist.
     ///
     /// Driven by the bundle rather than by a list written here, so a
@@ -437,14 +474,14 @@ final class StoredDataAudit {
                     // leave standing on the one screen whose whole purpose is
                     // being believed, so this one says what changed and who is
                     // allowed to change it.
-                    note: "Read, and add events when you ask — only for the assistant on this phone, never for a request that arrived over the network, and never for a scheduled task running without you."
+                    note: "Reads events, and adds one when you ask on this iPhone. Routines only read; other devices can do neither."
                 ))
             case "NSRemindersFullAccessUsageDescription":
                 rows.append(PermissionRow(
                     title: "Reminders",
                     infoKey: key,
                     state: state(for: EventAccess.authorization(for: .reminders)),
-                    note: "Read, and add or tick off reminders when you ask — only for the assistant on this phone, never for a request that arrived over the network, and never for a scheduled task running without you. Nothing is ever deleted."
+                    note: "Reads reminders, and adds or ticks one off when you ask on this iPhone. Routines only read; other devices can do neither. Nothing is deleted."
                 ))
             case "NSHealthShareUsageDescription":
                 rows.append(PermissionRow(
@@ -456,7 +493,7 @@ final class StoredDataAudit {
                     // deliberately, so that an app cannot tell "you denied me"
                     // apart from "you have no data of that type". No app can
                     // show you this, and one that claims to is guessing.
-                    note: "iOS never tells an app whether its request to read Health was allowed, so this screen cannot show it. Health > Data Access & Devices > Pocketd has the truth."
+                    note: "iOS never tells an app whether it may read Health, so this page can't show it. Settings › Privacy & Security › Health › Pocketd has the answer."
                 ))
             default:
                 rows.append(PermissionRow(
@@ -468,8 +505,8 @@ final class StoredDataAudit {
                     // where the explanation belongs. The declared reason
                     // follows it, because it is what the user was shown.
                     note: [
-                        "This app declares this permission and nothing on this screen asks iOS for its state, so this screen will not claim one.",
                         info[key] as? String,
+                        "This page doesn't ask iOS whether it was allowed, so it won't claim either.",
                     ]
                     .compactMap(\.self)
                     .joined(separator: " ")
@@ -485,7 +522,7 @@ final class StoredDataAudit {
                 title: "Local network",
                 infoKey: "NSBonjourServices",
                 state: .neverReported,
-                note: "iOS offers no way to ask whether local network access was allowed; an app finds out by being ignored. Advertised as \(services.joined(separator: " and ")) while the server is running."
+                note: "Lets a laptop on your Wi-Fi find this iPhone while Use from your laptop is on. iOS never tells an app whether it was allowed."
             ))
         }
         return rows
@@ -741,19 +778,10 @@ final class StoredDataAudit {
             return false
         }
     }
-
-    /// What survives a delete of everything, split by who is actually holding
-    /// it, because "nothing inside this app can remove these" is true of one
-    /// group and false of the other two.
-    var survivesDeleteEverything: [StoredDataArea] {
-        guard let survey else { return [] }
-        return (systemOwnedAreas + unnamedAreas + [survey.area(.preferences)])
-            .filter { !$0.tally.isEmpty }
-    }
 }
 
 extension StoredDataAudit {
-    /// How many usage events exist, spelled out, for the disclosure above.
+    /// How many usage events exist, in digits, for the disclosure above.
     ///
     /// Derived rather than typed, because this number has now gone stale twice
     /// in two different files. The README said "fifteen" when there were
@@ -766,14 +794,9 @@ extension StoredDataAudit {
     /// fails the build for an event with no entry, so this cannot drift below
     /// the truth, and `everyCaseIsSampled` stops it drifting above.
     ///
-    /// `en_GB` explicitly. A spelled-out number follows the device's language,
-    /// and an English sentence with "einundzwanzig" in the middle of it is a
-    /// worse outcome than the digits would have been.
+    /// Digits, not words: numbers on screen are never spelled out (a spelled
+    /// number also followed the device's language mid-English-sentence).
     static var analyticsEventCount: String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .spellOut
-        formatter.locale = Locale(identifier: "en_GB")
-        let count = AnalyticsSchema.allowedProperties.count
-        return formatter.string(from: NSNumber(value: count)) ?? "\(count)"
+        Format.count(AnalyticsSchema.allowedProperties.count)
     }
 }

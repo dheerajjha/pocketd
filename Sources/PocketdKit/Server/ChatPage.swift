@@ -117,7 +117,7 @@ enum ChatPage {
 
     <dialog id="pair">
       <h3 style="margin:0 0 4px">Connect to your phone</h3>
-      <div style="color:var(--dim);font-size:14px">Enter the six digits shown on the Pocketd Server tab.</div>
+      <div style="color:var(--dim);font-size:14px">Enter the six digits Pocketd shows on your phone, under You › Use from your laptop.</div>
       <input id="code" inputmode="numeric" maxlength="6" placeholder="000000">
       <div class="err" id="perr"></div>
       <div class="row" style="margin-top:0">
@@ -125,8 +125,8 @@ enum ChatPage {
         <button id="pcancel">Cancel</button>
       </div>
       <div style="color:var(--dim);font-size:13px;margin-top:14px">
-        No code on the phone? Open Pocketd, go to the Server tab, and tap
-        <b>New code</b>.
+        No code on the phone? In Pocketd, open You › Use from your laptop and
+        tap <b>New code</b>.
       </div>
     </dialog>
 
@@ -355,8 +355,9 @@ enum ChatPage {
         // A turn that failed before producing anything is not context.
         if (m.role === "assistant" && !m.content) continue;
         if (m.images && m.images.length) {
-          // OpenAI's typed content parts. Ollama's shape is a flat images[]
-          // array instead; the server accepts both, this page speaks OpenAI.
+          // The /v1 dialect's typed content parts. The /api dialect's shape
+          // is a flat images[] array instead; the server accepts both, and
+          // this page speaks /v1.
           const parts = [{ type: "text", text: m.content }];
           for (const src of m.images) parts.push({ type: "image_url", image_url: { url: src } });
           body.messages.push({ role: m.role, content: parts });

@@ -64,18 +64,18 @@ public enum ModelDirectoryAudit {
                 guard isAbandoned(id) else { return nil }
                 return OrphanedModelFile(
                     file: file,
-                    explanation: "Weights for \"\(id)\", which is not in the list of installed models and is not downloading. Nothing in this app can load it or free it."
+                    explanation: "Weights for a brain that is no longer installed and is not downloading. Nothing else in Pocketd can use or remove them."
                 )
             case let .projector(id):
                 guard isAbandoned(id) else { return nil }
                 return OrphanedModelFile(
                     file: file,
-                    explanation: "An image projector for \"\(id)\", which is not in the list of installed models and is not downloading. Nothing in this app can load it or free it."
+                    explanation: "The image part of a brain that is no longer installed and is not downloading. Nothing else in Pocketd can use or remove it."
                 )
             case .unrecognised:
                 return OrphanedModelFile(
                     file: file,
-                    explanation: "Not a file this app knows how to write."
+                    explanation: "A file Pocketd doesn't recognise in its brains folder."
                 )
             }
         }
@@ -129,10 +129,10 @@ public struct DeletionPlan: Sendable, Equatable {
     /// against a copy of the wording would stop matching, silently, the day
     /// the wording changed.
     public enum EntryName {
-        public static let models = "every model"
-        public static let orphans = "model files nothing can load"
+        public static let models = "every downloaded brain"
+        public static let orphans = "brain files nothing can load"
         public static let conversations = "every conversation"
-        public static let scheduledTasks = "every scheduled task and its results"
+        public static let scheduledTasks = "every routine and its results"
         public static let dailyBrief = "today's brief"
         public static let partialDownloads = "every unfinished download"
         public static let networkCache = "the network cache"
@@ -280,12 +280,14 @@ public enum DeletionNarrative {
             // The "freed" line afterwards is measured from the container, so it
             // will fall short of the number above by whatever iOS has not
             // released yet. Better said here than left as an unexplained gap.
-            sentences.append("iOS owns the cache files themselves, so the last of that number can take a while to come back.")
+            sentences.append("iOS frees the last of the cache in its own time.")
         }
-        sentences.append("The API key is left alone, so devices you have already paired keep working — replace it above if that is what you want.")
+        // The key is a setting, not something Pocketd holds about anyone, and
+        // a laptop that loses it has to pair again from the phone.
+        sentences.append("Your laptop stays connected; replacing the key in Server settings ends that.")
 
         if !systemOwnedTitles.isEmpty {
-            sentences.append("It does not touch \(joined(systemOwnedTitles)) — nothing inside this app can, and deleting the app is the only thing that removes them.")
+            sentences.append("It can't touch \(joined(systemOwnedTitles)) — nothing inside this app can; deleting the app removes them.")
         }
         if preferencesBytes > 0, let limitation = StoredDataKind.preferences.disposal.limitation {
             // Its own sentence, from its own disposal. Appending it to the one
@@ -298,8 +300,28 @@ public enum DeletionNarrative {
             // bytes are in this app's own folder and it could remove them; it
             // will not, because it cannot say what they are, and that is a
             // different claim from "nothing inside this app can".
-            sentences.append("It also leaves \(joined(unnamedTitles)) — \(formattedByteCount(unnamedBytes)) this screen has no name for and so will not delete.")
+            sentences.append("It also leaves \(joined(unnamedTitles)) — \(formattedByteCount(unnamedBytes)) this page has no name for and so will not delete.")
         }
+        return sentences
+    }
+
+    /// What the confirmation dialog says: what goes, what stays and why, and
+    /// that there is nothing to restore from. The footer on the details page
+    /// says the rest — what iOS keeps, what this page cannot name — and the
+    /// two are built from the one plan, so the dialog cannot quote a number the
+    /// button does not free.
+    public static func confirmation(plan: DeletionPlan) -> [String] {
+        var sentences: [String] = []
+        if plan.included.isEmpty {
+            sentences.append("There is nothing here left for this screen to delete.")
+        } else {
+            sentences.append("Removes \(formattedByteCount(plan.byteCount)): \(joined(plan.included.map(\.name))).")
+        }
+        for entry in plan.skipped {
+            guard let reason = entry.skippedBecause else { continue }
+            sentences.append("It leaves \(entry.name) — \(formattedByteCount(entry.byteCount)) — because \(reason).")
+        }
+        sentences.append("Nothing was ever uploaded, so there is no copy anywhere to bring back.")
         return sentences
     }
 

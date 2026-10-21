@@ -75,6 +75,11 @@ enum ServerSentEvents {
 
 extension HTTPResponse {
     /// A chunked response whose body is produced as it is generated.
+    ///
+    /// The producer owns its own lifetime and outlives the client: right for a
+    /// download's progress, where a laptop that hangs up should not cancel a
+    /// multi-gigabyte transfer the phone is halfway through. Wrong for
+    /// generation — see `streaming(headers:stoppingWhenClientLeaves:)`.
     static func streaming(
         headers: HTTPHeaders,
         producing: @escaping @Sendable (AsyncStream<Data>.Continuation) -> Void
@@ -87,4 +92,45 @@ extension HTTPResponse {
             body: HTTPBodySequence(from: DataStreamSequence(stream: stream))
         )
     }
+
+    /// A chunked response whose producer is cancelled the moment nobody is
+    /// reading it any more.
+    ///
+    /// Every generation route used to start its own unstructured `Task` and
+    /// hand it the continuation, and nothing ever told that task the client
+    /// had gone. A laptop that closed the tab mid-answer left the phone
+    /// generating to the last token — about 650 % CPU for 40 seconds, measured
+    /// — while holding the one admission slot, so the next request got a 503.
+    ///
+    /// The task is owned here instead, and cancelled from the stream's
+    /// termination. When FlyingFox stops reading the body (a write to the
+    /// closed socket fails, or its own task is cancelled) the stream's consumer
+    /// side is torn down, which terminates the stream as `.cancelled`; the
+    /// producer's `for try await` over the engine then ends, which cancels the
+    /// engine's own stream, which is what stops the work. Only `.cancelled`:
+    /// `.finished` is the producer's own `finish()`, and cancelling it there
+    /// would race the bookkeeping it still has to do — releasing the slot,
+    /// closing the log entry.
+    static func streaming(
+        headers: HTTPHeaders,
+        stoppingWhenClientLeaves producing: @escaping @Sendable (AsyncStream<Data>.Continuation) async -> Void
+    ) -> HTTPResponse {
+        let (stream, continuation) = AsyncStream<Data>.makeStream(bufferingPolicy: .unbounded)
+        let producer = Task { await producing(continuation) }
+        continuation.onTermination = { termination in
+            if case .cancelled = termination { producer.cancel() }
+        }
+        return HTTPResponse(
+            statusCode: .ok,
+            headers: headers,
+            body: HTTPBodySequence(from: DataStreamSequence(stream: stream))
+        )
+    }
+}
+
+extension InferenceServer {
+    /// nginx's "client closed request": what the log records for a streamed
+    /// answer whose reader left before the end. Never sent — there is nobody
+    /// left to send it to — and not a failure of the phone's.
+    static let clientClosedRequest = 499
 }

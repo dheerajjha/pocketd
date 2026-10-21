@@ -279,4 +279,84 @@ struct NewCodeTests {
         _ = await session.open()
         #expect(await session.snapshot().lastFailureAddress == "10.0.0.5")
     }
+
+    /// The phone hid its pairing code — and the New code button with it — once
+    /// anything had paired, so a second laptop, or the first one after its
+    /// browser forgot the key, had no way in. The session itself must keep
+    /// handing out codes that work for as long as anyone asks.
+    @Test("a second device can pair after the first, as often as a new code is asked for")
+    func repairsAfterPairing() async {
+        let session = PairingSession(store: .init(defaults: nil))
+        for round in 1...3 {
+            let code = await session.open()
+            #expect(await session.snapshot().ending == nil, "a fresh code carries no old ending")
+            #expect(await session.redeem(code, from: "192.168.1.\(round)") == .paired, "round \(round)")
+            let after = await session.snapshot()
+            #expect(after.isOpen == false, "a code is single-use")
+            #expect(after.ending == .paired)
+            #expect(after.hasPaired)
+        }
+    }
+
+    @Test("a burned code says so, and the next code works")
+    func burnedThenRenewed() async {
+        let session = PairingSession(store: .init(defaults: nil))
+        let burned = await session.open()
+        let wrong = burned == "111111" ? "222222" : "111111"
+        for _ in 0..<PairingSession.maxAttempts {
+            _ = await session.redeem(wrong, from: "10.0.0.9")
+        }
+        let dead = await session.snapshot()
+        #expect(dead.isOpen == false)
+        #expect(dead.ending == .tooManyTries)
+
+        let fresh = await session.open()
+        let renewed = await session.snapshot()
+        // The total stays (it is a record of who tried); what the screen keys
+        // its warning on is `ending`, which a new code clears.
+        #expect(renewed.failureCount == PairingSession.maxAttempts)
+        #expect(renewed.ending == nil)
+        #expect(renewed.attemptsRemaining == PairingSession.maxAttempts)
+        #expect(await session.redeem(fresh, from: nil) == .paired)
+    }
+
+    @Test("a code tried after its time says it expired, and is live only until then")
+    func expiryIsReported() async {
+        nonisolated(unsafe) var clock = Date(timeIntervalSince1970: 2_000_000)
+        let session = PairingSession(now: { clock }, store: .init(defaults: nil))
+        let code = await session.open()
+        #expect(await session.snapshot().isLive(at: clock))
+        #expect(await session.snapshot().isLive(at: clock.addingTimeInterval(PairingSession.lifetime + 1)) == false)
+
+        clock = clock.addingTimeInterval(PairingSession.lifetime + 1)
+        #expect(await session.redeem(code, from: nil) == .expired)
+        #expect(await session.snapshot().ending == .expired)
+        #expect(await session.snapshot().isLive(at: clock) == false)
+    }
+
+    @Test("stopping the server takes the code away without calling it a failure")
+    func closeHasNoEnding() async {
+        let session = PairingSession(store: .init(defaults: nil))
+        _ = await session.open()
+        await session.close()
+        let snapshot = await session.snapshot()
+        #expect(snapshot.isOpen == false)
+        #expect(snapshot.ending == nil)
+    }
+
+    @Test("two laptops pair over HTTP, one code each")
+    func twoDevicesOverHTTP() async throws {
+        let harness = try await TestServer.start()
+        defer { Task { await harness.stop() } }
+
+        for _ in 0..<2 {
+            let code = await harness.server.openPairing()
+            let (status, data) = try await harness.send(try harness.request(
+                "POST", "/pair", json: InferenceServer.PairRequest(code: code), key: .some(nil)
+            ))
+            #expect(status == 200)
+            let body = try JSONDecoder().decode(InferenceServer.PairedResponse.self, from: data)
+            #expect(body.apiKey == harness.apiKey)
+        }
+    }
 }

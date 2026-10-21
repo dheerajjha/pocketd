@@ -194,95 +194,96 @@ extension InferenceServer {
         let completionID = "chatcmpl-\(UUID().uuidString.prefix(24))"
         let created = Int(Date().timeIntervalSince1970)
 
-        return HTTPResponse.streaming(headers: headers) { [weak self] continuation in
-            Task {
-                let started = ContinuousClock.now
-                let encoder = JSONEncoder()
-                var usage = TokenUsage()
-                var status = 200
+        return HTTPResponse.streaming(headers: headers, stoppingWhenClientLeaves: { [weak self] continuation in
+            let started = ContinuousClock.now
+            let encoder = JSONEncoder()
+            var usage = TokenUsage()
+            var status = 200
 
-                func chunk(delta: OpenAI.Delta, finish: String? = nil) -> OpenAI.ChatCompletionChunk {
-                    OpenAI.ChatCompletionChunk(
-                        id: completionID,
-                        created: created,
-                        model: model.modelIDForWire,
-                        choices: [OpenAI.ChunkChoice(index: 0, delta: delta, finish_reason: finish)],
-                        system_fingerprint: PocketdKit.systemFingerprint
-                    )
+            func chunk(delta: OpenAI.Delta, finish: String? = nil) -> OpenAI.ChatCompletionChunk {
+                OpenAI.ChatCompletionChunk(
+                    id: completionID,
+                    created: created,
+                    model: model.modelIDForWire,
+                    choices: [OpenAI.ChunkChoice(index: 0, delta: delta, finish_reason: finish)],
+                    system_fingerprint: PocketdKit.systemFingerprint
+                )
+            }
+
+            do {
+                // The first chunk carries the role and no content, which is
+                // what the OpenAI SDKs use to open the assistant message.
+                if let frame = try? ServerSentEvents.frame(json: chunk(delta: OpenAI.Delta(role: "assistant")), encoder: encoder) {
+                    continuation.yield(frame)
                 }
-
-                do {
-                    // The first chunk carries the role and no content, which is
-                    // what the OpenAI SDKs use to open the assistant message.
-                    if let frame = try? ServerSentEvents.frame(json: chunk(delta: OpenAI.Delta(role: "assistant")), encoder: encoder) {
-                        continuation.yield(frame)
-                    }
-                    for try await event in try await engine.generate(generation) {
-                        switch event {
-                        case .token(let text):
-                            if let frame = try? ServerSentEvents.frame(json: chunk(delta: OpenAI.Delta(content: text)), encoder: encoder) {
-                                continuation.yield(frame)
-                            }
-                        case .toolCallStarted, .answerCard:
-                            // Server-side detail. The tool runs here and its
-                            // result reaches the client only as text, so there
-                            // is nothing honest to put in an OpenAI delta —
-                            // `tool_calls` would tell the client to execute
-                            // something it has no tool for, and a card is a
-                            // rendering only the app on the phone can draw.
-                            break
-                        case .finished(let reason, let tokenUsage):
-                            usage = tokenUsage
-                            if let frame = try? ServerSentEvents.frame(json: chunk(delta: OpenAI.Delta(), finish: reason.rawValue), encoder: encoder) {
-                                continuation.yield(frame)
-                            }
+                for try await event in try await engine.generate(generation) {
+                    switch event {
+                    case .token(let text):
+                        if let frame = try? ServerSentEvents.frame(json: chunk(delta: OpenAI.Delta(content: text)), encoder: encoder) {
+                            continuation.yield(frame)
                         }
-                    }
-                    // Per the OpenAI streaming spec the usage chunk carries an
-                    // empty `choices` array, and it comes after the chunk that
-                    // reported the finish reason.
-                    if includeUsage {
-                        let final = OpenAI.ChatCompletionChunk(
-                            id: completionID,
-                            created: created,
-                            model: model.modelIDForWire,
-                            choices: [],
-                            usage: OpenAI.Usage(usage),
-                            system_fingerprint: PocketdKit.systemFingerprint
-                        )
-                        if let frame = try? ServerSentEvents.frame(json: final, encoder: encoder) {
+                    case .toolCallStarted, .answerCard:
+                        // Server-side detail. The tool runs here and its
+                        // result reaches the client only as text, so there
+                        // is nothing honest to put in an OpenAI delta —
+                        // `tool_calls` would tell the client to execute
+                        // something it has no tool for, and a card is a
+                        // rendering only the app on the phone can draw.
+                        break
+                    case .finished(let reason, let tokenUsage):
+                        usage = tokenUsage
+                        if let frame = try? ServerSentEvents.frame(json: chunk(delta: OpenAI.Delta(), finish: reason.rawValue), encoder: encoder) {
                             continuation.yield(frame)
                         }
                     }
-                    continuation.yield(ServerSentEvents.done)
-                } catch {
-                    // The status line is long gone by the time a mid-stream
-                    // failure happens, so the only honest signal left is an
-                    // error event in the stream itself.
-                    status = 500
-                    let body = OpenAI.ErrorResponse(error: OpenAI.ErrorBody(
-                        message: String(describing: error), type: "server_error", code: nil
-                    ))
-                    if let frame = try? ServerSentEvents.frame(json: body, encoder: encoder) {
+                }
+                // Per the OpenAI streaming spec the usage chunk carries an
+                // empty `choices` array, and it comes after the chunk that
+                // reported the finish reason.
+                if includeUsage {
+                    let final = OpenAI.ChatCompletionChunk(
+                        id: completionID,
+                        created: created,
+                        model: model.modelIDForWire,
+                        choices: [],
+                        usage: OpenAI.Usage(usage),
+                        system_fingerprint: PocketdKit.systemFingerprint
+                    )
+                    if let frame = try? ServerSentEvents.frame(json: final, encoder: encoder) {
                         continuation.yield(frame)
                     }
-                    continuation.yield(ServerSentEvents.done)
                 }
-
-                continuation.finish()
-                await self?.endRequest()
-                let elapsed = started.duration(to: .now).timeInterval
-                let finalStatus = status
-                let finalUsage = usage
-                await log.update(id: logID) { entry in
-                    entry.statusCode = finalStatus
-                    entry.model = model.id
-                    entry.promptTokens = finalUsage.promptTokens
-                    entry.completionTokens = finalUsage.completionTokens
-                    entry.duration = elapsed
+                continuation.yield(ServerSentEvents.done)
+            } catch {
+                // The status line is long gone by the time a mid-stream
+                // failure happens, so the only honest signal left is an
+                // error event in the stream itself.
+                status = 500
+                let body = OpenAI.ErrorResponse(error: OpenAI.ErrorBody(
+                    message: String(describing: error), type: "server_error", code: nil
+                ))
+                if let frame = try? ServerSentEvents.frame(json: body, encoder: encoder) {
+                    continuation.yield(frame)
                 }
+                continuation.yield(ServerSentEvents.done)
             }
-        }
+
+            // The client hung up and the generation was cancelled under
+            // it: logged as such, not as an answer it never received.
+            if Task.isCancelled { status = InferenceServer.clientClosedRequest }
+            continuation.finish()
+            await self?.endRequest()
+            let elapsed = started.duration(to: .now).timeInterval
+            let finalStatus = status
+            let finalUsage = usage
+            await log.update(id: logID) { entry in
+                entry.statusCode = finalStatus
+                entry.model = model.id
+                entry.promptTokens = finalUsage.promptTokens
+                entry.completionTokens = finalUsage.completionTokens
+                entry.duration = elapsed
+            }
+        })
     }
 
     func handleCompletions(_ request: HTTPRequest) async -> HTTPResponse {

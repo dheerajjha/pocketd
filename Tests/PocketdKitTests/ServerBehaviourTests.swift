@@ -22,7 +22,8 @@ struct ServerBehaviourTests {
     @Test("refuses a second concurrent generation instead of thrashing the GPU")
     func admissionControl() async throws {
         // A slow engine keeps the first request in flight long enough for the
-        // second to arrive while it is still generating.
+        // second to arrive while it is still generating: 16 chunks at 120 ms is
+        // about two seconds of holding the slot.
         let harness = try await TestServer.start(
             engine: EchoEngine(chunkSize: 1, delay: .milliseconds(120))
         )
@@ -30,16 +31,103 @@ struct ServerBehaviourTests {
 
         let body = OpenAI.ChatCompletionRequest(
             model: "echo",
-            messages: [OpenAI.Message(role: "user", content: "abcdefgh")],
+            messages: [OpenAI.Message(role: "user", content: "abcdefghijklmnop")],
             stream: false
         )
         async let first = harness.send(try harness.request("POST", "/v1/chat/completions", json: body))
-        try await Task.sleep(for: .milliseconds(150))
+        // Waits for the first request to actually hold the slot rather than
+        // sleeping a fixed 150 ms. Under load (other builds on this Mac) the
+        // first request sometimes had not reached the admission gate by then,
+        // so the second was admitted first and both expectations flipped
+        // together — a test of the scheduler, not of the server.
+        let admitted = try await waitUntil(timeout: .seconds(10)) {
+            await harness.server.activeRequestCount() == 1
+        }
+        #expect(admitted, "the first request never reached the admission gate")
         let second = try await harness.send(harness.request("POST", "/v1/chat/completions", json: body))
 
         #expect(second.0 == 503)
         let (firstStatus, _) = try await first
         #expect(firstStatus == 200)
+    }
+
+    /// A laptop that closes the tab mid-answer used to leave the phone
+    /// generating to the last token — ~650 % CPU for 40 s on a real brain — and
+    /// holding the one admission slot, so the next request got a 503. The
+    /// stream's producer is now cancelled when the client goes, in both
+    /// dialects.
+    @Test(
+        "hanging up mid-stream stops the generation and frees the slot",
+        .timeLimit(.minutes(1)),
+        arguments: ["/v1/chat/completions", "/api/chat"]
+    )
+    func droppedStreamCancelsGeneration(path: String) async throws {
+        // 300 one-character chunks at 40 ms: twelve seconds of generating, so
+        // anything that ends within the five-second wait below was stopped.
+        let long = String(repeating: "x", count: 300)
+        let engine = EchoEngine(chunkSize: 1, delay: .milliseconds(40))
+        let harness = try await TestServer.start(engine: engine)
+        defer { Task { await harness.stop() } }
+
+        let request = path.hasPrefix("/api")
+            ? try harness.request("POST", path, json: Ollama.ChatRequest(
+                model: "echo", messages: [Ollama.Message(role: "user", content: long)], stream: true))
+            : try harness.request("POST", path, json: OpenAI.ChatCompletionRequest(
+                model: "echo", messages: [OpenAI.Message(role: "user", content: long)], stream: true))
+
+        // Read until the answer is provably under way, then hang up.
+        let (bytes, _) = try await URLSession.shared.bytes(for: request)
+        var lines = 0
+        for try await _ in bytes.lines {
+            lines += 1
+            if lines >= 3 { break }
+        }
+        bytes.task.cancel()
+        #expect(lines >= 3)
+
+        let stopped = try await waitUntil(timeout: .seconds(5)) { await engine.activeStreams == 0 }
+        #expect(stopped, "the engine kept generating for a client that had gone")
+        let released = try await waitUntil(timeout: .seconds(5)) { await harness.server.activeRequestCount() == 0 }
+        #expect(released, "the admission slot stayed taken after the client left")
+
+        // The next request is answered rather than refused as busy.
+        let next = try await harness.send(harness.request("POST", "/v1/chat/completions", json: OpenAI.ChatCompletionRequest(
+            model: "echo", messages: [OpenAI.Message(role: "user", content: "after")], stream: false)))
+        #expect(next.0 == 200)
+
+        // And the log says what happened, not that an answer was delivered.
+        // `contains` rather than `first`: the follow-up above may share the path.
+        let logged = try await waitUntil(timeout: .seconds(5)) {
+            await harness.server.log.all().contains { $0.path == path && $0.statusCode == InferenceServer.clientClosedRequest }
+        }
+        #expect(logged, "a hung-up stream should be logged as one")
+    }
+
+    @Test("a stream read to the end is still logged as answered")
+    func completeStreamIsAnswered() async throws {
+        let harness = try await TestServer.start()
+        defer { Task { await harness.stop() } }
+
+        _ = try await harness.lines(try harness.request("POST", "/api/chat", json: Ollama.ChatRequest(
+            model: "echo", messages: [Ollama.Message(role: "user", content: "whole")], stream: true)))
+        let logged = try await waitUntil(timeout: .seconds(5)) {
+            await harness.server.log.all().first { $0.path == "/api/chat" }?.statusCode == 200
+        }
+        #expect(logged)
+    }
+
+    /// Polls `condition` until it holds or `timeout` passes; true if it held.
+    private func waitUntil(
+        timeout: Duration,
+        every interval: Duration = .milliseconds(10),
+        _ condition: () async -> Bool
+    ) async throws -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            if await condition() { return true }
+            try await Task.sleep(for: interval)
+        }
+        return await condition()
     }
 
     @Test("accepts the next request once the previous one finishes")
@@ -235,6 +323,17 @@ struct DeviceConditionTests {
         #expect(status == 503)
         #expect(throws: Never.self) {
             _ = try JSONDecoder().decode(Ollama.ErrorResponse.self, from: data)
+        }
+    }
+
+    @Test("the phone is told in its own words, never the enum or the client's sentence")
+    func phoneWords() throws {
+        #expect(ServeCondition.ok.phoneSentence == nil)
+        for condition in [ServeCondition.thermal, .battery] {
+            let sentence = try #require(condition.phoneSentence)
+            #expect(sentence.lowercased().contains("generate") == false)
+            #expect(sentence != condition.message)
+            #expect(condition.statusWord.uppercased() != condition.rawValue.uppercased())
         }
     }
 
