@@ -133,8 +133,19 @@ public struct DeviceBudget: Sendable, Equatable {
     /// on top of the weights.
     public static let comfortableFraction = 0.7
 
+    /// The share of `verdictMemoryBytes` this app may hold. On the simulator,
+    /// the share a shipping build gets: the simulator has no provisioning
+    /// profile to read the entitlement from, and the phone it stands in for
+    /// carries it.
     public var entitlementFraction: Double {
-        hasIncreasedMemoryLimit ? Self.entitledFraction : Self.unentitledFraction
+        hasIncreasedMemoryLimit || environment == .simulator ? Self.entitledFraction : Self.unentitledFraction
+    }
+
+    /// The RAM the verdicts are computed from: this phone's, or — on the
+    /// simulator, where `ProcessInfo.physicalMemory` is the Mac's — the phone
+    /// it stands in for (`simulatedPhoneMemoryBytes`).
+    public var verdictMemoryBytes: Int64 {
+        environment == .simulator ? Self.simulatedPhoneMemoryBytes : physicalMemoryBytes
     }
 
     /// Bytes this app can hold resident — physical RAM times the entitlement
@@ -153,15 +164,19 @@ public struct DeviceBudget: Sendable, Equatable {
     /// physically exists so a proof recorded against an overstated catalogue
     /// size — this project has shipped one out by 1.3 GB — cannot invent
     /// memory.
+    ///
+    /// On the simulator a load proves nothing — there is no jetsam there, and
+    /// a 3 GB brain loads on a Mac that no 8 GB phone could hold — so the
+    /// proof only ever widens a real phone's budget.
     public var usableBytes: Int64 {
-        let fraction = Int64(Double(physicalMemoryBytes) * entitlementFraction)
-        guard let proven = provenLoadBytes, proven > fraction else { return fraction }
+        let fraction = Int64(Double(verdictMemoryBytes) * entitlementFraction)
+        guard environment == .device, let proven = provenLoadBytes, proven > fraction else { return fraction }
         return min(proven, physicalMemoryBytes)
     }
 
     /// True when a model has actually loaded here, so `usableBytes` is backed
     /// by something that happened rather than by the fraction alone.
-    public var isProven: Bool { (provenLoadBytes ?? 0) > 0 }
+    public var isProven: Bool { environment == .device && (provenLoadBytes ?? 0) > 0 }
 
     /// Records that `model` loaded here, widening the budget if it was the
     /// biggest yet.
@@ -258,33 +273,22 @@ public struct DeviceBudget: Sendable, Equatable {
 
     // MARK: - The simulator
 
-    /// What a simulated app process actually gets before it is killed: 722 MB,
-    /// the figure a Models screen was caught reporting as "usable memory" on a
-    /// Mac with 32 GB of RAM.
+    /// The phone the simulator stands in for when it judges a brain: an 8 GB
+    /// iPhone, the top of the 6–8 GB class most people hold.
     ///
     /// The simulator runs llama.cpp on the Mac's CPU with no Metal and no
-    /// jetsam, so `ProcessInfo.physicalMemory` reports the Mac and
-    /// `os_proc_available_memory()` reports nothing worth having. Writing the
-    /// number down here makes it a documented constant rather than something
-    /// the app discovers at runtime and reports as a fact about a device.
-    public static let simulatorProcessCeilingBytes: Int64 = 722 * 1024 * 1024
-
-    /// The largest estimate the simulator is allowed to call `.comfortable`.
-    ///
-    /// One gigabyte: comfortably above the 722 MB a simulated process really
-    /// gets, and low enough that a 3 GB model on a 32 GB Mac cannot wear a
-    /// "Fits" badge that says nothing about any phone.
-    public static let simulatorComfortableCeilingBytes: Int64 = 1024 * 1024 * 1024
+    /// jetsam, so `ProcessInfo.physicalMemory` reports the Mac. Judging by the
+    /// Mac called 10 GB files "Tight fit" with a Get button, and listed 9B
+    /// repos first in search; judging by one gigabyte instead (the rule this
+    /// replaced) called Qwen3 1.7B "Tight fit" while the Brain page
+    /// recommended it. A phone class gives every screen the answers a real
+    /// iPhone would.
+    public static let simulatedPhoneMemoryBytes: Int64 = 8 * 1024 * 1024 * 1024
 
     /// What the UI should say about these numbers when they came from a Mac.
     public var environmentNote: String? {
         guard environment == .simulator else { return nil }
-        let ceiling = Self.simulatorProcessCeilingBytes / (1024 * 1024)
-        return """
-        These figures come from this Mac, not a phone. The simulator runs \
-        llama.cpp on the CPU and holds the app process to roughly \(ceiling) MB, \
-        so only models under 1 GB are reported as fitting.
-        """
+        return "On the simulator, Pocketd judges every brain as an 8 GB iPhone would."
     }
 
     // MARK: - Verdicts
@@ -337,24 +341,12 @@ public struct DeviceBudget: Sendable, Equatable {
 
     public func fit(for estimate: MemoryEstimate) -> Fit {
         let needed = estimate.totalBytes
-        let verdict: Fit
         if needed <= Int64(Double(usableBytes) * Self.comfortableFraction) {
-            verdict = .comfortable
+            return .comfortable
         } else if needed <= usableBytes {
-            verdict = .tight
-        } else {
-            verdict = .willNotFit
-        }
-        // On a Mac the arithmetic above is true and meaningless — 45% of 32 GB
-        // is not what the app process gets. Demote rather than refuse: the
-        // simulator has to stay usable for demos, and a model that loads there
-        // does load there. What it must not do is claim a phone would be fine.
-        if environment == .simulator,
-           verdict == .comfortable,
-           needed >= Self.simulatorComfortableCeilingBytes {
             return .tight
         }
-        return verdict
+        return .willNotFit
     }
 
     /// How far over the limit a configuration is, in bytes; zero when it fits.

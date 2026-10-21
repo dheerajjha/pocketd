@@ -18,6 +18,11 @@ import Foundation
 /// Yesterday and tomorrow are spelled out because small models are unreliable
 /// at date arithmetic, and every relative question depends on getting it right.
 public enum DateContext {
+    /// How the paragraph opens. Named so `PromptEcho` can recognise the
+    /// paragraph as facts rather than instructions: repeating "Tomorrow is
+    /// Thursday" is an answer, not a leak.
+    public static let lead = "Current date and time:"
+
     public static func sentence(
         now: Date,
         calendar: Calendar = .current,
@@ -50,7 +55,7 @@ public enum DateContext {
         let weekStart = calendar.weekdaySymbols[max(0, min(6, calendar.firstWeekday - 1))]
 
         return """
-        Current date and time: \(long.string(from: now)), \(clock.string(from: now)) (\(timeZone.identifier), \(utc)). \
+        \(lead) \(long.string(from: now)), \(clock.string(from: now)) (\(timeZone.identifier), \(utc)). \
         Yesterday was \(long.string(from: yesterday)). Tomorrow is \(long.string(from: tomorrow)). \
         The user's locale is \(locale.identifier) and the week starts on \(weekStart).
         """

@@ -650,23 +650,40 @@ struct ShippingToolBudgetTests {
             .deletingLastPathComponent()   // repository root
     }
 
-    private func declaredTools() throws -> [(name: String, description: String, arguments: [(String, String)])] {
+    /// One `@ToolArgument`: the property, its description, and its declared
+    /// type as written — `CalendarRange` from `var range: CalendarRange =
+    /// .today`, `Int?` from `var duration_minutes: Int?`.
+    struct DeclaredArgument {
+        let name: String
+        let text: String
+        let type: String
+
+        /// What `@ToolArguments` leaves out of `required`: it reads a `?` in
+        /// the type and nothing else, so a defaulted argument is required.
+        var isOptional: Bool { type.hasSuffix("?") }
+        var baseType: String { isOptional ? String(type.dropLast()) : type }
+    }
+
+    private func declaredTools() throws -> [(name: String, description: String, arguments: [DeclaredArgument])] {
         let root = repositoryRoot().appendingPathComponent("App/Sources/Tools")
         let files = try #require(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
-        var found: [(String, String, [(String, String)])] = []
+        var found: [(String, String, [DeclaredArgument])] = []
 
         for case let url as URL in files where url.pathExtension == "swift" {
             let source = try String(contentsOf: url, encoding: .utf8)
             guard let name = between(source, "@Tool(\"", "\")") else { continue }
             let description = between(source, "let description = \"", "\"") ?? ""
             // Every `@ToolArgument("…")` line, paired with the property under it.
-            var arguments: [(String, String)] = []
+            var arguments: [DeclaredArgument] = []
             let lines = source.components(separatedBy: "\n")
             for (index, line) in lines.enumerated() where line.contains("@ToolArgument(\"") {
                 guard let text = between(line, "@ToolArgument(\"", "\")"), index + 1 < lines.count else { continue }
                 let declaration = lines[index + 1]
                 guard let variable = between(declaration, "var ", ":") else { continue }
-                arguments.append((variable.trimmingCharacters(in: .whitespaces), text))
+                let type = declaration.components(separatedBy: ":").dropFirst().joined(separator: ":")
+                    .components(separatedBy: "=")[0]
+                    .trimmingCharacters(in: .whitespaces)
+                arguments.append(DeclaredArgument(name: variable.trimmingCharacters(in: .whitespaces), text: text, type: type))
             }
             found.append((name, description, arguments))
         }
@@ -680,34 +697,56 @@ struct ShippingToolBudgetTests {
         return String(rest[..<end.lowerBound])
     }
 
-    /// The enum values each argument offers, which are a real part of the cost.
-    private func values(for argument: String) -> [String] {
-        switch argument {
-        case "action": return ReminderAction.allCases.map(\.rawValue) + CalendarAction.allCases.map(\.rawValue)
-        case "filter": return ReminderFilter.allCases.map(\.rawValue)
-        case "range": return CalendarRange.allCases.map(\.rawValue)
-        default: return []
+    /// The values the schema lists for an argument of this type.
+    ///
+    /// By the TYPE, as `@ToolArguments` writes `T.allCases.map { $0.rawValue }`
+    /// into the schema, and not by the argument's name. Keyed by name, both
+    /// `action`s were priced with five values when the calendar's has two,
+    /// and `focus` with none when it has five — which, with a `required` of
+    /// one argument where the library lists every non-optional one, put this
+    /// test 29 characters under what LocalLLMClient actually serialises: it
+    /// read 1,341 guard tokens, under the ceiling, for a set the library
+    /// serialised at 1,361, over it.
+    private func values(forType type: String) -> [String]? {
+        switch type {
+        case "CalendarAction": CalendarAction.allCases.map(\.rawValue)
+        case "ReminderAction": ReminderAction.allCases.map(\.rawValue)
+        case "CalendarRange": CalendarRange.allCases.map(\.rawValue)
+        case "ReminderFilter": ReminderFilter.allCases.map(\.rawValue)
+        case "HealthFocus": HealthFocus.allCases.map(\.rawValue)
+        default: nil
         }
     }
 
+    /// Each tool as LocalLLMClient serialises it: `generateToolSchema` over the
+    /// macro's argument list — `"integer"` for an `Int`, an `enum` of every
+    /// case for a `CaseIterable` type, and every argument without a `?` in
+    /// `required`, which is left out when it would be empty. Checked against
+    /// the library's own `toOAICompatJSONString` for the shipped tools: 1,863
+    /// characters, 1,331 guard tokens on a tool-native template.
     private func priced() throws -> [CapabilityTool] {
         try declaredTools().enumerated().map { offset, tool in
             let properties = tool.arguments.reduce(into: [String: any Sendable]()) { store, argument in
-                var property: [String: any Sendable] = ["type": "string", "description": argument.1]
-                let options = values(for: argument.0)
-                if !options.isEmpty { property["enum"] = options }
-                store[argument.0] = property
+                var property: [String: any Sendable] = [
+                    "type": argument.baseType == "Int" ? "integer" : "string",
+                    "description": argument.text
+                ]
+                if let options = values(forType: argument.baseType) {
+                    property["enum"] = options
+                } else if !["String", "Int"].contains(argument.baseType) {
+                    Issue.record("\(tool.name).\(argument.name) is a \(argument.type), which this test does not know how to price")
+                }
+                store[argument.name] = property
             }
+            var parameters: [String: any Sendable] = ["type": "object", "properties": properties]
+            let required = tool.arguments.filter { !$0.isOptional }.map(\.name)
+            if !required.isEmpty { parameters["required"] = required }
             let object: [String: any Sendable] = [
                 "type": "function",
                 "function": [
                     "name": tool.name,
                     "description": tool.description,
-                    "parameters": [
-                        "type": "object",
-                        "properties": properties,
-                        "required": tool.arguments.isEmpty ? [String]() : [tool.arguments[0].0]
-                    ] as [String: any Sendable]
+                    "parameters": parameters
                 ] as [String: any Sendable]
             ]
             let data = (try? JSONSerialization.data(withJSONObject: object, options: [])) ?? Data()

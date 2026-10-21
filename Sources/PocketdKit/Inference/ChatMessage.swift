@@ -29,11 +29,24 @@ public struct ChatMessage: Sendable, Codable, Equatable {
     /// their own fields, so nothing here can appear in an HTTP response.
     public var cards: [AnswerCard]
 
-    public init(role: Role, content: String, images: [Data] = [], cards: [AnswerCard] = []) {
+    /// When this turn was said, for the conversation's day separators.
+    ///
+    /// Optional because nothing before this field existed carries one, and a
+    /// guessed date would put a separator in the wrong place in every old
+    /// transcript. Stamped by the phone's own chat when a turn is added; the
+    /// server's routes build their messages from the wire and leave it `nil`.
+    ///
+    /// Never reaches the model or the wire, for the same reasons `cards` does
+    /// not: the prompt is built from `content`, and the OpenAI and Ollama routes
+    /// serialise their own message types.
+    public var sentAt: Date?
+
+    public init(role: Role, content: String, images: [Data] = [], cards: [AnswerCard] = [], sentAt: Date? = nil) {
         self.role = role
         self.content = content
         self.images = images
         self.cards = cards
+        self.sentAt = sentAt
     }
 
     public static func system(_ content: String) -> ChatMessage { .init(role: .system, content: content) }
@@ -55,7 +68,7 @@ private struct LossyCard: Decodable {
 
 extension ChatMessage {
     private enum CodingKeys: String, CodingKey {
-        case role, content, images, cards
+        case role, content, images, cards, sentAt
     }
 
     /// Written by hand only because a synthesised decoder throws on a key that
@@ -66,7 +79,8 @@ extension ChatMessage {
     /// field shipped. `images` is read the same way for the same reason.
     ///
     /// `cards` is written only when there are some. It is nearly always empty,
-    /// and the store rewrites the whole conversation on every save.
+    /// and the store rewrites the whole conversation on every save. `sentAt`
+    /// likewise only when there is one.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         role = try container.decode(Role.self, forKey: .role)
@@ -86,6 +100,9 @@ extension ChatMessage {
         // comparison, so it is the card that gets dropped.
         cards = (try? container.decodeIfPresent([LossyCard].self, forKey: .cards))?
             .compactMap(\.card) ?? []
+        // Lossy for the same reason as `cards`: a date this build cannot read
+        // costs a separator, never the conversation.
+        sentAt = (try? container.decodeIfPresent(Date.self, forKey: .sentAt)) ?? nil
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -96,6 +113,7 @@ extension ChatMessage {
         if !cards.isEmpty {
             try container.encode(cards, forKey: .cards)
         }
+        try container.encodeIfPresent(sentAt, forKey: .sentAt)
     }
 }
 

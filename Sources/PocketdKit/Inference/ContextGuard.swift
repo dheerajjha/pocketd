@@ -129,4 +129,90 @@ public struct ContextGuard: Sendable, Equatable {
             throw InferenceError.contextExhausted
         }
     }
+
+    // MARK: - Fitting a long conversation
+
+    /// The newest part of `messages` that fits, for a caller who would rather
+    /// lose the oldest turns than the whole conversation.
+    ///
+    /// This is what "long conversations never die" means in practice. The
+    /// phone sends its whole history on every turn, and once that outgrew the
+    /// window `check` refused it — and refused every later message too, because
+    /// the history only ever grows. A person sees a conversation that worked
+    /// for twenty questions and then never again.
+    ///
+    /// The rules, in order of what is protected:
+    ///
+    /// 1. **The system turns at the top stay.** They carry the date, the
+    ///    instructions and the person's own Assistant instructions; dropping
+    ///    them changes who is answering.
+    /// 2. **The latest turn stays** — the question being asked, with anything
+    ///    that came after it.
+    /// 3. **Whole turns go, oldest first.** A turn is a user message and
+    ///    everything up to the next one: the answer, and any tool call and its
+    ///    result. Cutting inside one would hand the model a tool result with no
+    ///    call, or an answer with no question, which a small model reads as an
+    ///    example of how to behave.
+    ///
+    /// Throws `contextExhausted` only when the system turns and the latest turn
+    /// do not fit on their own — a single message too long to read, which no
+    /// amount of forgetting can fix.
+    ///
+    /// Network requests do not come through here: a client that sends a
+    /// conversation too long for the window gets a 413 and decides for itself
+    /// what to drop, which is what every other server does.
+    public func trimmed(_ messages: [ChatMessage]) throws -> [ChatMessage] {
+        if fits(messages) { return messages }
+
+        let head = Array(messages.prefix { $0.role == .system })
+        var turns = Self.turns(in: Array(messages.dropFirst(head.count)))
+        guard let latest = turns.popLast() else {
+            // Nothing but system turns, and they do not fit.
+            throw InferenceError.contextExhausted
+        }
+
+        let fixed = Self.estimateTokens(head) + Self.estimateTokens(latest)
+        guard fixed <= promptBudget else { throw InferenceError.contextExhausted }
+
+        // Newest first, keeping each turn while there is room, and stopping at
+        // the first that does not fit: skipping one to keep an older one would
+        // leave a gap in the middle of the conversation.
+        var room = promptBudget - fixed
+        var kept: [[ChatMessage]] = []
+        for turn in turns.reversed() {
+            let cost = Self.estimateTokens(turn)
+            guard cost <= room else { break }
+            room -= cost
+            kept.append(turn)
+        }
+        return head + kept.reversed().flatMap { $0 } + latest
+    }
+
+    /// Groups a conversation into turns: each starts at a user message and
+    /// runs up to the next one. Anything before the first user message — a
+    /// greeting the assistant opened with — is a turn of its own.
+    static func turns(in messages: [ChatMessage]) -> [[ChatMessage]] {
+        var turns: [[ChatMessage]] = []
+        for message in messages {
+            if message.role == .user || turns.isEmpty {
+                turns.append([message])
+            } else {
+                turns[turns.count - 1].append(message)
+            }
+        }
+        return turns
+    }
+
+    /// Room to hold back for the reply when a conversation is being fitted.
+    ///
+    /// The plain guard reserves at most 64 tokens, which is right for refusing
+    /// a prompt and wrong for fitting one: a history trimmed to leave 64 tokens
+    /// answers in a sentence and stops mid-word. This keeps what the caller
+    /// asked for, up to a quarter of the window, and never less than the guard
+    /// itself would.
+    public static func replyReserve(contextTokens: Int, requestedMaxTokens: Int?) -> Int {
+        let floor = min(64, max(1, contextTokens / 4))
+        let wanted = requestedMaxTokens ?? 512
+        return max(floor, min(wanted, contextTokens / 4))
+    }
 }

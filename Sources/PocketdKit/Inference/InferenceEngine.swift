@@ -95,6 +95,61 @@ public enum InferenceError: Error, Sendable, Equatable {
     case backend(String)
 }
 
+/// One plain sentence per failure, for the person holding the phone.
+///
+/// This was missing, and its absence was the whole of a P0: every engine
+/// failure reached the screen as "The reply could not be completed." with a
+/// Dismiss button, because the app reads `errorDescription` and there was none
+/// — so a conversation that had outgrown the context failed on every later
+/// message with no hint that a new one would work. The sentences say what
+/// happened and what to do, in the app's words: no "context", no "model", no
+/// identifiers. The word "brain" appears only where the failure can only have
+/// come from the Brain screen.
+///
+/// The server never reads these. The routes match on the case and write their
+/// own status codes and messages for other devices, and `.backend` keeps its
+/// detail for them — see `detail`.
+extension InferenceError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .noModelLoaded:
+            "Pocketd isn't ready to answer yet. Try again in a moment."
+        case .modelNotFound:
+            "This brain isn't on this iPhone any more. Download it again to use it."
+        case .modelMismatch:
+            "Pocketd was switching over while you asked. Ask again."
+        case .contextExhausted:
+            "This conversation got too long. Start a new chat to keep going."
+        case .cancelled:
+            "Stopped."
+        case let .backend(detail):
+            // The built-in brain's failures are already written for the
+            // screen, as a closed, tested set; anything else here is an
+            // engine talking to itself, and only the plain sentence goes out.
+            // An exact match on that set is what keeps a llama.cpp detail from
+            // ever passing for one of them.
+            SystemModelFailure.sentences.contains(detail) ? detail : "That one didn't work. Try again."
+        }
+    }
+
+    /// What went wrong in the engine's own words, for the diagnostics log and
+    /// for network clients — never for the screen.
+    public var detail: String {
+        switch self {
+        case .noModelLoaded: "no model loaded"
+        case let .modelNotFound(id): "model \(id) not found"
+        case let .modelMismatch(requested, loaded): "requested \(requested), loaded \(loaded)"
+        case .contextExhausted: "prompt exceeds the context window"
+        case .cancelled: "cancelled"
+        case let .backend(detail): detail
+        }
+    }
+
+    /// Whether starting a new conversation is the way out, so a screen can
+    /// offer that action next to the sentence.
+    public var suggestsNewConversation: Bool { self == .contextExhausted }
+}
+
 /// The seam between the HTTP surface and whatever actually runs the weights.
 ///
 /// Everything above this protocol is plain Swift and unit-tested; everything
@@ -128,10 +183,30 @@ public protocol InferenceEngine: Sendable {
 
     /// Stream a completion. The stream must terminate with exactly one
     /// `.finished` event, or throw.
+    ///
+    /// Cancelling the stream — dropping it, or cancelling the task reading it —
+    /// must free the engine promptly, including while the prompt is still
+    /// being read, and the next request must work. Stop is the one control a
+    /// person has over a brain that has gone on too long, and an engine that
+    /// keeps computing after it has been told to stop starves everything that
+    /// comes after.
     func generate(_ request: GenerationRequest) async throws -> AsyncThrowingStream<GenerationEvent, any Error>
+
+    /// Stops whatever is generating, and everything queued behind it, now.
+    ///
+    /// For the phone's own decisions that outrank any request in flight —
+    /// switching brains, freeing the memory. `load(model:)` deliberately does
+    /// not do this itself: the server calls it when another device asks for a
+    /// different brain, and a laptop should wait its turn rather than cut off
+    /// an answer somebody is reading. Every cancelled stream ends the way a
+    /// cancelled stream always does.
+    func interrupt() async
 }
 
 public extension InferenceEngine {
+    /// An engine with nothing it can stop early stops nothing.
+    func interrupt() async {}
+
     /// Most engines add nothing.
     var promptOverheadTokens: Int { get async { 0 } }
 

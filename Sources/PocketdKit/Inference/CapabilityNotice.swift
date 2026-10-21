@@ -89,7 +89,7 @@ public extension HealthAvailability {
         case .requestFailed(let reason):
             // Word for word what the tool would have told the model, so one
             // problem has one wording wherever it surfaces.
-            return "Pocketd could not ask iOS for access to Health: \(reason)"
+            return reason
         }
     }
 }

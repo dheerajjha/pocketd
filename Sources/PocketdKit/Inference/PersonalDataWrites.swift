@@ -102,8 +102,10 @@ public enum PersonalDataWrites {
     /// An hour, because that is what every calendar app defaults to and because
     /// the alternative — refusing until the model supplies a duration — turns
     /// the commonest request ("put lunch with Sam in for Friday at 1") into a
-    /// round trip. The value is echoed back in the confirmation, so a user who
-    /// wanted ninety minutes can see that they did not get them.
+    /// round trip. "Nobody said" is decided from the person's words, not from
+    /// whether the model filled the field: see `EventLength`. The length is
+    /// echoed back in the confirmation whatever it is, so a user who wanted
+    /// ninety minutes can see that they did not get them.
     public static let defaultEventMinutes = 60
 
     /// The longest an event may be asked to run, in minutes.
@@ -179,7 +181,9 @@ public enum PersonalDataWrites {
         // explicitly past DATE — "remind me on the 15th", said on the 17th — is
         // left alone, because rolling that to next month would invent an
         // intention nobody had.
-        let rolled = rollPastTimeForward(due, now: now, calendar: calendar)
+        // A day with no time has no time to have passed: "today" is due today,
+        // not tomorrow because its midnight is behind us.
+        let rolled = dueHasTime ? rollPastTimeForward(due, now: now, calendar: calendar) : (due: due, moved: false)
         due = rolled.due
         let movedForward = rolled.moved
 
@@ -263,10 +267,15 @@ public enum PersonalDataWrites {
 
     // MARK: Calendar
 
+    /// - Parameter durationMinutes: The model's length, believed only when
+    ///   `userText` says how long — see `EventLength.decide`.
+    /// - Parameter userText: The person's latest message, from the task local
+    ///   both engines bind. `nil` when there is none to check against.
     public static func createEvent(
         title rawTitle: String?,
         start when: String?,
         durationMinutes: Int?,
+        userText: String? = ToolContext.userText,
         now: Date = Date(),
         calendar: Calendar = .current,
         origin: RequestOrigin = ToolContext.origin,
@@ -308,15 +317,19 @@ public enum PersonalDataWrites {
             return ["text": "I could not work out when \"\(phrase)\" is. Tell me a time like \"tomorrow at 3pm\"."]
         }
 
-        let minutes = resolvedMinutes(durationMinutes)
+        let minutes = EventLength.decide(stated: userText, modelMinutes: durationMinutes)
         guard let end = calendar.date(byAdding: .minute, value: minutes, to: start) else {
             return ["text": "I could not work out when that event ends."]
         }
 
         switch await write(NewEvent(title: title, start: start, end: end, repeats: repeats)) {
         case .written:
+            // The length is said every time, the default included. Left out
+            // when it was an hour, the card for "dinner at 8pm" said nothing
+            // about how long dinner was — and the card, not the model's
+            // sentence beside it, is what the person checks.
             return [
-                "text": "Added \"\(title)\" to your calendar for \(describe(start, hasTime: true, calendar: calendar))\(minutes == defaultEventMinutes ? "" : ", for \(minutes) minutes")\(repeats.map { ", repeating \($0.sentence)" } ?? "").",
+                "text": "Added \"\(title)\" to your calendar for \(describe(start, hasTime: true, calendar: calendar)), for \(EventLength.spoken(minutes))\(repeats.map { ", repeating \($0.sentence)" } ?? "").",
                 "created": true
             ]
         case let .unauthorised(authorization):

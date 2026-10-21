@@ -150,21 +150,146 @@ public enum MomentPhrase {
             return .moment(iso, hasTime: true)
         }
         if let relative = relativeOffset(cleaned, now: now, calendar: calendar) {
-            return .moment(relative, hasTime: true)
+            return .moment(relative.date, hasTime: relative.hasTime)
+        }
+        // "6pm", "at 18:00": a clock time and nothing else, read here against
+        // the `now` and calendar this was handed. The detector reads the same
+        // words against the system clock and zone, and with a calendar in any
+        // other zone that is a different hour — "6pm" asked at 14:33 by a UTC
+        // calendar, on a machine in Kolkata, came back as 12:30 UTC, already
+        // gone, and was moved to tomorrow. A whole hour on its own — "at 5",
+        // "5 o'clock" — comes here too, for the one-to-six rule in
+        // `bareClockTime`. "09:00" is left to the passes below, as before.
+        if isUnambiguousClockTime(cleaned) || isLoneHour(cleaned),
+           let clock = bareClockTime(cleaned, now: now, calendar: calendar) {
+            return .moment(clock, hasTime: true)
+        }
+        // "Friday 5" and "Friday at 5", one reading. The detector reads the
+        // first as a date of the month — Thursday 5 November at noon, Monday 10
+        // August — so both are asked as "friday at 5", which it reads right,
+        // and only the hour of its answer is kept: the day is the next Friday.
+        if let asked = weekdayAndHour(cleaned) {
+            guard let read = detector(asked.phrase),
+                  isReading(read, of: asked.hour, calendar: calendar),
+                  let next = nextWeekday(asked.weekday, atTimeOf: read, now: now, calendar: calendar)
+            else { return .unresolved }
+            return .moment(next, hasTime: true)
+        }
+        // "next week", "this weekend", "on the 25th": days the detector has no
+        // match for at all.
+        if let day = dayWithoutATime(cleaned, now: now, calendar: calendar) {
+            return .moment(day, hasTime: false)
         }
 
-        guard let detected = detector(cleaned) else {
-            // Only after the detector has failed, never before it. Run first,
-            // this would hijack phrases the detector reads better: "tomorrow at
-            // 3pm" contains a 3 and no day word this parser understands, so it
-            // would land three o'clock TODAY and be confidently wrong.
+        let asked = withAtBeforeLoneHour(cleaned)
+        guard let detected = detector(asked) else {
+            // Anything but a bare clock time comes here only after the detector
+            // has failed. Run first, this would hijack phrases the detector
+            // reads better: "tomorrow at 3pm" contains a 3 and no day word
+            // this parser understands, so it would land three o'clock TODAY
+            // and be confidently wrong.
             guard let bare = bareClockTime(cleaned, now: now, calendar: calendar) else { return .unresolved }
             return .moment(bare, hasTime: true)
         }
         // The tripwire. Something in the phrase was about time and did not make
         // it into the answer, so the answer is not what was asked for.
         if mentionsTimeBeyond(detected, in: cleaned, calendar: calendar) { return .unresolved }
+        // A day and no time — "tomorrow", "Friday", "next Monday" — is a date.
+        // The detector answers every one of them with noon, its fallback, and
+        // taken as a time that was the hour nobody asked for: "remind me to buy
+        // milk tomorrow", which Apple's model passed on as "tomorrow", went off
+        // at 12:00 PM.
+        guard saysATimeOfDay(asked) else {
+            return .moment(calendar.startOfDay(for: detected), hasTime: false)
+        }
         return .moment(rollForwardIfBareTimeIsPast(detected, phrase: cleaned, now: now, calendar: calendar), hasTime: true)
+    }
+
+    /// Whether the words name a time of day — so the detector's hour is the
+    /// person's, and not its noon for a phrase that named only a day.
+    ///
+    /// "at 9", "9:30", "9am", "noon", "tonight", "tomorrow morning" do; "tomorrow",
+    /// "Friday", "25 December" and "october 30" do not.
+    static func saysATimeOfDay(_ phrase: String) -> Bool {
+        let words = phrase.lowercased()
+            .split(whereSeparator: \.isWhitespace)
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:!?")) }
+        // "half" and "quarter" too: "half past four tomorrow" names a time the
+        // detector drops, and it is the tripwire's to refuse, not this rule's
+        // to quietly turn into a day.
+        let timeWords: Set<String> = [
+            "noon", "midday", "midnight", "morning", "afternoon", "evening", "night", "tonight",
+            "am", "pm", "o'clock", "oclock", "half", "quarter"
+        ]
+        let hourWords: Set<String> = [
+            "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"
+        ]
+        for (index, word) in words.enumerated() {
+            if timeWords.contains(word) { return true }
+            // "9:30", "17:00", "9.30" — and not "25.12", which is a date.
+            let pieces = word.split(whereSeparator: { $0 == ":" || $0 == "." }).map(String.init)
+            if pieces.count == 2, let hour = Int(pieces[0]), let minute = Int(pieces[1]),
+               pieces[1].count == 2, (0...23).contains(hour), (0...59).contains(minute) {
+                return true
+            }
+            // "9am", "9pm".
+            if word.count > 2, word.hasSuffix("am") || word.hasSuffix("pm"), Int(word.dropLast(2)) != nil { return true }
+            // "at 9", "at nine".
+            if index > 0, words[index - 1] == "at", Int(word) != nil || hourWords.contains(word) { return true }
+        }
+        return false
+    }
+
+    /// "next week", "this weekend", "on the 25th", as the days they are.
+    ///
+    /// The detector has no match for any of them, so they used to be refused
+    /// — "I could not work out when" — although each names a day as plainly as
+    /// "tomorrow" does. A day of the month is the next one, today included, so
+    /// it is never in the past; "next week" is the first day of next week, as
+    /// this calendar counts weeks; "this weekend" is today on a weekend, and
+    /// otherwise the first day of the coming one.
+    static func dayWithoutATime(_ phrase: String, now: Date, calendar: Calendar) -> Date? {
+        var words = phrase.lowercased()
+            .split(whereSeparator: \.isWhitespace)
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:!?")) }
+            .filter { !$0.isEmpty }
+        if let first = words.first, ["on", "at", "by"].contains(first) { words.removeFirst() }
+        let today = calendar.startOfDay(for: now)
+
+        switch words {
+        case ["this", "weekend"], ["the", "weekend"], ["weekend"]:
+            if calendar.isDateInWeekend(now) { return today }
+            return calendar.nextWeekend(startingAfter: now).map { calendar.startOfDay(for: $0.start) }
+        case ["next", "week"]:
+            return calendar.dateInterval(of: .weekOfYear, for: now)?.end
+        default:
+            break
+        }
+
+        // "the 25th", "25th", "the 25".
+        let saidThe = words.first == "the"
+        if saidThe { words.removeFirst() }
+        guard words.count == 1 else { return nil }
+        var digits = Substring(words[0])
+        var ordinal = false
+        for suffix in ["st", "nd", "rd", "th"] where digits.hasSuffix(suffix) {
+            digits = digits.dropLast(suffix.count)
+            ordinal = true
+            break
+        }
+        guard ordinal || saidThe, (1...2).contains(digits.count), digits.allSatisfy({ $0.isASCII && $0.isNumber }),
+              let day = Int(digits), (1...31).contains(day),
+              let thisMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: now))
+        else { return nil }
+        for offset in 0...12 {
+            guard let month = calendar.date(byAdding: .month, value: offset, to: thisMonth) else { continue }
+            var parts = calendar.dateComponents([.year, .month], from: month)
+            parts.day = day
+            // The 31st of a 30-day month would spill into the next one.
+            guard let date = calendar.date(from: parts), calendar.component(.day, from: date) == day, date >= today else { continue }
+            return date
+        }
+        return nil
     }
 
     // MARK: - Pieces
@@ -318,7 +443,10 @@ public enum MomentPhrase {
     /// Handled here and not left to the detector because the detector does not
     /// handle it at all — it returns no match for "in 20 minutes" — and it is
     /// one of the two or three ways anybody actually asks for a short timer.
-    static func relativeOffset(_ phrase: String, now: Date, calendar: Calendar) -> Date? {
+    ///
+    /// Days and weeks come back as the day, with no time: "in 3 days" is a day,
+    /// and the minute it happened to be said at is not a time anybody chose.
+    static func relativeOffset(_ phrase: String, now: Date, calendar: Calendar) -> (date: Date, hasTime: Bool)? {
         // Split on whitespace rather than through `tokens(in:)`, which drops
         // every non-alphanumeric character — including the minus sign, so
         // "in -5 minutes" arrived here as 5 and quietly became a reminder five
@@ -337,7 +465,10 @@ public enum MomentPhrase {
         case "week", "weeks": component = .weekOfYear
         default: return nil
         }
-        return calendar.date(byAdding: component, value: amount, to: now)
+        guard let date = calendar.date(byAdding: component, value: amount, to: now) else { return nil }
+        return component == .day || component == .weekOfYear
+            ? (calendar.startOfDay(for: date), false)
+            : (date, true)
     }
 
     /// Whether the phrase talks about a time the resolved date does not account
@@ -393,6 +524,190 @@ public enum MomentPhrase {
     }
 
 
+    /// Days a number beside cannot be a date of the month. "Friday 5" can be
+    /// Friday the fifth; "tomorrow 9" can only be an hour.
+    static let relativeDays: Set<String> = ["today", "tonight", "tomorrow"]
+
+    /// "tomorrow 9" as "tomorrow at 9", and "9 tomorrow" as "at 9 tomorrow",
+    /// for the detector.
+    ///
+    /// The detector reads "tomorrow at 9" as nine in the morning, and from
+    /// "tomorrow 9" it matches only "tomorrow" and returns its fallback noon —
+    /// confidently wrong, with no half or quarter in the phrase for the tripwire
+    /// to notice. Measured on macOS 27: the same drop for "9 tomorrow", "today
+    /// 6", "tonight 8" (19:00, the detector's "tonight") and "tomorrow evening
+    /// 7" (18:00). With the "at", every one of them is read as the hour asked
+    /// for, by the same reader and the same rule as the phrase with the "at"
+    /// already in it, so "tomorrow 9" can never mean anything "tomorrow at 9"
+    /// does not.
+    ///
+    /// Only that bare shape is touched: one of `relativeDays`, maybe the part
+    /// of the day straight after it, and one whole hour on one side with no
+    /// "at". "tomorrow 8 evening" is left alone, because the detector reads
+    /// "tomorrow at 8 evening" as eight in the morning — and so is anything
+    /// with a weekday, a second number or one more word in it.
+    static func withAtBeforeLoneHour(_ phrase: String) -> String {
+        let words = phrase.split(whereSeparator: \.isWhitespace).map(String.init)
+        let bare = words.map { $0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".,;:!?")) }
+        guard let day = bare.firstIndex(where: relativeDays.contains) else { return phrase }
+        var unit = [day]
+        if day + 1 < bare.count, timesOfDay.contains(bare[day + 1]) { unit.append(day + 1) }
+        let others = bare.indices.filter { !unit.contains($0) }
+        guard others.count == 1, let hour = others.first else { return phrase }
+        let digits = bare[hour]
+        guard (1...2).contains(digits.count),
+              digits.allSatisfy({ $0.isASCII && $0.isNumber }),
+              let value = Int(digits), (0...23).contains(value)
+        else { return phrase }
+        var rewritten = words
+        rewritten.insert("at", at: hour)
+        return rewritten.joined(separator: " ")
+    }
+
+    /// Calendar weekday numbers, Sunday first, for every name in `weekdayNames`.
+    static let weekdayNumbers: [String: Int] = [
+        "sunday": 1, "sun": 1, "monday": 2, "mon": 2, "tuesday": 3, "tue": 3, "tues": 3,
+        "wednesday": 4, "wed": 4, "weds": 4, "thursday": 5, "thu": 5, "thur": 5, "thurs": 5,
+        "friday": 6, "fri": 6, "saturday": 7, "sat": 7
+    ]
+
+    /// Each weekday's full name, for the phrase the detector is asked.
+    static let weekdayFullNames: [Int: String] = [
+        1: "sunday", 2: "monday", 3: "tuesday", 4: "wednesday", 5: "thursday", 6: "friday", 7: "saturday"
+    ]
+
+    /// "Friday 5", "5 Friday", "on Friday at 5": the weekday, the hour, and the
+    /// phrase to ask the detector, which is "friday at 5" for every one of them.
+    ///
+    /// The detector reads a number beside a weekday as the date of the month —
+    /// "Friday 5" came back as Thursday 5 November at noon, and "wednesday 5",
+    /// asked on a Wednesday in October, as 5 August, months gone; "5 Friday"
+    /// kept the Friday and dropped the 5 for noon. Measured on macOS 27. It
+    /// reads "friday at 5" right, as five in the afternoon, so every way of
+    /// writing a weekday and an hour is asked as that one phrase: "Friday 5"
+    /// can never mean anything "Friday at 5" does not.
+    ///
+    /// Only that shape: a weekday, maybe "on" or "this", maybe "at", and one
+    /// whole hour. "Friday 5pm" and "Friday 5:30" the detector reads right as
+    /// they are; "next Friday 5" is left alone, because people read "next"
+    /// both ways.
+    static func weekdayAndHour(_ phrase: String) -> (weekday: Int, hour: Int, phrase: String)? {
+        let words = phrase.lowercased()
+            .split(whereSeparator: \.isWhitespace)
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:!?")) }
+            .filter { !$0.isEmpty }
+        var weekday: Int?
+        var hour: Int?
+        var ats = 0
+        for word in words {
+            if ["on", "this"].contains(word) { continue }
+            if word == "at" {
+                ats += 1
+                continue
+            }
+            if weekday == nil, let number = weekdayNumbers[word] {
+                weekday = number
+                continue
+            }
+            guard hour == nil, (1...2).contains(word.count), word.allSatisfy({ $0.isASCII && $0.isNumber }),
+                  let value = Int(word), (0...23).contains(value)
+            else { return nil }
+            hour = value
+        }
+        guard ats <= 1, let weekday, let hour, let name = weekdayFullNames[weekday] else { return nil }
+        return (weekday, hour, "\(name) at \(hour)")
+    }
+
+    /// Whether the detector's answer is the hour that was asked, in either
+    /// half of the day. A detector that dropped it answers noon, and noon is
+    /// the time nobody asked for.
+    static func isReading(_ read: Date, of hour: Int, calendar: Calendar) -> Bool {
+        let parts = calendar.dateComponents([.hour, .minute], from: read)
+        guard let readHour = parts.hour, parts.minute == 0 else { return false }
+        return hour > 12 ? readHour == hour : readHour % 12 == hour % 12
+    }
+
+    /// The next `weekday` at the time of day `read` says — today, while that
+    /// time is still ahead, and otherwise the next one.
+    ///
+    /// Only the detector's hour and minute are kept. Its date is not: asked
+    /// "wednesday at 5" late on a Wednesday it moves to next week, which is
+    /// right, but the day is this file's to decide, so that no reading of a
+    /// weekday can land on a date of the month, or in the past.
+    static func nextWeekday(_ weekday: Int, atTimeOf read: Date, now: Date, calendar: Calendar) -> Date? {
+        let parts = calendar.dateComponents([.hour, .minute], from: read)
+        guard let hour = parts.hour, let minute = parts.minute else { return nil }
+        let today = calendar.startOfDay(for: now)
+        // A week and a day, so today's weekday is reached twice: today, and
+        // next week once today's time has gone.
+        for offset in 0...7 {
+            guard let day = calendar.date(byAdding: .day, value: offset, to: today),
+                  calendar.component(.weekday, from: day) == weekday,
+                  let time = wallClock(hour: hour, minute: minute, on: day, calendar: calendar),
+                  time > now
+            else { continue }
+            return time
+        }
+        return nil
+    }
+
+    /// "at 5", "5", "5 o'clock": a whole hour, and nothing to say which half of
+    /// the day — `bareClockTime`'s to read, never the detector's. The detector
+    /// has no match for "at 5", and it reads "5 o'clock" as five in the
+    /// morning, which the phrase never said.
+    static func isLoneHour(_ phrase: String) -> Bool {
+        let rest = phrase.lowercased()
+            .split(whereSeparator: \.isWhitespace)
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:!?")) }
+            .filter { !$0.isEmpty && !["at", "o'clock", "oclock"].contains($0) }
+        guard rest.count == 1, let only = rest.first, (1...2).contains(only.count),
+              only.allSatisfy({ $0.isASCII && $0.isNumber }), let hour = Int(only)
+        else { return false }
+        return (0...23).contains(hour)
+    }
+
+    /// Whether the phrase is one clock time with nothing else in it — "6pm",
+    /// "at 6 pm", "18:00" — and the time names its half of the day: an am or
+    /// pm, or an hour past twelve.
+    ///
+    /// Anything more is the detector's to read. "tomorrow at 3pm" has a 3 and
+    /// a day word `bareClockTime` does not understand, and would land at three
+    /// o'clock TODAY; "09:00" is a reading `bareClockTime` makes differently
+    /// from the detector — the next nine o'clock, which after nine in the
+    /// morning is nine at night — so it keeps the reading it always had.
+    static func isUnambiguousClockTime(_ phrase: String) -> Bool {
+        let words = phrase.lowercased()
+            .split(whereSeparator: \.isWhitespace)
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:!?")) }
+        var times = 0
+        var namesHalf = false
+        for word in words {
+            switch word {
+            case "at":
+                continue
+            case "am", "pm":
+                namesHalf = true
+                continue
+            default:
+                break
+            }
+            var digits = Substring(word)
+            if digits.hasSuffix("am") || digits.hasSuffix("pm") {
+                digits = digits.dropLast(2)
+                namesHalf = true
+            }
+            let pieces = digits.split(separator: ":", omittingEmptySubsequences: false)
+            guard (1...2).contains(pieces.count),
+                  pieces.allSatisfy({ !$0.isEmpty && $0.count <= 2 && $0.allSatisfy(\.isNumber) }),
+                  let hour = Int(pieces[0]), (0...23).contains(hour)
+            else { return false }
+            if pieces.count == 2, let minute = Int(pieces[1]), !(0...59).contains(minute) { return false }
+            if hour > 12 { namesHalf = true }
+            times += 1
+        }
+        return times == 1 && namesHalf
+    }
+
     /// An hour with no date around it — "at 9", "morning at 7", "17:30".
     ///
     /// Needed because `NSDataDetector` returns NO MATCH for a bare hour without
@@ -401,11 +716,17 @@ public enum MomentPhrase {
     /// refuses it, which is how a repeating reminder feature ships looking
     /// broken.
     ///
-    /// Where there is no am/pm and no part-of-day word, the answer is the NEXT
-    /// nine o'clock, whichever half of the day that falls in. That is a choice
-    /// rather than a reading, and it is the one every clock app on the phone
-    /// makes; the confirmation says which one it picked, so a user who meant
-    /// the other one sees it in the same breath rather than the next morning.
+    /// Where a whole hour has no am/pm and no part-of-day word, one to six is
+    /// the afternoon: "at 5" is five today while that is still ahead, and five
+    /// tomorrow once it has gone. The rule used to be the NEXT five o'clock,
+    /// whichever half of the day it fell in, and asked at 7:33 PM that was five
+    /// in the morning — "remind me to call the plumber at 5" was filed for
+    /// 5:00 AM, which nobody means, and "Friday 5" and "tomorrow 5" already
+    /// meant five in the afternoon. Seven to twelve, and a time with minutes,
+    /// keep that next-one-round reading: "at 9" at 2 PM is nine tonight, "at
+    /// 7" at 9 PM is seven tomorrow morning. Either way it is a choice rather
+    /// than a reading, and the confirmation says which one it picked, so a
+    /// user who meant the other one sees it in the same breath.
     static func bareClockTime(_ phrase: String, now: Date, calendar: Calendar) -> Date? {
         let words = phrase.lowercased()
             .split(whereSeparator: \.isWhitespace)
@@ -418,8 +739,13 @@ public enum MomentPhrase {
         // became eight in the evening — the confidently-wrong answer this whole
         // file exists to refuse, reintroduced by the fallback meant to help.
         // So a number counts only with something beside it saying it is a
-        // clock: a colon, an am/pm, or the word "at" immediately before it.
+        // clock: a colon, an am/pm, the word "at" immediately before it, an
+        // "o'clock" or a part of the day after it — or nothing beside it at
+        // all. "9" on its own is what Apple's model passes for "remind me to
+        // call mum at 9", and a phrase that is only an hour has nothing else
+        // to be.
         var isClock = false
+        var isWholeHour = false
         for (index, word) in words.enumerated() {
             let pieces = word.split(separator: ":", omittingEmptySubsequences: false)
             if pieces.count == 2, let h = Int(pieces[0]), let m = Int(pieces[1]), (0...23).contains(h), (0...59).contains(m) {
@@ -435,10 +761,17 @@ public enum MomentPhrase {
             }
             if let h = Int(word), (0...23).contains(h) {
                 let precededByAt = index > 0 && words[index - 1] == "at"
-                let followedByMeridiem = index + 1 < words.count && ["am", "pm"].contains(words[index + 1])
-                guard precededByAt || followedByMeridiem else { continue }
+                let next = index + 1 < words.count ? words[index + 1] : ""
+                let followedByMeridiem = ["am", "pm"].contains(next)
+                let followedByOClock = ["o'clock", "oclock"].contains(next)
+                // "5 in the morning", "10 at night".
+                let after = words.dropFirst(index + 1).prefix(3).map { $0 }
+                let followedByPartOfDay = (after.count == 3 && after[0] == "in" && after[1] == "the" && timesOfDay.contains(after[2]))
+                    || after.starts(with: ["at", "night"])
+                guard precededByAt || followedByMeridiem || followedByOClock || followedByPartOfDay || words.count == 1 else { continue }
                 hour = h
                 isClock = true
+                isWholeHour = true
                 break
             }
         }
@@ -456,23 +789,38 @@ public enum MomentPhrase {
             if resolved == 12 { resolved = 0 }
         } else if resolved <= 12, saysLater || suffixedPM {
             if resolved != 12 { resolved += 12 }
+        } else if isWholeHour, (1...6).contains(resolved) {
+            // Neither said, and one to six: the afternoon.
+            resolved += 12
         } else if resolved <= 12 {
             // Neither said. Take whichever of the two comes round first.
-            let today = calendar.startOfDay(for: now)
             let candidates = [resolved, resolved + 12].compactMap {
-                calendar.date(byAdding: DateComponents(hour: $0, minute: minute), to: today)
+                wallClock(hour: $0, minute: minute, on: now, calendar: calendar)
             }
             if let next = candidates.filter({ $0 > now }).min() { return next }
             // Both gone today, so the earlier of the two tomorrow.
             return candidates.min().flatMap { calendar.date(byAdding: .day, value: 1, to: $0) }
         }
 
-        let today = calendar.startOfDay(for: now)
-        guard let candidate = calendar.date(byAdding: DateComponents(hour: resolved, minute: minute), to: today) else {
+        guard let candidate = wallClock(hour: resolved, minute: minute, on: now, calendar: calendar) else {
             return nil
         }
         guard candidate <= now else { return candidate }
         return calendar.date(byAdding: .day, value: 1, to: candidate)
+    }
+
+    /// `hour:minute` as the clock on the wall reads it on `day`, in the
+    /// calendar's zone. Hour 24 is the midnight that ends the day.
+    ///
+    /// Set, never added to midnight: on the day the clocks go forward, the
+    /// start of the day plus eighteen hours is seven in the evening, and on the
+    /// day they go back it is five.
+    static func wallClock(hour: Int, minute: Int, on day: Date, calendar: Calendar) -> Date? {
+        guard hour == 24 else {
+            return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day)
+        }
+        return calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: day))
+            .flatMap { calendar.date(bySettingHour: 0, minute: minute, second: 0, of: $0) }
     }
 
     /// The real natural-language pass.

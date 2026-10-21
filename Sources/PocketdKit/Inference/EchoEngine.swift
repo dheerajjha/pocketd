@@ -37,6 +37,16 @@ public actor EchoEngine: InferenceEngine {
     /// handed.
     public private(set) var receivedMessages: [ChatMessage] = []
 
+    /// Every stream still producing, so `interrupt()` can end them all — the
+    /// contract `LlamaEngine` has to meet with a real model, kept testable here
+    /// without one.
+    private var streams: [UUID: Task<Void, Never>] = [:]
+
+    /// How many streams are still producing. A cancelled stream that kept
+    /// producing would show up here, which is the whole of the Stop bug in one
+    /// number.
+    public var activeStreams: Int { streams.count }
+
     /// - Parameter announcesToolCall: When set, the stream opens with a
     ///   `.toolCallStarted` event naming this tool. Nothing here executes a
     ///   tool; the point is that every consumer of a `GenerationEvent` stream —
@@ -84,19 +94,22 @@ public actor EchoEngine: InferenceEngine {
         let delay = self.delay
         let announcesToolCall = self.announcesToolCall
 
-        return AsyncThrowingStream { continuation in
-            let task = Task {
-                if let announcesToolCall {
-                    continuation.yield(.toolCallStarted(name: announcesToolCall))
-                }
-                for chunk in chunks {
-                    if Task.isCancelled {
-                        continuation.finish(throwing: InferenceError.cancelled)
-                        return
-                    }
-                    if delay > .zero { try? await Task.sleep(for: delay) }
-                    continuation.yield(.token(chunk))
-                }
+        let (stream, continuation) = AsyncThrowingStream<GenerationEvent, any Error>.makeStream()
+        let token = UUID()
+        // Strong, because the engine outliving one of its own streams is
+        // harmless and the bookkeeping below needs it to be there.
+        let task = Task { [self] in
+            if let announcesToolCall {
+                continuation.yield(.toolCallStarted(name: announcesToolCall))
+            }
+            for chunk in chunks {
+                if delay > .zero { try? await Task.sleep(for: delay) }
+                if Task.isCancelled { break }
+                continuation.yield(.token(chunk))
+            }
+            if Task.isCancelled {
+                continuation.finish(throwing: InferenceError.cancelled)
+            } else {
                 let reason: FinishReason = limited.count < reply.count ? .length : .stop
                 continuation.yield(.finished(
                     reason: reason,
@@ -104,8 +117,19 @@ public actor EchoEngine: InferenceEngine {
                 ))
                 continuation.finish()
             }
-            continuation.onTermination = { _ in task.cancel() }
+            await forget(token)
         }
+        streams[token] = task
+        continuation.onTermination = { _ in task.cancel() }
+        return stream
+    }
+
+    public func interrupt() async {
+        for task in streams.values { task.cancel() }
+    }
+
+    private func forget(_ token: UUID) {
+        streams[token] = nil
     }
 }
 

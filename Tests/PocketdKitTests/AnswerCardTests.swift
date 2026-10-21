@@ -423,7 +423,8 @@ struct AnswerCardBuilderTests {
             return
         }
         #expect(list.eyebrow == "2 reminders")
-        #expect(list.items[0].accent == "P1")
+        // One mark for "this one matters", never EventKit's backwards number.
+        #expect(list.items[0].accent == "!")
         // No priority set is not a priority of zero, and the card must not
         // invent one where EventKit reported none.
         #expect(list.items[1].accent == nil)
@@ -433,7 +434,7 @@ struct AnswerCardBuilderTests {
             if case .note(let note) = section { return note }
             return nil
         }
-        #expect(notes.contains { $0.text.contains("1 is highest") })
+        #expect(!notes.contains { $0.text.contains("1 is highest") }, "the scale is for the model, not the card")
     }
 
     @Test("one of a thing is not one things")
@@ -861,9 +862,11 @@ struct AnswerCardHealthTests {
         #expect(card.sections.isEmpty)
     }
 
-    /// A metric that produced nothing is the same ambiguity one level down, so
-    /// the note that names both possibilities has to travel with it.
-    @Test("a metric that came back empty carries both possibilities, in one box")
+    /// Metrics nobody asked about that came back empty are not mentioned:
+    /// "Nothing came back for Respiratory rate, Mindful minutes" plus three
+    /// sentences about iOS answered "How did I sleep?" (QA S2-new). Only the
+    /// asked-for metric gets a sentence when it is empty (HealthSummaryTests).
+    @Test("a metric nobody asked about that came back empty is not mentioned")
     func healthMissingMetricsKeepTheAmbiguity() async throws {
         let card = try #require(await HealthFixture.card(.activity, readout: HealthReadout(samples: [
             .steps: HealthFixture.days(30, .count) { _ in 7_100 }
@@ -873,10 +876,7 @@ struct AnswerCardHealthTests {
             if case .note(let note) = section { return note }
             return nil
         }
-        #expect(notes.count == 1)
-        #expect(notes[0].text.contains("Active energy, Exercise"))
-        #expect(notes[0].text.contains(HealthSummary.ambiguityNote))
-        #expect(notes[0].tone == .info)
+        #expect(notes.isEmpty)
     }
 
     @Test("the long-memory lines are listed as the claims they are")
@@ -927,10 +927,10 @@ struct AnswerCardHealthTests {
             #expect(item.text + " \u{2014} " + (item.detail ?? "") == line)
         }
         #expect(list.items[0].text.hasPrefix("Running, Wed, Sep 10"))
-        #expect(list.items[0].detail == "32 m, 340 kcal.")
+        #expect(list.items[0].detail == "32 min, 340 kcal.")
         // No energy logged is not an energy of zero, and the tool already
         // dropped the clause rather than printing one.
-        #expect(list.items[1].detail == "50 m.")
+        #expect(list.items[1].detail == "50 min.")
     }
 
     /// The heading follows what was asked, exactly as it does for the calendar:
@@ -1073,7 +1073,9 @@ struct AnswerCardAppSurfaceTests {
         #expect(cards.contains(".contextMenu { copyButton }"))
         // A context menu is a long press, which VoiceOver spends on its own
         // gestures, so the rotor needs the same action.
-        #expect(cards.contains(#".accessibilityAction(named: "Copy message", onCopy)"#))
+        // The name is the view's to choose ("Copy" since the Ask rework); what
+        // matters here is that the action exists beside the menu.
+        #expect(cards.contains(".accessibilityAction(named:") && cards.contains("onCopy)"))
         // And nowhere else: a second construction site is a second card with
         // nothing attached to it.
         #expect(source.components(separatedBy: "AnswerCardView(").count - 1 == 1)

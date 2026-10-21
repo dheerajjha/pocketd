@@ -99,6 +99,22 @@ public enum RequestOrigin: Sendable, Equatable {
         case .scheduledTask, .network: false
         }
     }
+
+    /// The phone's own screens — the conversation, the brief, a routine — as
+    /// against another device.
+    ///
+    /// The engine treats these differently in three ways, all of them about
+    /// the person reading rather than about access: they never think first,
+    /// their reasoning is kept off the screen, and a conversation too long for
+    /// the window loses its oldest turns instead of failing. A network client
+    /// gets the raw protocol — its own thinking switch, its own output, and a
+    /// 413 to decide about — because it is somebody else's software.
+    public var isThisPhone: Bool {
+        switch self {
+        case .onDeviceChat, .scheduledTask: true
+        case .network: false
+        }
+    }
 }
 
 public extension RequestOrigin {

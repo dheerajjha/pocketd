@@ -22,34 +22,29 @@ private enum Phone {
 struct StarterModelTests {
 
     /// Every device class this app is expected to run on, with and without the
-    /// entitlement. The recommendation has to be a model that can work the
-    /// tools, because tools are what the intro is introducing.
-    @Test("recommends a tool-capable model on every device that can hold one", arguments: [
-        (4, false, "qwen3-1.7b"),
-        (4, true, "qwen3-1.7b"),
-        (6, false, "qwen3-1.7b"),
-        (6, true, "qwen3-1.7b"),
-        (8, false, "qwen3-1.7b"),
-        (8, true, "qwen3-4b")
+    /// entitlement. One answer everywhere it fits: the brain that reads your day
+    /// and downloads in a few minutes.
+    @Test("recommends the one brain that reads your day on every phone that can hold it", arguments: [
+        (4, false), (4, true), (6, false), (6, true), (8, false), (8, true), (12, false), (12, true)
     ])
-    func recommendation(ram: Int, entitled: Bool, expected: String) throws {
+    func recommendation(ram: Int, entitled: Bool) throws {
         let budget = Phone.budget(ram: ram, entitled: entitled)
         let pick = try #require(StarterModels.recommended(budget: budget))
 
-        #expect(pick.id == expected)
+        #expect(pick.id == "qwen3-1.7b")
         #expect(pick.toolSupport.isYes, "an assistant that cannot call a tool is a different product")
         #expect(budget.fit(for: pick).isDownloadable, "never recommend something the gate would refuse")
-        #expect(pick.id != "smollm2-360m", "the smallest model is a fallback, not a default")
+        #expect(pick == BrainRecommendation.recommended(for: budget), "the intro asks the one rule")
     }
 
-    @Test("falls back to the smallest model only when nothing tool-capable fits")
-    func tinyDevice() throws {
-        // 2 GB: nothing in the catalogue that can call a tool will load.
+    @Test("a phone too small for any brain that reads the day is offered nothing, not a chat-only one")
+    func tinyDevice() {
+        // 2 GB: nothing that can call a tool will load. SmolLM2 would, and it
+        // used to be the fallback; it printed its own instructions as the brief.
         let budget = Phone.budget(ram: 2, entitled: false)
-        let pick = try #require(StarterModels.recommended(budget: budget))
-
-        #expect(pick.id == "smollm2-360m")
-        #expect(StarterModels.candidates(budget: budget).allSatisfy { !$0.toolSupport.isYes })
+        #expect(StarterModels.recommended(budget: budget) == nil)
+        #expect(StarterModels.candidates(budget: budget).isEmpty)
+        #expect(StarterModels.shortlist(budget: budget).isEmpty)
     }
 
     @Test("a phone that can hold nothing is told so rather than offered a refusal")
@@ -63,8 +58,8 @@ struct StarterModelTests {
         #expect(StarterModels.shortlist(budget: budget).isEmpty)
     }
 
-    @Test("the shortlist spans the phone and always contains the recommendation", arguments: [
-        (4, false), (4, true), (6, false), (6, true), (8, false), (8, true)
+    @Test("the shortlist only ever lists brains that read your day, the recommendation among them", arguments: [
+        (4, false), (4, true), (6, false), (6, true), (8, false), (8, true), (12, true)
     ])
     func shortlist(ram: Int, entitled: Bool) throws {
         let budget = Phone.budget(ram: ram, entitled: entitled)
@@ -72,38 +67,49 @@ struct StarterModelTests {
         let pick = try #require(StarterModels.recommended(budget: budget))
 
         #expect(list.count <= 3)
-        #expect(!list.isEmpty)
         #expect(list.contains { $0.id == pick.id }, "the intro selects this row; it has to be on screen")
+        #expect(list.allSatisfy { $0.dayAccess().readsYourDay }, "a recommended list is a list of brains that read your day")
         #expect(list.allSatisfy { budget.fit(for: $0).isDownloadable })
         #expect(list.allSatisfy { !$0.declaredCapabilities.vision.isYes }, "no projector downloads in the intro")
         #expect(list == list.sorted { $0.totalDownloadBytes < $1.totalDownloadBytes })
         #expect(Set(list.map(\.id)).count == list.count, "no duplicates")
     }
 
-    @Test("on the primary test device the intro offers the three it always did")
+    @Test("on the primary test device the intro offers one brain, and it reads your day")
     func iPhone14Shortlist() {
         let budget = Phone.iPhone14()
-        #expect(StarterModels.shortlist(budget: budget).map(\.id)
-                == ["smollm2-360m", "llama-3.2-1b", "qwen3-1.7b"])
-        // The change is which one is selected. It used to be the middle by
-        // download size — Llama 3.2 1B, whose template has no notion of tools.
+        // It used to be SmolLM2, Llama 3.2 1B and Qwen3 1.7B — two of three
+        // unable to open the calendar, and nothing on screen saying so.
+        #expect(StarterModels.shortlist(budget: budget).map(\.id) == ["qwen3-1.7b"])
         #expect(StarterModels.recommended(budget: budget)?.id == "qwen3-1.7b")
     }
 
-    @Test("what is already on the phone is not offered again")
-    func installedAreExcluded() throws {
-        let budget = Phone.iPhone14()
-        let withoutQwen = try #require(StarterModels.recommended(budget: budget, installed: ["qwen3-1.7b"]))
+    @Test("a replayed intro never offers a second brain to a phone that already reads your day", arguments: [
+        ["qwen3-1.7b"], ["gemma-4-e2b"], ["qwen3-4b", "smollm2-360m"]
+    ])
+    func replayOffersNothing(installed: [String]) {
+        // The walkthrough's replay offered Qwen3 4B, 2.5 GB, to a phone holding
+        // Gemma 4 E2B and SmolLM2.
+        #expect(StarterModels.recommended(budget: Phone.iPhone14(), installed: Set(installed)) == nil)
+    }
 
-        #expect(withoutQwen.id != "qwen3-1.7b")
+    @Test("a phone holding only chat-only brains is offered the one that reads your day")
+    func chatOnlyPhoneIsOffered() {
+        let pick = StarterModels.recommended(budget: Phone.iPhone14(), installed: ["smollm2-360m", "llama-3.2-1b"])
+        #expect(pick?.id == "qwen3-1.7b")
+    }
+
+    @Test("what is already on the phone is not listed again")
+    func installedAreExcluded() {
+        let budget = Phone.budget(ram: 8, entitled: true)
         #expect(StarterModels.shortlist(budget: budget, installed: ["qwen3-1.7b"])
             .allSatisfy { $0.id != "qwen3-1.7b" })
     }
 
-    @Test("the simulator's demoted verdicts do not demote the recommendation")
+    @Test("the simulator's demoted verdicts still recommend a brain that reads the day")
     func simulatorStillRecommendsSomethingUseful() throws {
         // Everything over 1 GB is `.tight` on a Mac, so a rule that demanded
-        // `.comfortable` would recommend SmolLM2 on every simulator — and the
+        // `.comfortable` would recommend nothing on every simulator — and the
         // simulator is where the tool loop is developed.
         let budget = DeviceBudget(
             physicalMemoryBytes: 32 * Phone.gigabyte,
@@ -112,7 +118,6 @@ struct StarterModelTests {
         )
         let pick = try #require(StarterModels.recommended(budget: budget))
 
-        #expect(pick.toolSupport.isYes)
-        #expect(pick.id != "smollm2-360m")
+        #expect(pick.id == "qwen3-1.7b", "the smallest that reads the day, not the 3.1 GB Gemma the simulator used to get")
     }
 }

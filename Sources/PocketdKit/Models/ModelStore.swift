@@ -4,11 +4,25 @@ public struct DownloadProgress: Sendable, Equatable {
     public var modelID: String
     public var receivedBytes: Int64
     public var totalBytes: Int64
+    /// The smoothed speed, measured where the bytes arrive (`TransferPace`).
+    /// `nil` for the first couple of seconds, until there is a rate worth
+    /// quoting.
+    public var bytesPerSecond: Double?
+    /// Time left at that speed, or `nil` when there is no speed yet.
+    public var secondsRemaining: TimeInterval?
 
-    public init(modelID: String, receivedBytes: Int64, totalBytes: Int64) {
+    public init(
+        modelID: String,
+        receivedBytes: Int64,
+        totalBytes: Int64,
+        bytesPerSecond: Double? = nil,
+        secondsRemaining: TimeInterval? = nil
+    ) {
         self.modelID = modelID
         self.receivedBytes = receivedBytes
         self.totalBytes = totalBytes
+        self.bytesPerSecond = bytesPerSecond
+        self.secondsRemaining = secondsRemaining
     }
 
     public var fraction: Double {
@@ -107,6 +121,28 @@ public enum DownloadInterruption: Sendable, Equatable {
 // The delegate calls in on URLSession's queue while the actor reads the result,
 // so the lock is doing real work — the same arrangement, and the same reason,
 // as `FileDownloader`'s.
+/// One download's pace, shared by every callback that reports on it — the
+/// weights, a clean retry, the projector — so the speed is measured across the
+/// whole transfer rather than restarting with each file.
+private final class PaceRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pace = TransferPace()
+
+    /// Records `received` and returns the progress with the pace filled in.
+    func progress(modelID: String, received: Int64, total: Int64) -> DownloadProgress {
+        lock.lock()
+        defer { lock.unlock() }
+        pace.observe(bytes: received, at: Date())
+        return DownloadProgress(
+            modelID: modelID,
+            receivedBytes: received,
+            totalBytes: total,
+            bytesPerSecond: pace.bytesPerSecond,
+            secondsRemaining: pace.secondsRemaining(received: received, total: total)
+        )
+    }
+}
+
 private final class AnnouncedSize: @unchecked Sendable {
     private let lock = NSLock()
     private var expected: Int64 = 0
@@ -324,19 +360,20 @@ public actor ModelStore {
         let declaredSize = model.sizeBytes
         let id = model.id
         let announced = AnnouncedSize()
+        let pace = PaceRecorder()
 
         let downloader = FileDownloader(
             destination: destination,
             resumeDataURL: resumeURL
         ) { received, expected in
             announced.observe(written: received, expected: expected)
-            onProgress(DownloadProgress(
+            onProgress(pace.progress(
                 modelID: id,
-                receivedBytes: received,
+                received: received,
                 // URLSession reports -1 when the server sends no length, which
                 // renders as a progress bar stuck at zero. The catalogue size is
                 // the better estimate in that case.
-                totalBytes: expected > 0 ? expected + model.projectorSizeBytes : declaredSize + model.projectorSizeBytes
+                total: expected > 0 ? expected + model.projectorSizeBytes : declaredSize + model.projectorSizeBytes
             ))
         }
 
@@ -350,10 +387,10 @@ public actor ModelStore {
             try? FileManager.default.removeItem(at: resumeURL)
             let retry = FileDownloader(destination: destination, resumeDataURL: resumeURL) { received, expected in
                 announced.observe(written: received, expected: expected)
-                onProgress(DownloadProgress(
+                onProgress(pace.progress(
                     modelID: id,
-                    receivedBytes: received,
-                    totalBytes: expected > 0 ? expected + model.projectorSizeBytes : declaredSize + model.projectorSizeBytes
+                    received: received,
+                    total: expected > 0 ? expected + model.projectorSizeBytes : declaredSize + model.projectorSizeBytes
                 ))
             }
             try await run(retry, for: model, resumeData: nil)
@@ -382,11 +419,7 @@ public actor ModelStore {
             let projectorAnnounced = AnnouncedSize()
             let downloader = FileDownloader(destination: local, resumeDataURL: projectorResume) { received, expected in
                 projectorAnnounced.observe(written: received, expected: expected)
-                onProgress(DownloadProgress(
-                    modelID: id,
-                    receivedBytes: declaredSize + received,
-                    totalBytes: total
-                ))
+                onProgress(pace.progress(modelID: id, received: declaredSize + received, total: total))
             }
             try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in

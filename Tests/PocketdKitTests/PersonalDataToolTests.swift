@@ -197,7 +197,7 @@ struct PersonalDataToolAuthorizationTests {
         // The model repeats this to the user more or less verbatim, so it has to
         // be a whole instruction. "Permission denied" on its own sends people to
         // the app's own page, which is not where the toggle is.
-        #expect(text?.contains("Settings > Privacy & Security > Reminders > Pocketd") == true)
+        #expect(text?.contains("Settings › Privacy & Security › Reminders › Pocketd") == true)
     }
 
     @Test("a permission failure is never confusable with an empty day")

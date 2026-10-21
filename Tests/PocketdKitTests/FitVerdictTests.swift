@@ -178,54 +178,53 @@ struct FitVerdictTests {
 struct SimulatorBudgetTests {
 
     /// A 32 GB Mac, which is what `ProcessInfo.physicalMemory` reports inside
-    /// the simulator and what produced the audit's "Usable memory 15.46 GB".
-    private func mac(entitled: Bool = false) -> DeviceBudget {
+    /// the simulator. The simulator judges brains as the phone it stands in
+    /// for, not as this.
+    private func mac(gigabytes: Int64 = 32, entitled: Bool = false) -> DeviceBudget {
         DeviceBudget(
-            physicalMemoryBytes: 32 * Phone.gigabyte,
+            physicalMemoryBytes: gigabytes * Phone.gigabyte,
             hasIncreasedMemoryLimit: entitled,
             environment: .simulator
         )
     }
 
-    @Test("the budget still uses the Mac's RAM, and says so")
-    func usesTheHostRAM() {
-        let budget = mac()
-        #expect(budget.usableBytes == Int64(Double(32 * Phone.gigabyte) * 0.45))
-        #expect(budget.environmentNote?.contains("722 MB") == true)
+    @Test("the simulator judges as an 8 GB iPhone with Pocketd's entitlement, whatever Mac it runs on")
+    func judgesAsAPhone() {
+        let phone = Phone.eightGB(entitled: true)
+        for gigabytes: Int64 in [16, 32, 96] {
+            #expect(mac(gigabytes: gigabytes).usableBytes == phone.usableBytes)
+        }
+        #expect(mac().verdictMemoryBytes == DeviceBudget.simulatedPhoneMemoryBytes)
+        #expect(mac().environmentNote?.contains("8 GB iPhone") == true)
         #expect(Phone.sixGB(entitled: false).environmentNote == nil, "a phone has nothing to apologise for")
     }
 
-    @Test("only models under 1 GB are called Fits on a simulator")
-    func onlySmallModelsFit() throws {
-        let budget = mac()
-
-        let small = try #require(ModelCatalog.model(withID: "smollm2-360m"))
-        #expect(small.memoryEstimate(atContext: 4096).totalBytes < DeviceBudget.simulatorComfortableCeilingBytes)
-        #expect(budget.fit(for: small) == .comfortable)
-
-        // Every one of these fits inside 45% of 32 GB with room to spare, and
-        // none of them says anything about a phone.
-        for id in ["llama-3.2-1b", "qwen3-1.7b", "llama-3.2-3b", "qwen3-4b", "gemma-4-e2b"] {
-            let model = try #require(ModelCatalog.model(withID: id))
-            #expect(budget.fit(for: model) == .tight, "\(id) must not wear a Fits badge on a Mac")
-        }
-    }
-
-    @Test("demoting is not refusing: the simulator stays usable")
-    func nothingNewIsRefused() throws {
-        let budget = mac()
+    @Test("every catalogue brain gets the verdict an 8 GB iPhone gives it")
+    func agreesWithThePhone() {
+        let phone = Phone.eightGB(entitled: true)
         for model in ModelCatalog.all {
-            #expect(budget.fit(for: model).isDownloadable,
-                    "a 32 GB Mac can hold any of these, and sim-demo.sh downloads them")
+            #expect(mac().fit(for: model) == phone.fit(for: model), "\(model.id)")
         }
     }
 
-    @Test("the documented simulator ceiling is the number the audit measured")
-    func theCeilingIsWrittenDown() {
-        // 722 MB, seen on the Models screen as "usable memory" before this was
-        // a constant anyone could read.
-        #expect(DeviceBudget.simulatorProcessCeilingBytes == 722 * 1024 * 1024)
-        #expect(DeviceBudget.simulatorComfortableCeilingBytes > DeviceBudget.simulatorProcessCeilingBytes)
+    @Test("the recommended brain is comfortable here, as on the phones it stands for")
+    func recommendationIsComfortable() throws {
+        let pick = try #require(BrainRecommendation.recommended(for: mac()))
+        #expect(pick.id == "qwen3-1.7b")
+        #expect(mac().fit(for: pick) == .comfortable, "More brains must not call the recommendation a tight fit")
+    }
+
+    @Test("a load on a Mac proves nothing about a phone")
+    func loadsDoNotWidenTheBudget() {
+        var budget = mac()
+        budget.provenLoadBytes = 12 * Phone.gigabyte
+        #expect(budget.usableBytes == mac().usableBytes)
+        #expect(!budget.isProven)
+    }
+
+    @Test("a ten-gigabyte file is too big, on a Mac with room for it")
+    func tenGigabytesIsTooBig() {
+        let estimate = MemoryEstimate(weightsBytes: 10_450_000_000, projectorBytes: 0, dimensions: nil, contextTokens: 4096)
+        #expect(mac(gigabytes: 64).fit(for: estimate) == .willNotFit)
     }
 }
-

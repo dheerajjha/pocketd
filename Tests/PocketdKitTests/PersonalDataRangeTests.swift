@@ -341,14 +341,15 @@ struct PersonalDataRangeTests {
     @Test("each refusal points at the screen that actually has the switch")
     func refusalsAreActionable() {
         let denied = PersonalDataAuthorization.denied.explanation(for: .calendar)
-        #expect(denied.contains("Privacy & Security > Calendars"))
+        #expect(denied.contains("Privacy & Security › Calendars"))
 
         let remindersDenied = PersonalDataAuthorization.denied.explanation(for: .reminders)
-        #expect(remindersDenied.contains("Privacy & Security > Reminders"))
+        #expect(remindersDenied.contains("Privacy & Security › Reminders"))
 
         // Restricted is the one state the user cannot fix in Settings; saying
         // "turn it on in Settings" there is a wild goose chase.
         let restricted = PersonalDataAuthorization.restricted.explanation(for: .calendar)
+        #expect(restricted.contains("Settings ›") == false)
         #expect(restricted.contains("Settings >") == false)
         #expect(restricted.contains("restricted"))
 

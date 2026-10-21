@@ -248,6 +248,92 @@ struct PersonalDataWriteTests {
         #expect(sentence.contains("2:15") || sentence.contains("02:15"), "\(sentence)")
     }
 
+    // MARK: - "Remind me to call mom at 6pm", asked at 2:33 PM
+
+    /// The zone this machine is in, which is the zone the simulator runs in;
+    /// the zone the wrong reminder was seen in; and UTC.
+    static let zones: [String] = [TimeZone.current.identifier, "Asia/Kolkata", "UTC"]
+        .reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
+
+    private func createAt233PM(_ when: String, in zone: String, spy: WriteSpy) async -> (Calendar, [String: any Sendable]) {
+        var zoned = Calendar(identifier: .gregorian)
+        zoned.timeZone = TimeZone(identifier: zone)!
+        let afternoon = zoned.date(from: DateComponents(year: 2026, month: 10, day: 21, hour: 14, minute: 33))!
+        let payload = await PersonalDataWrites.createReminder(
+            title: "call mom",
+            when: when,
+            now: afternoon,
+            calendar: zoned,
+            origin: .onDeviceChat,
+            existing: { .rows([], truncated: false) },
+            write: { spy.write($0) }
+        )
+        return (zoned, payload)
+    }
+
+    @Test("6pm, asked at 2:33 PM, is filed for six o'clock today", arguments: PersonalDataWriteTests.zones)
+    func sixPMIsFiledForToday(zone: String) async {
+        // Seen on the simulator with Apple's model: the card read "Reminder
+        // set: "call mom" for Thu, 22 Oct at 6:00 PM" on Wednesday afternoon.
+        // The model had sent "tomorrow at 18:00"; handed the user's "6pm", the
+        // write path has to file today.
+        let spy = WriteSpy()
+        let (zoned, payload) = await createAt233PM("6pm", in: zone, spy: spy)
+        let filed = spy.reminders.first
+        let wall = filed?.due.map { zoned.dateComponents([.month, .day, .hour, .minute], from: $0) }
+        #expect(wall?.month == 10 && wall?.day == 21, "\(zone): \(String(describing: wall))")
+        #expect(wall?.hour == 18 && wall?.minute == 0, "\(zone): \(String(describing: wall))")
+        #expect(filed?.dueHasTime == true)
+        // Nothing was moved, so the sentence must not say it was.
+        #expect(!text(payload).contains("already passed"), "\(text(payload))")
+    }
+
+    @Test("2am, asked at 2:33 PM, is filed for two tomorrow morning", arguments: PersonalDataWriteTests.zones)
+    func twoAMIsFiledForTomorrow(zone: String) async {
+        // The rule the fix keeps: a time already gone today means tomorrow.
+        let spy = WriteSpy()
+        let (zoned, _) = await createAt233PM("2am", in: zone, spy: spy)
+        let wall = spy.reminders.first?.due.map { zoned.dateComponents([.month, .day, .hour, .minute], from: $0) }
+        #expect(wall?.day == 22 && wall?.hour == 2 && wall?.minute == 0, "\(zone): \(String(describing: wall))")
+    }
+
+    @Test("a reminder for a day is due that day with no time, and is not moved")
+    func dayOnlyReminders() async {
+        // "Remind me to buy milk tomorrow" was filed for 12:00 PM. The real
+        // detector and clock, because it reads "tomorrow" against the system's.
+        let rightNow = Date()
+        let current = Calendar.current
+        func remind(_ when: String, spy: WriteSpy) async -> [String: any Sendable] {
+            await PersonalDataWrites.createReminder(
+                title: "buy milk", when: when, now: rightNow, calendar: current, origin: .onDeviceChat,
+                existing: { .rows([], truncated: false) }, write: { spy.write($0) }
+            )
+        }
+        let tomorrow = WriteSpy()
+        let payload = await remind("tomorrow", spy: tomorrow)
+        #expect(tomorrow.reminders.first?.dueHasTime == false)
+        #expect(tomorrow.reminders.first?.due == current.startOfDay(for: current.date(byAdding: .day, value: 1, to: rightNow)!))
+        #expect(!text(payload).contains(" at "), "\(text(payload))")
+
+        // "today" is today, however late it is — a day has no time to have
+        // passed.
+        let today = WriteSpy()
+        let todayPayload = await remind("today", spy: today)
+        #expect(today.reminders.first?.due == current.startOfDay(for: rightNow))
+        #expect(!text(todayPayload).contains("already passed"), "\(text(todayPayload))")
+    }
+
+    @Test("an event for a day asks what time, rather than starting at noon")
+    func dayOnlyEventsAsk() async {
+        let spy = WriteSpy()
+        let payload = await PersonalDataWrites.createEvent(
+            title: "Dinner with Priya", start: "tomorrow", durationMinutes: nil,
+            now: Date(), calendar: .current, origin: .onDeviceChat, write: { spy.write($0) }
+        )
+        #expect(!spy.touched)
+        #expect(text(payload).hasPrefix("What time on"), "\(text(payload))")
+    }
+
     // MARK: - Titles
 
     @Test("a title the user would not recognise is refused")
@@ -429,6 +515,82 @@ struct PersonalDataWriteTests {
         let payload = await event(start: "every so often", spy: spy)
         #expect(!spy.touched)
         #expect(text(payload).contains("how often and at what time"))
+    }
+
+    // MARK: - How long an event lasts
+
+    /// "8pm" and "6pm" are read against this calendar and `now`, not by the
+    /// detector, so these are the same in every zone and at every hour.
+    private func evening(
+        _ title: String,
+        at start: String,
+        said: String?,
+        minutes: Int?,
+        spy: WriteSpy
+    ) async -> [String: any Sendable] {
+        await PersonalDataWrites.createEvent(
+            title: title,
+            start: start,
+            durationMinutes: minutes,
+            userText: said,
+            now: now,
+            calendar: calendar,
+            origin: .onDeviceChat,
+            write: { spy.write($0) }
+        )
+    }
+
+    private func minutes(of event: NewEvent?) -> Int? {
+        event.map { Int($0.end.timeIntervalSince($0.start) / 60) }
+    }
+
+    @Test("dinner at 8pm with a made-up length is an hour, and the card says so")
+    func inventedLengthIsAnHour() async {
+        // Seen on the simulator with Apple's model: the card read "Added
+        // "dinner with Priya" to your calendar for Wed, 21 Oct at 8:00 PM, for
+        // 480 minutes." Nobody had said how long.
+        let spy = WriteSpy()
+        let payload = await evening("dinner with Priya", at: "8pm", said: "Add dinner with Priya at 8pm", minutes: 480, spy: spy)
+        #expect(minutes(of: spy.events.first) == 60)
+        #expect(text(payload).hasSuffix(", for an hour."), "\(text(payload))")
+        #expect(!text(payload).contains("480"))
+    }
+
+    @Test("a length the person said is the one written, and it is said back")
+    func statedLengthIsWritten() async {
+        let spy = WriteSpy()
+        let payload = await evening("workout", at: "6pm", said: "Add a 90 minute workout at 6pm", minutes: 90, spy: spy)
+        #expect(minutes(of: spy.events.first) == 90)
+        #expect(text(payload).hasSuffix(", for 90 minutes."), "\(text(payload))")
+
+        let twoHours = WriteSpy()
+        let longer = await evening("planning", at: "6pm", said: "add planning at 6pm for two hours", minutes: 120, spy: twoHours)
+        #expect(minutes(of: twoHours.events.first) == 120)
+        #expect(text(longer).contains("for 2 hours"), "\(text(longer))")
+    }
+
+    @Test("the words are the ones the engine bound for this answer")
+    func wordsComeFromTheTaskLocal() async {
+        // Neither engine passes the words through the model's arguments: they
+        // ride beside the origin. Unbound, there is nothing to hold the
+        // model's number against, and it stands while it is under twelve hours.
+        let bound = WriteSpy()
+        _ = await ToolContext.$userText.withValue("Add dinner with Priya at 8pm") {
+            await PersonalDataWrites.createEvent(
+                title: "dinner with Priya", start: "8pm", durationMinutes: 480,
+                now: now, calendar: calendar, origin: .onDeviceChat,
+                write: { bound.write($0) }
+            )
+        }
+        #expect(minutes(of: bound.events.first) == 60)
+
+        let unbound = WriteSpy()
+        _ = await PersonalDataWrites.createEvent(
+            title: "dinner with Priya", start: "8pm", durationMinutes: 480,
+            now: now, calendar: calendar, origin: .onDeviceChat,
+            write: { unbound.write($0) }
+        )
+        #expect(minutes(of: unbound.events.first) == 480)
     }
 }
 

@@ -21,10 +21,14 @@ public enum PersonalDataEntity: Sendable, Equatable, CaseIterable {
     /// user to them.
     public var settingsPath: String {
         switch self {
-        case .calendar: "Settings > Privacy & Security > Calendars > Pocketd"
-        case .reminders: "Settings > Privacy & Security > Reminders > Pocketd"
+        case .calendar: "Settings › Privacy & Security › Calendars › Pocketd"
+        case .reminders: "Settings › Privacy & Security › Reminders › Pocketd"
         }
     }
+
+    /// "Your calendar isn't" / "Your reminders aren't" — the noun decides the
+    /// verb, and a sentence the model repeats aloud should not trip on it.
+    var isPlural: Bool { self == .reminders }
 }
 
 /// What the app may do with one entity right now.
@@ -72,7 +76,12 @@ public enum PersonalDataAuthorization: Sendable, Equatable, CaseIterable {
         case .granted:
             "Pocketd can read your \(entity.noun)."
         case .notDetermined:
-            "Pocketd has not been given access to your \(entity.noun) yet and iOS returned no decision. Ask again, and allow the prompt."
+            // A tool no longer raises the iOS sheet mid-answer (it reads the
+            // standing status), so "ask again and allow the prompt" would send
+            // somebody round in a circle. Connecting is done in Pocketd, once.
+            entity.isPlural
+                ? "Your \(entity.noun) aren't connected yet. Connect them in Pocketd, then ask again."
+                : "Your \(entity.noun) isn't connected yet. Connect it in Pocketd, then ask again."
         case .denied:
             "Pocketd cannot read your \(entity.noun): permission is switched off. Turn it on in \(entity.settingsPath)."
         case .restricted:

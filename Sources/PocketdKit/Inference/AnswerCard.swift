@@ -566,17 +566,18 @@ public enum AnswerCardBuilders {
         guard let rows = data["reminders"] as? [[String: any Sendable]], !rows.isEmpty else { return nil }
 
         let items = rows.map { row -> AnswerCard.Item in
-            // EventKit's scale runs 1 highest to 9 lowest, and the payload
-            // carries a sentence saying so whenever any row has one. The accent
-            // is the raw number rather than a word like "High" because the
-            // sentence explains the number, and inventing a vocabulary the
-            // model was not given is how a card and the prose beside it start
-            // describing different things.
+            // One mark that means "this one matters", the same one the
+            // Reminders page uses (`DayReminder.priorityMark`), and nothing
+            // otherwise. The card used to print EventKit's number — "P1" — with
+            // a footnote explaining that its scale runs backwards, which is a
+            // ranking to decode where a glance was wanted. The payload still
+            // carries the number and the scale for the model, which reads them;
+            // only the drawing changed.
             let priority = row["priority"] as? Int
             return AnswerCard.Item(
                 text: row["title"] as? String ?? "Untitled reminder",
                 detail: row["due"] as? String,
-                accent: priority.map { "P\($0)" },
+                accent: priority.flatMap { (1...4).contains($0) ? "!" : nil },
                 symbol: "circle"
             )
         }
@@ -584,9 +585,6 @@ public enum AnswerCardBuilders {
         var sections: [AnswerCard.Section] = [
             .list(AnswerCard.Items(eyebrow: count(items.count, of: "reminder"), items: items))
         ]
-        if let scale = data["priority_scale"] as? String {
-            sections.append(.note(AnswerCard.Note(text: "Priority: \(scale).", symbol: "exclamationmark.circle", tone: .info)))
-        }
         if let note = data["note"] as? String {
             sections.append(.note(AnswerCard.Note(text: note, symbol: "ellipsis", tone: .info)))
         }

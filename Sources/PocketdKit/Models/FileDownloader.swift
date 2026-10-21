@@ -23,6 +23,9 @@ final class FileDownloader: @unchecked Sendable {
     private let lock = NSLock()
     private var task: URLSessionDownloadTask?
     private var completion: (@Sendable (Result<URL, any Error>) -> Void)?
+    /// At most five progress reports a second leave this object. See
+    /// `ProgressThrottle` for what the unthrottled stream cost.
+    private var throttle = ProgressThrottle()
 
     private let placement: DownloadPlacement
     private let onProgress: @Sendable (Int64, Int64) -> Void
@@ -106,6 +109,10 @@ final class FileDownloader: @unchecked Sendable {
 
 extension FileDownloader {
     func observeProgress(written: Int64, expected: Int64) {
+        lock.lock()
+        let admitted = throttle.admits(written: written, expected: expected)
+        lock.unlock()
+        guard admitted else { return }
         onProgress(written, expected)
     }
 
