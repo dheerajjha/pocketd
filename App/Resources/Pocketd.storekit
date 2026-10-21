@@ -1,0 +1,49 @@
+{
+  "appPolicies" : {
+    "eula" : "",
+    "policies" : [
+      {
+        "locale" : "en_US",
+        "policyText" : "",
+        "policyURL" : ""
+      }
+    ]
+  },
+  "identifier" : "4C1E5A7B-2D3F-4E60-9A8B-7C6D5E4F3A21",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+    {
+      "displayPrice" : "9.99",
+      "familyShareable" : false,
+      "internalID" : "6754300001",
+      "localizations" : [
+        {
+          "description" : "Use from your laptop, every routine and any brain. Pay once.",
+          "displayName" : "Pocketd Pro",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "dev.pocketd.app.pro",
+      "referenceName" : "Pocketd Pro",
+      "type" : "NonConsumable"
+    }
+  ],
+  "settings" : {
+    "_askToBuyEnabled" : false,
+    "_failTransactionsEnabled" : false,
+    "_locale" : "en_US",
+    "_storefront" : "USA",
+    "_storeKitErrors" : [
+
+    ]
+  },
+  "subscriptionGroups" : [
+
+  ],
+  "version" : {
+    "major" : 4,
+    "minor" : 0
+  }
+}
