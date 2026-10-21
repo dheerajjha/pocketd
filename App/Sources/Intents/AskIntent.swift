@@ -24,7 +24,11 @@ struct AskPocketdIntent: AppIntent {
         // Plain, and no promise about what it can read: that depends on what
         // is connected and on the brain, and Shortcuts shows this line to
         // somebody who may have connected neither.
-        "Ask Pocketd about your day. It answers on this iPhone, and nothing you ask leaves it.",
+        //
+        // No Apple product names in any App Intent or App Shortcut string:
+        // App Store processing rejects the binary for them (ITMS-90626,
+        // "cannot contain 'iphone'"), and nothing fails until the upload.
+        "Ask Pocketd about your day. It answers on this device, and nothing you ask leaves it.",
         categoryName: "Assistant"
     )
 
