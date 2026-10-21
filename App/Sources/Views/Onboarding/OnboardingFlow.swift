@@ -1,65 +1,78 @@
 import PocketdKit
 import SwiftUI
+import UserNotifications
 
-/// The first two minutes of owning this app.
+/// The first minute of owning this app.
 ///
-/// v1's intro was six screens of prose that named the three abilities and asked
-/// for none of them, offered a download, and finished on a menu. Nobody saw the
-/// assistant do anything, and the differentiator — that it can read your day —
-/// stayed off until somebody went looking for it in Settings.
+/// Five screens, each with one thing on it, and nothing technical asked:
 ///
-/// This one asks. Eight screens, each with exactly one decision on it, and the
-/// three permissions are requested in the order the product actually uses them,
-/// each behind a sentence that says what the iOS sheet is about to ask. It ends
-/// on the aha: a paragraph about the reader's own day, assembled on the phone
-/// from what they just connected, with the brain still downloading behind it.
+/// 1. **Meet Pocketd** — what it is, three promises, and the one sentence
+///    about anonymous usage counts.
+/// 2. **Choose how Pocketd thinks** — built into iPhone, or a private
+///    download; the recommended one is already selected.
+/// 3. **Connect your day** — Calendar, Reminders and Health, each optional,
+///    each asked from its own row.
+/// 4. **Get your day every morning** — a time and a switch, or "Not now".
+/// 5. **You're all set** — the tally, an optional name, one line saying
+///    whether Pocketd is ready — and Today.
 ///
-/// The steps are `PocketdKit.OnboardingStep` rather than an `Int`, so that the
-/// screen on the analytics funnel and the screen on the phone cannot disagree,
-/// and so that inserting a screen is a compiler error in the one place that
-/// switches over them rather than an off-by-one in three.
+/// It replaces eight screens: three of them permission pages with a Connect, a
+/// Continue and a Skip each; a top-right Skip that silently ended everything;
+/// a gigabyte decision with model names on screen two; and a last screen that
+/// queued a question for a brain it said was already there. A first run has no
+/// Skip at all. Every optional screen has its own quiet way past ("Not now", or
+/// a Continue that never waits on anything), and whatever was skipped is
+/// offered again in context by Today's Off tiles. A replay from You has a Close
+/// on every screen, because somebody looking again has nothing to finish.
+///
+/// A complete run is nine taps of Pocketd's own, plus whatever iOS's sheets
+/// ask and the name.
+///
+/// The screens are `Intro.Screen` rather than an `Int`, so that inserting one
+/// is a compiler error in the one switch below rather than an off-by-one in
+/// three places, and each reports the funnel step it took the place of.
 struct OnboardingFlow: View {
     @Environment(AppModel.self) private var model
-    @Environment(Navigator.self) private var navigator
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// Where to leave the person standing. The intro's whole job is to end
-    /// somewhere useful, so the destination is the last thing it decides.
+    /// Where to leave the person standing — Today, always, now. Kept as a
+    /// closure taking a destination because that is the seam `RootView` calls.
     var finish: (AppTab) -> Void
 
-    @State private var step: OnboardingStep = .welcome
-    /// Which way the next transition should travel. Held rather than derived
-    /// because by the time the transition runs, `step` is already the new one.
+    @State private var screen: Intro.Screen = .meet
+    /// Which way the next transition travels. Held rather than derived,
+    /// because by the time the transition runs `screen` is already the new one.
     @State private var goingBack = false
 
     // The decisions, held here rather than on the screens that collect them.
     //
-    // Each step is `.id(step)`, which is what makes the slide a slide — and it
-    // also destroys the step's own `@State` on the way out. The first build
-    // kept the chosen brain on the brain screen, so tapping Back and Next
-    // silently reverted somebody's choice of a 386 MB model to the 2 GB
-    // recommendation. A decision belongs to the flow, not to the frame it was
-    // made in.
-    @State private var chosenBrain: ModelRecord?
+    // Each screen is `.id(screen)`, which is what makes the slide a slide — and
+    // it also destroys that screen's own `@State` on the way out. A choice kept
+    // on the screen that made it is silently reverted by Back and Next, so
+    // anything somebody chose or typed belongs to the flow.
+    @State private var brainSelection: Intro.BrainPlan.Option?
     @State private var briefTime = RoutineTemplate.morningBrief.defaultTime
     @State private var briefWeekdaysOnly = true
+    @State private var name = ""
+    /// Whether iOS has never been asked about notifications. Read once, when
+    /// the intro opens, for the morning screen's primer — see there.
+    @State private var notificationsUndecided: Bool?
 
-    private static let order = OnboardingStep.allCases
+    private static let order = Intro.Screen.allCases
 
-    private var index: Int { Self.order.firstIndex(of: step) ?? 0 }
+    private var index: Int { Self.order.firstIndex(of: screen) ?? 0 }
 
     var body: some View {
         VStack(spacing: 0) {
             chrome
             page
-                .id(step)
+                .id(screen)
                 .transition(slide)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
             // The warm page colour with the onboarding wash over its top
-            // ~400pt, which is where the hero block sits. Written here rather
-            // than as a Theme helper because this is the only screen in the app
+            // ~400pt, where the hero block sits. The only screen in the app
             // that stands on the warm canvas.
             ZStack(alignment: .top) {
                 Color.pd.canvasWarm
@@ -69,139 +82,46 @@ struct OnboardingFlow: View {
             }
             .ignoresSafeArea()
         }
-        .animation(reduceMotion ? PDMotion.gentle : PDMotion.standard, value: step)
-        .onAppear { model.record(.onboardingStepViewed(step: step)) }
-        .onChange(of: step) { _, now in model.record(.onboardingStepViewed(step: now)) }
+        .animation(reduceMotion ? PDMotion.gentle : PDMotion.standard, value: screen)
+        .onAppear {
+            model.record(.onboardingStepViewed(step: screen.analyticsStep))
+            // A replay starts from what is already true: the name somebody
+            // gave, and the morning brief they already have.
+            name = model.profile.name
+            if let existing = model.introExistingMorningBrief {
+                briefTime = existing.time
+                briefWeekdaysOnly = existing.weekdaysOnly
+            }
+        }
+        .onChange(of: screen) { _, now in
+            model.record(.onboardingStepViewed(step: now.analyticsStep))
+        }
+        .task {
+            notificationsUndecided = await NotificationCentre.shared.authorizationStatus() == .notDetermined
+        }
     }
 
     // MARK: - Chrome
 
-    /// Back, the stripe, Skip — and, from the calendar screen on, a line
-    /// saying the download the brain screen started is still running.
-    ///
-    /// The stripe shares a row with the two controls rather than sitting under
-    /// them, which is what the reference does: with no back button it runs the
-    /// full width, and it shortens by exactly the chrome that appears beside it.
+    /// Back and the stripe. The stripe runs the full width on the first
+    /// screen and shortens by exactly the back button beside it after that.
     private var chrome: some View {
-        VStack(spacing: PDSpacing.s) {
-            HStack(spacing: PDSpacing.m) {
-                if index > 0 {
-                    CircleIconButton(symbol: "chevron.left", label: "Back") { back() }
-                }
-
-                ProgressStripe(fraction: Double(index + 1) / Double(Self.order.count))
-                    .accessibilityLabel("Step \(index + 1) of \(Self.order.count)")
-
-                if index > 0 {
-                    Button { skip() } label: {
-                        Text("Skip")
-                            .font(Font.pd.caption)
-                            .foregroundStyle(Color.pd.inkSecondaryWarm)
-                            .frame(height: 44)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(PDPressStyle())
-                }
+        HStack(spacing: PDSpacing.m) {
+            if index > 0 {
+                CircleIconButton(symbol: "chevron.left", label: "Back") { back() }
             }
-
-            if let downloading, showsDownloadLine {
-                if downloadNeedsAttention {
-                    // A sentence, in the component sentences get. Mono
-                    // uppercase is this app's section label — fine for
-                    // "DOWNLOADING BRAIN · 34%", which is a status line with a
-                    // number in it, and unreadable when the same slot has to
-                    // carry two lines of "BRAIN DOWNLOAD FAILED · THERE IS A
-                    // TRY AGAIN AT THE END".
-                    Callout(
-                        symbol: "exclamationmark.triangle",
-                        text: downloading,
-                        tint: .pd.caution,
-                        fill: .pd.cautionSoft
-                    )
-                    .transition(.opacity)
-                } else {
-                    MiniLabel(downloading, tint: .pd.inkSecondaryWarm)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .transition(.opacity)
-                }
+            ProgressStripe(fraction: Double(index + 1) / Double(Self.order.count))
+                .accessibilityLabel("Step \(index + 1) of \(Self.order.count)")
+                .accessibilityValue("")
+            // A replay from You can be closed from any screen, the first one
+            // included. A first run cannot: it has no Skip.
+            if model.introIsReplay {
+                CircleIconButton(symbol: "xmark", label: "Close") { close() }
             }
         }
+        .frame(minHeight: PDMetric.minHitTarget)
         .padding(.horizontal, PDSpacing.heroGutter)
         .padding(.top, PDSpacing.xs)
-        .animation(PDMotion.gentle, value: downloading)
-    }
-
-    /// The transfer the line is about.
-    ///
-    /// `visibleTransfers` rather than `transfers`, so that a download somebody
-    /// dismissed elsewhere stays dismissed and the line goes a few seconds
-    /// after it finishes instead of sitting there saying 100%.
-    private var bannerTransfer: ModelTransfer? {
-        #if DEBUG
-        if let staged = OnboardingDownloadStage.transfer { return staged }
-        #endif
-        return model.visibleTransfers.first
-    }
-
-    private var bannerPace: AppModel.DownloadPace? {
-        #if DEBUG
-        if let staged = OnboardingDownloadStage.pace { return staged }
-        #endif
-        guard let bannerTransfer else { return nil }
-        return model.pace(for: bannerTransfer.id)
-    }
-
-    /// "Downloading brain · 34% · about 4 min left", or nothing.
-    ///
-    /// The estimate is the measured rate, padded — see
-    /// `OnboardingDownloadWords.remaining`. A percentage on its own answers
-    /// "how far", which is the question people ask once they have decided to
-    /// wait; "how long" is the one they ask before deciding, and v1 answered it
-    /// nowhere. The audit measured twenty-six minutes on a slow link with
-    /// nothing on screen saying so.
-    private var downloading: String? {
-        guard let transfer = bannerTransfer else { return nil }
-        switch transfer.state {
-        case .waiting:
-            return "Downloading brain · starting"
-        case .stopping:
-            return "Stopping the download"
-        case .running:
-            var line = "Downloading brain · \(Int((transfer.fraction * 100).rounded(.down)))%"
-            if let left = OnboardingDownloadWords.remaining(bannerPace) {
-                line += " · \(left)"
-            }
-            return line
-        // Said here rather than saved for the last screen. The first build
-        // showed only active transfers, so a download that failed on the
-        // calendar screen went unmentioned for five screens and then appeared
-        // as a surprise at the end — which is the opposite of what a status
-        // line is for.
-        case .paused:
-            return "The brain download is paused. There is a Resume on the last screen."
-        case .failed:
-            return "The brain download failed. There is a Try again on the last screen."
-        case .finished:
-            return model.loadedModelID == nil ? "Brain downloaded · loading it" : nil
-        }
-    }
-
-    /// The banner's tint. Amber when something needs a person, grey otherwise.
-    private var downloadNeedsAttention: Bool {
-        guard let transfer = bannerTransfer else { return false }
-        switch transfer.state {
-        case .paused, .failed: return true
-        case .waiting, .running, .stopping, .finished: return false
-        }
-    }
-
-    /// The middle of the run. Not on Welcome or Brain, where no download has
-    /// been started yet, and not on the last screen, which shows the whole card.
-    private var showsDownloadLine: Bool {
-        switch step {
-        case .calendar, .reminders, .health, .name, .morningBrief: true
-        case .welcome, .brain, .ready: false
-        }
     }
 
     private var slide: AnyTransition {
@@ -218,31 +138,22 @@ struct OnboardingFlow: View {
 
     @ViewBuilder
     private var page: some View {
-        switch step {
-        case .welcome:
-            OnboardingWelcomeStep(onContinue: advance)
+        switch screen {
+        case .meet:
+            OnboardingMeetStep(onContinue: advance)
         case .brain:
-            OnboardingBrainStep(
-                chosen: $chosenBrain,
-                onContinue: advance,
-                onFindSmaller: findSmaller
-            )
-        case .calendar:
-            OnboardingConnectStep(ability: .calendar, onContinue: advance)
-        case .reminders:
-            OnboardingConnectStep(ability: .reminders, onContinue: advance)
-        case .health:
-            OnboardingConnectStep(ability: .health, onContinue: advance)
-        case .name:
-            OnboardingNameStep(onContinue: advance)
-        case .morningBrief:
+            OnboardingBrainStep(selection: $brainSelection, onContinue: advance)
+        case .connect:
+            OnboardingConnectStep(onContinue: advance)
+        case .everyMorning:
             OnboardingMorningBriefStep(
                 time: $briefTime,
                 weekdaysOnly: $briefWeekdaysOnly,
+                notificationsUndecided: notificationsUndecided,
                 onContinue: advance
             )
-        case .ready:
-            OnboardingDayStep(onOpen: open)
+        case .allSet:
+            OnboardingAllSetStep(name: $name, onOpen: open)
         }
     }
 
@@ -251,49 +162,42 @@ struct OnboardingFlow: View {
     private func advance() {
         guard index + 1 < Self.order.count else { return }
         goingBack = false
-        Haptics.tap()
-        step = Self.order[index + 1]
+        // No haptic here: every button that moves on already taps once.
+        screen = Self.order[index + 1]
     }
 
     private func back() {
         guard index > 0 else { return }
         goingBack = true
-        Haptics.tap()
-        step = Self.order[index - 1]
+        screen = Self.order[index - 1]
     }
 
-    // MARK: - Leaving
-
-    /// Every exit goes through here, which is what makes the flag flip and the
-    /// analytics event impossible to forget. v1 had the same choke point and
-    /// never fired the event; this one is the reason it now does.
-    private func leave(via exit: OnboardingExit, to destination: OnboardingDestination, tab: AppTab) {
-        model.record(.onboardingCompleted(via: exit, destination: destination))
-        model.completeOnboarding()
-        finish(tab)
+    /// Closes a replay where it was opened, under You.
+    private func close() {
+        model.leaveIntroReplay()
+        finish(.you)
     }
 
-    private func skip() {
-        leave(via: .skipped, to: .today, tab: .today)
-    }
-
+    /// The way out of a first run. Saves the name, records the funnel's last
+    /// event, flips the flag and lands on Today.
     private func open() {
         Haptics.success()
-        leave(via: .finished, to: .today, tab: .today)
-    }
-
-    /// Nothing in the built-in list fits this phone, so the intro hands over to
-    /// the one screen that can search for something smaller.
-    private func findSmaller() {
-        leave(via: .finished, to: .models, tab: .you)
-        navigator.openYou(.addBrain)
+        model.finishIntro(name: name)
+        finish(.today)
     }
 }
 
-/// The name `RootView` still calls this by.
-///
-/// The container is `OnboardingFlow` because that is what the spec names and
-/// what every other file in this folder is written against; the alias is what
-/// keeps the rename out of a file another workstream owns. Delete it when
-/// `RootView` is next touched for a reason of its own.
+/// The name `RootView` calls this by. Kept so the shell's call site does not
+/// have to change in step with this folder.
 typealias OnboardingView = OnboardingFlow
+
+#Preview("Intro light") {
+    OnboardingFlow(finish: { _ in })
+        .environment(AppModel())
+}
+
+#Preview("Intro dark") {
+    OnboardingFlow(finish: { _ in })
+        .environment(AppModel())
+        .preferredColorScheme(.dark)
+}

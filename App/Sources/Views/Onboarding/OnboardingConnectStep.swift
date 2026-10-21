@@ -1,286 +1,156 @@
 import PocketdKit
 import SwiftUI
-import UIKit
 
-/// Screens three, four and five: the three permissions, one to a screen.
+/// Screen three: Calendar, Reminders and Health, on one screen.
 ///
-/// This is the whole point of the rebuild. v1 *named* Calendar, Reminders and
-/// Health on its first screen and asked for none of them — the app's entire
-/// differentiator shipped switched off, behind three toggles in Settings, and
-/// most people never found it. Here each one gets a screen of its own, in the
-/// order the product uses them, and the sentence above the button says what the
-/// iOS sheet is about to ask before it appears.
+/// They used to be three screens, each with a Connect card, a Continue and a
+/// Skip, and the third opened with "Let it read your body." Now they are three
+/// rows with a Connect pill each, and connecting is optional: Continue is
+/// always enabled, and anything skipped is offered again by the Today tile's
+/// Off state, in context, rather than by a nag.
 ///
-/// One view for all three rather than three views, because the only differences
-/// are six strings and which switch gets flipped, and three copies of a
-/// permission screen is three places for the refusal path to be got wrong.
+/// Each pill goes through the one connect door, `connect(_:from:)`, which
+/// raises the iOS sheet only where iOS has never answered and opens Settings
+/// where it said no. One primer at a time sits under the row that is being —
+/// or is next to be — connected, naming the button the sheet is about to show,
+/// so it is read before the sheet appears and is still there behind it.
+///
+/// Every row is read from the phone each time the screen draws
+/// (`introSourceStatus`), never remembered here: Back and a replayed intro
+/// show what is true now.
 struct OnboardingConnectStep: View {
-    /// The three, as this screen needs them. Not `Ability` — that type carries
-    /// the server as a fourth case and a state machine this screen does not
-    /// use, and mapping four onto three here would be inventing a rule.
-    enum Ability {
-        case calendar
-        case reminders
-        case health
-    }
-
     @Environment(AppModel.self) private var model
 
-    var ability: Ability
     var onContinue: () -> Void
 
-    /// True while the iOS sheet is up. Keeps the button from starting a second
-    /// request under the first one's dialog.
-    @State private var asking = false
+    /// The row whose iOS sheet is up, if any. A second tap on it while the
+    /// sheet is up shares the first trip's answer (the door's own rule), so
+    /// this only decides where the primer sits.
+    @State private var connecting: Ability?
+
+    private static let sources: [Ability] = [.calendar, .reminders, .health]
 
     var body: some View {
+        // The row being asked about says so, whatever the switch says: the
+        // door turns it on before iOS has answered.
+        let statuses = Self.sources.map { ability in
+            (ability, connecting == ability ? Intro.SourceStatus.asking : model.introSourceStatus(ability))
+        }
+        let primerRow = Intro.primerRow(connecting: connecting, statuses: statuses)
+
         OnboardingPage(
-            ornament: .icon(symbol),
-            headline: headline,
-            secondary: secondary,
-            // One way on, not two. "Continue" and "Not now" were stacked on
-            // each other and both did exactly this, so the pair read as a
-            // choice that was never being offered — the decision on this screen
-            // is the Connect button on the card, and this is only the way past
-            // it.
+            ornament: .icon("calendar"),
+            headline: Intro.Copy.connectTitle,
+            secondary: Intro.Copy.connectLine,
             primary: .init("Continue", run: onContinue)
         ) {
-            if unavailable {
-                // A fact about the hardware. No card, because there is no
-                // switch behind it and a Connect button that cannot work is
-                // worse than a sentence that says so.
-                Text("Health is not available on this device.")
-                    .font(Font.pd.body)
-                    .foregroundStyle(Color.pd.inkSecondaryWarm)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                VStack(alignment: .leading, spacing: PDSpacing.s) {
-                    ConnectCard(
-                        title: title,
-                        symbol: symbol,
-                        detail: detail,
-                        state: state,
-                        primer: primer,
-                        actionTitle: asking && state == .connect ? "Asking…" : nil
-                    ) {
-                        // In `.needsAttention` the card's own label is already
-                        // "Open Settings", and asking iOS again would do
-                        // nothing: a refused permission cannot be re-prompted
-                        // by the app that was refused.
-                        if state == .needsAttention {
-                            openSettings()
-                        } else {
-                            connect()
+            PDCard(warm: true) {
+                VStack(alignment: .leading, spacing: PDSpacing.m) {
+                    ForEach(statuses, id: \.0) { ability, status in
+                        if ability != Self.sources.first {
+                            Divider().overlay(Color.pd.cardStrokeWarm)
                         }
-                    }
-
-                    if state == .needsAttention {
-                        // Amber, like the pill above it. A blue information
-                        // bubble under an amber card is two different opinions
-                        // about how much this matters.
-                        Callout(
-                            symbol: "gear",
-                            text: refusalPrimer,
-                            tint: .pd.caution,
-                            fill: .pd.cautionSoft
-                        )
+                        row(ability, status: status, showsPrimer: primerRow == ability)
                     }
                 }
             }
         }
-        .onChange(of: connected) { was, now in
-            guard !was, now else { return }
+        .onAppear {
+            // Fills `personalDataAuthorization`, which the rows read. A cold
+            // launch into the intro has not had a scene change to do it yet.
+            model.refreshPersonalDataAuthorization()
+        }
+        .onChange(of: statuses.map { $0.1.isConnected }) { was, now in
+            guard zip(was, now).contains(where: { !$0 && $1 }) else { return }
             Haptics.success()
         }
+        .animation(PDMotion.gentle, value: primerRow)
+    }
+
+    // MARK: - One row
+
+    @ViewBuilder
+    private func row(_ ability: Ability, status: Intro.SourceStatus, showsPrimer: Bool) -> some View {
+        VStack(alignment: .leading, spacing: PDSpacing.xs) {
+            SourceRow(
+                symbol: symbol(for: ability),
+                title: ability.title,
+                detail: Intro.Copy.sourceDetail(for: ability),
+                accessory: accessory(ability, status: status),
+                action: status == .offInSettings ? { connect(ability) } : nil,
+                warm: true
+            )
+
+            // Under the text column, not under the icon tile, so the line
+            // reads as part of its row.
+            Group {
+                if let note = status.note(for: ability) {
+                    Text(note)
+                        .font(Font.pd.footnote)
+                        .foregroundStyle(Color.pd.inkSecondaryWarm)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if showsPrimer, let primer = Intro.primer(for: ability) {
+                    // Fades in, leaves at once: a primer fading out where the
+                    // row's note is fading in drew the two sentences on top
+                    // of each other for a moment.
+                    Primer(primer, warm: true)
+                        .transition(.asymmetric(insertion: .opacity, removal: .identity))
+                }
+            }
+            .padding(.leading, PDMetric.iconTileSmall + PDSpacing.s)
+        }
+    }
+
+    private func accessory(_ ability: Ability, status: Intro.SourceStatus) -> SourceRow.Accessory {
+        if let pill = status.pillTitle {
+            return .connect(title: pill) { connect(ability) }
+        }
+        return .status(status.statusWord ?? "", isOn: status.isConnected)
     }
 
     // MARK: - Doing it
 
-    private func connect() {
-        guard !asking else { return }
-        asking = true
-        switch ability {
-        case .calendar, .reminders:
-            let entity: PersonalDataEntity = ability == .calendar ? .calendar : .reminders
-            Task {
-                await model.requestAccess(to: entity)
-                asking = false
-                // Only on a grant. Turning the tool on after a refusal leaves a
-                // switch that is on, a calendar that is never read, and no way
-                // to find out why — the exact failure the You tab's status
-                // lines exist to end.
-                guard model.personalDataAuthorization[entity]?.canRead == true else { return }
-                if entity == .calendar {
-                    model.calendarToolsEnabled = true
-                } else {
-                    model.reminderToolsEnabled = true
-                }
-            }
-        case .health:
-            // HealthKit has no request this screen can await: the switch is the
-            // request. `AppModel` runs `requestAllReadAccess()` off the didSet
-            // and reports what it learned through `healthAvailability`.
-            model.healthToolsEnabled = true
-            asking = false
+    /// Through the one door. It sets the switch, asks iOS where iOS has never
+    /// answered, opens Settings where it said no, and reads the day again so
+    /// Today's tiles are filled by the time the intro ends.
+    private func connect(_ ability: Ability) {
+        connecting = ability
+        Task {
+            await model.connect(ability, from: .onboarding)
+            if connecting == ability { connecting = nil }
         }
     }
 
-    /// Opens Pocketd's own page in Settings, which is the only page an app is
-    /// allowed to open. The per-entity privacy switch is one level up from
-    /// there, which is why the callout names the path in words as well.
-    private func openSettings() {
-        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
-        UIApplication.shared.open(url)
-    }
-
-    // MARK: - Where it stands
-
-    private var state: ConnectCard.State {
-        switch ability {
-        case .calendar: Self.state(of: model.personalDataAuthorization[.calendar])
-        case .reminders: Self.state(of: model.personalDataAuthorization[.reminders])
-        case .health:
-            // Health never confirms a read grant — HealthKit deliberately will
-            // not say, so that an app cannot infer what a user hid. "Connected"
-            // here means the request was put and the store answered, which is
-            // the strongest honest claim available.
-            //
-            // The third case is the one worth having: the switch is on and iOS
-            // could not be asked. Without it the Connect button looks like it
-            // did nothing, which on a simulator — where the Health sheet never
-            // appears — is exactly what it looks like.
-            if !model.healthToolsEnabled {
-                .connect
-            } else if model.healthAvailability == .available {
-                .connected
-            } else {
-                .needsAttention
-            }
-        }
-    }
-
-    private static func state(of authorization: PersonalDataAuthorization?) -> ConnectCard.State {
-        switch authorization {
-        case .granted: .connected
-        // Add-only is a real grant to *write* and no grant at all to read.
-        // Calling it connected would promise a brief about a calendar this app
-        // cannot open.
-        case .denied, .restricted, .writeOnly: .needsAttention
-        case .notDetermined, nil: .connect
-        }
-    }
-
-    private var connected: Bool { state == .connected }
-
-    private var unavailable: Bool {
-        ability == .health && !HealthAccess.isAvailable
-    }
-
-    // MARK: - The words
-
-    private var symbol: String {
+    private func symbol(for ability: Ability) -> String {
         switch ability {
         case .calendar: "calendar"
         case .reminders: "checklist"
         case .health: "heart"
-        }
-    }
-
-    private var headline: String {
-        switch ability {
-        case .calendar: "Let it see your calendar."
-        case .reminders: "Let it keep your to-dos."
-        case .health: "Let it read your body."
-        }
-    }
-
-    private var secondary: String {
-        switch ability {
-        case .calendar:
-            "Ask what's on tomorrow, or have it add an event for you."
-        case .reminders:
-            "Ask what's overdue, or say 'remind me at five' and it will."
-        case .health:
-            """
-            Ask how you slept or how active you've been. Health is read on this \
-            phone and nowhere else.
-            """
-        }
-    }
-
-    /// The card's title, and the shortest honest version of each.
-    ///
-    /// "Apple Health" is what the spec wrote and what the first build shipped.
-    /// It is two words too long: `ConnectCard` puts the status pill on the same
-    /// line, and "Apple Health" beside "Needs attention" clipped the pill to
-    /// "Needs atte…" on a Pro Max — the widest phone there is. The word the
-    /// headline and the detail already use is "Health".
-    private var title: String {
-        switch ability {
-        case .calendar: "Calendar"
-        case .reminders: "Reminders"
-        case .health: "Health"
-        }
-    }
-
-    private var detail: String {
-        switch ability {
-        case .calendar: "Events saved on this iPhone."
-        case .reminders: "Tasks you've saved in Reminders."
-        case .health: "Sleep, steps and heart rate."
-        }
-    }
-
-    /// The line that raises acceptance more than any other copy change: iOS's
-    /// own sheet is where people decline, and it uses words nobody has been
-    /// prepared for.
-    private var primer: String {
-        switch ability {
-        // Word for word what the sheet's own button says, which is the whole
-        // job of this line. They are not the same two words: the calendar sheet
-        // offers "Allow Full Access" beside an add-only choice, and the
-        // reminders sheet on this iOS offers a plain "Allow" — so naming the
-        // calendar's button on the reminders screen sends somebody looking for
-        // a control that is not there.
-        case .calendar: "Next, tap Allow Full Access."
-        case .reminders: "Next, tap Allow."
-        case .health: "Next, choose what it may read, then tap Allow."
-        }
-    }
-
-    /// Where the switch actually is. iOS gives no deep link to a per-entity
-    /// privacy page, so this names the path and the button opens the app's own
-    /// page, which is as close as the system allows anyone to get.
-    private var refusalPrimer: String {
-        switch ability {
-        case .calendar: "Allowed in Settings › Privacy › Calendars."
-        case .reminders: "Allowed in Settings › Privacy › Reminders."
-        // The store's own reason when there is one — "could not ask iOS" and
-        // "not available on this device" are different problems and only one of
-        // them is fixed by a trip to Settings.
-        case .health: model.healthAvailability.explanation ?? "Allowed in Settings › Health › Data Access."
+        case .localServer: "antenna.radiowaves.left.and.right"
         }
     }
 }
 
-#Preview("Calendar light") {
+#Preview("Connect light") {
     OnboardingStepPreview {
-        OnboardingConnectStep(ability: .calendar, onContinue: {})
+        OnboardingConnectStep(onContinue: {})
     }
     .environment(AppModel())
 }
 
-#Preview("Calendar dark") {
+#Preview("Connect dark") {
     OnboardingStepPreview {
-        OnboardingConnectStep(ability: .calendar, onContinue: {})
+        OnboardingConnectStep(onContinue: {})
     }
     .environment(AppModel())
     .preferredColorScheme(.dark)
 }
 
-#Preview("Health light") {
+#Preview("Connect AX") {
     OnboardingStepPreview {
-        OnboardingConnectStep(ability: .health, onContinue: {})
+        OnboardingConnectStep(onContinue: {})
     }
     .environment(AppModel())
+    .dynamicTypeSize(.accessibility3)
 }

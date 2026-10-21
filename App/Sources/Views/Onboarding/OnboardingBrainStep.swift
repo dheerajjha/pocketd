@@ -1,355 +1,309 @@
 import PocketdKit
 import SwiftUI
 
-/// Screen two: the one download this app needs, chosen for you.
+/// Screen two: how Pocketd thinks.
 ///
-/// v1 opened with three radio buttons and a byte count, which asks a person who
-/// has owned the app for forty seconds to have an opinion about gigabytes. The
-/// catalogue already knows which one fits this phone — `recommendedStarter` is
-/// the middle tier deliberately, because the smallest is fast and barely
-/// coherent — so the screen leads with that one and keeps the list one tap away
-/// for anybody who wants it.
+/// Both brains are first-class choices. Where Apple Intelligence is ready the
+/// screen offers "Built into iPhone" — nothing to download, recommended and
+/// selected — beside a private download that works on any iPhone. Where it is
+/// not, the screen is the one recommended download, with its size, its time
+/// and a word about the connection, and the download starts on Continue. Only
+/// brains that can read your day are offered: the old "Quick" option was a
+/// brain that answered "what's on today?" by inventing a day.
 ///
-/// Two edges survive from v1 and both are real: somebody replaying the intro
-/// from Settings already has a model and must not be offered another, and a
-/// phone that nothing in the catalogue fits has to be told so and handed the
-/// search screen rather than a button that cannot work.
+/// What the rows say, which one starts selected and what Continue does are all
+/// `Intro.BrainPlan`'s, read fresh from the phone every time this screen draws.
+/// That is the fix for the walkthrough's worst intro bug: Back to this screen
+/// after the download had finished offered "Download and continue · 386 MB"
+/// again, and tapping it fetched the whole file a second time. A brain that is
+/// on the phone now says "Ready", and Continue moves on.
+///
+/// The only screen of the intro that names a size, and — with the readiness
+/// line at the end — the only place outside You › Brain that says "brain".
 struct OnboardingBrainStep: View {
     @Environment(AppModel.self) private var model
 
-    /// Held by the flow, not by this screen. See the note on
-    /// `OnboardingFlow.chosenBrain`: `.id(step)` destroys this view's own state
-    /// on the way out, and a choice that a Back and a Next silently undoes is
-    /// worse than no choice at all.
-    @Binding var chosen: ModelRecord?
+    /// Held by the flow, not by this screen: `.id(step)` destroys this view's
+    /// own state on the way out, and a choice that Back and Next silently undo
+    /// is worse than no choice. `nil` until somebody taps a row, so the plan's
+    /// pre-selection — which can change while Apple's availability is still
+    /// being read — is followed until then.
+    @Binding var selection: Intro.BrainPlan.Option?
 
     var onContinue: () -> Void
-    var onFindSmaller: () -> Void
 
-    @State private var showingOptions = false
     @State private var reach = OnboardingReach()
 
-    /// What the download button will actually fetch.
-    private var offered: ModelRecord? { chosen ?? model.recommendedStarter }
-
     var body: some View {
-        if let offered {
-            recommended(offered)
-        } else if !model.installed.isEmpty {
-            alreadyHaveOne
-        } else {
-            nothingFits
+        let plan = model.introBrainPlan
+        let selected = selection ?? plan.preselected
+
+        Group {
+            switch plan.layout {
+            case .choice: choice(plan, selected: selected)
+            case .downloadOnly: downloadOnly(plan)
+            case .nothingFits: nothingFits
+            }
         }
+        // The first launch reads Apple's availability in the background, and
+        // a quick tap on Get started can land here before it has. Asking again
+        // costs nothing when it has already been read.
+        .task { await model.refreshBuiltInAvailability() }
     }
 
-    // MARK: - The normal case
+    private func proceed(_ plan: Intro.BrainPlan, selected: Intro.BrainPlan.Option?) {
+        model.applyIntroBrain(plan.action(for: selected))
+        onContinue()
+    }
 
-    private func recommended(_ record: ModelRecord) -> some View {
+    // MARK: - Both options
+
+    private func choice(_ plan: Intro.BrainPlan, selected: Intro.BrainPlan.Option?) -> some View {
         OnboardingPage(
             ornament: .icon("brain"),
-            headline: "Give it a brain.",
-            secondary: """
-            The brain is a file this phone keeps to itself. This one fits your \
-            phone best.
-            """,
-            primary: .init("Download and continue") {
-                model.download(record)
-                onContinue()
-            },
-            escape: .init("See other options") { showingOptions = true }
+            headline: Intro.Copy.brainTitle,
+            secondary: Intro.Copy.brainLine,
+            primary: .init("Continue") { proceed(plan, selected: selected) }
         ) {
-            PDCard(warm: true) {
-                VStack(alignment: .leading, spacing: PDSpacing.s) {
-                    Text(record.displayName)
-                        .font(Font.pd.headline)
-                        .foregroundStyle(Color.pd.ink)
-
-                    // "Recommended" only while it is the recommendation. Once
-                    // somebody has picked a different one from the sheet, the
-                    // useful sentence is the fit, not a claim about a choice
-                    // they overrode.
-                    Text(subtitle(for: record))
-                        .font(Font.pd.secondary)
-                        .foregroundStyle(Color.pd.inkSecondaryWarm)
-
-                    Text(OnboardingDownloadWords.sizeAndTime(record))
-                        .font(Font.pd.monoValue)
-                        .foregroundStyle(Color.pd.ink)
-                        .padding(.top, PDSpacing.xxs)
-
-                    VStack(alignment: .leading, spacing: PDSpacing.xs) {
-                        check(OnboardingDownloadWords.strength(record))
-                        check("Works with no signal")
-                    }
-                    .padding(.top, PDSpacing.xxs)
+            VStack(alignment: .leading, spacing: PDSpacing.s) {
+                if let builtIn = plan.builtIn {
+                    BrainOptionCard(
+                        title: BuiltInBrainOffer.title,
+                        isRecommended: plan.recommended == .builtIn,
+                        isSelected: selected == .builtIn,
+                        status: builtInStatus(builtIn, inUse: plan.inUse == .builtIn)
+                    ) { select(.builtIn) }
+                }
+                if let download = plan.download {
+                    BrainOptionCard(
+                        title: Intro.Copy.downloadTitle,
+                        isRecommended: plan.recommended == .download,
+                        isSelected: selected == .download,
+                        status: downloadStatus(download, inUse: plan.inUse == .download, alongsideBuiltIn: true)
+                    ) { select(.download) }
+                }
+                if selected == .download, case let .offer(record)? = plan.download, reach.isOnMobileData {
+                    mobileDataNote(record)
                 }
             }
+        }
+    }
 
-            // A sentence, not a wall. Somebody who knows they are on data and
-            // wants it anyway taps the same button; somebody who did not know
-            // now does, before the meter starts.
-            if reach.isOnMobileData {
-                Callout(
-                    symbol: "antenna.radiowaves.left.and.right",
-                    text: OnboardingDownloadWords.mobileDataWarning(record),
-                    tint: .pd.caution,
-                    fill: .pd.cautionSoft
-                )
+    private func select(_ option: Intro.BrainPlan.Option) {
+        guard selection != option else { return }
+        Haptics.tap()
+        selection = option
+    }
+
+    // MARK: - The download alone
+
+    /// No built-in option on this phone. One brain, no choice to make, so no
+    /// radio buttons — the card says what is coming and Continue starts it.
+    private func downloadOnly(_ plan: Intro.BrainPlan) -> some View {
+        let download = plan.download
+        let isHere: Bool = if case .onPhone? = download { true } else { false }
+        return OnboardingPage(
+            ornament: .icon(isHere ? "checkmark" : "arrow.down"),
+            headline: isHere ? Intro.Copy.hasBrainTitle : Intro.Copy.gettingBrainTitle,
+            secondary: isHere ? Intro.Copy.hasBrainLine : Intro.Copy.gettingBrainLine,
+            primary: .init("Continue") { proceed(plan, selected: .download) }
+        ) {
+            if let download {
+                VStack(alignment: .leading, spacing: PDSpacing.s) {
+                    PDCard(warm: true) {
+                        VStack(alignment: .leading, spacing: PDSpacing.xs) {
+                            Text(Intro.Copy.downloadTitle)
+                                .font(Font.pd.rowTitle)
+                                .foregroundStyle(Color.pd.ink)
+                            downloadStatus(download, inUse: plan.inUse == .download, alongsideBuiltIn: false)
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
+
+                    if case let .offer(record) = download, reach.isOnMobileData {
+                        mobileDataNote(record)
+                    }
+                }
             }
         }
-        .sheet(isPresented: $showingOptions) {
-            OnboardingBrainOptions(chosen: $chosen)
-        }
     }
 
-    private func subtitle(for record: ModelRecord) -> String {
-        guard record.id != model.recommendedStarter?.id else {
-            return "Recommended for this iPhone"
-        }
-        switch model.fit(for: record) {
-        case .comfortable: return "Fits well on this iPhone"
-        case .tight: return "A tight fit on this iPhone"
-        case .willNotFit: return "Too big for this iPhone"
-        }
-    }
+    // MARK: - Nothing fits
 
-    private func check(_ text: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: PDSpacing.xs) {
-            Image(systemName: "checkmark")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.pd.positive)
-            Text(text)
-                .font(Font.pd.secondary)
-                .foregroundStyle(Color.pd.ink)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .accessibilityElement(children: .combine)
-    }
-
-    // MARK: - The two edges
-
-    /// Replaying the intro from Settings. Offering a download here would be
-    /// answering a question nobody asked.
-    private var alreadyHaveOne: some View {
+    private var nothingFits: some View {
         OnboardingPage(
             ornament: .icon("brain"),
-            headline: "It already has a brain.",
-            secondary: OnboardingDownloadWords.alreadyInstalled(model.installed),
+            headline: Intro.Copy.nothingFitsTitle,
+            secondary: Intro.Copy.nothingFitsLine,
             primary: .init("Continue", run: onContinue)
         ) {
             EmptyView()
         }
     }
 
-    /// Nothing in the catalogue fits. An honest dead end with a door in it.
-    private var nothingFits: some View {
-        OnboardingPage(
-            ornament: .icon("brain"),
-            headline: "Nothing here fits.",
-            secondary: """
-            Every brain in the built-in list is too big for this iPhone's \
-            memory. Pocketd can search for a smaller one instead.
-            """,
-            primary: .init("Find a smaller one", run: onFindSmaller),
-            escape: .init("Not now", run: onContinue)
-        ) {
-            EmptyView()
+    // MARK: - What each row says
+
+    @ViewBuilder
+    private func builtInStatus(_ state: Intro.BrainPlan.BuiltIn, inUse: Bool) -> some View {
+        switch state {
+        case .ready:
+            if inUse {
+                readyLine
+            } else {
+                detailLine(BuiltInBrainOffer.onboardingDetail)
+            }
+        case .gettingReady:
+            detailLine(Intro.Copy.builtInGettingReady)
         }
+    }
+
+    @ViewBuilder
+    private func downloadStatus(
+        _ download: Intro.BrainPlan.Download,
+        inUse: Bool,
+        alongsideBuiltIn: Bool
+    ) -> some View {
+        switch download {
+        case let .offer(record):
+            VStack(alignment: .leading, spacing: PDSpacing.xxs) {
+                detailLine(pdDownloadLine(record.totalDownloadBytes))
+                if alongsideBuiltIn {
+                    detailLine(Intro.Copy.downloadWorksAnywhere)
+                } else if !reach.isOnMobileData {
+                    detailLine(Intro.Copy.downloadInBackground)
+                }
+            }
+        case let .arriving(record):
+            arriving(record)
+        case .onPhone:
+            if inUse {
+                readyLine
+            } else {
+                detailLine(Intro.Copy.onPhoneDetail)
+            }
+        }
+    }
+
+    /// "Getting ready · 34%" over a stripe, from the live transfer.
+    private func arriving(_ record: ModelRecord) -> some View {
+        let fraction = model.introTransfer(for: record)?.fraction ?? 0
+        return VStack(alignment: .leading, spacing: PDSpacing.xs) {
+            detailLine("\(Intro.Copy.builtInGettingReady) · \(Int((fraction * 100).rounded(.down)))%")
+                .monospacedDigit()
+            ProgressStripe(fraction: fraction)
+                .accessibilityHidden(true)
+            detailLine(Intro.Copy.downloadInBackground)
+        }
+    }
+
+    private var readyLine: some View {
+        Label {
+            Text(Intro.Copy.ready)
+        } icon: {
+            Image(systemName: "checkmark.circle.fill")
+        }
+        .font(Font.pd.secondary.weight(.semibold))
+        .foregroundStyle(Color.pd.positive)
+    }
+
+    private func detailLine(_ text: String) -> some View {
+        Text(text)
+            .font(Font.pd.secondary)
+            .foregroundStyle(Color.pd.inkSecondaryWarm)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// A sentence, not a wall. Somebody who knows they are on data and wants
+    /// it anyway taps the same button; somebody who did not know now does,
+    /// before the meter starts.
+    private func mobileDataNote(_ record: ModelRecord) -> some View {
+        Primer(
+            Intro.Copy.mobileData(size: pdBytes(record.totalDownloadBytes)),
+            symbol: "antenna.radiowaves.left.and.right",
+            warm: true
+        )
     }
 }
 
-// MARK: - The options sheet
+// MARK: - One option
 
-/// The list v1 led with, demoted to one tap away.
+/// A choosable card: a radio mark, the brain's name in benefit words, an
+/// optional "Recommended", and what it costs or where it stands.
 ///
-/// Three tiers and a plain fit word, because "how much of this phone do you
-/// want to spend" is the only real question here and a column of byte counts
-/// does not ask it.
-struct OnboardingBrainOptions: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
+/// A button with the selected trait rather than a `Picker`, because each row
+/// carries two lines of explanation and a progress stripe a picker row cannot
+/// hold, and a whole card is a far easier target than a radio dot.
+private struct BrainOptionCard<Status: View>: View {
+    @Environment(\.dynamicTypeSize) private var typeSize
 
-    @Binding var chosen: ModelRecord?
+    let title: String
+    let isRecommended: Bool
+    let isSelected: Bool
+    /// The grey lines under the title: what it costs, or where it stands.
+    let status: Status
+    let action: () -> Void
 
     var body: some View {
-        let starters = model.starterModels
+        Button(action: action) {
+            HStack(alignment: .firstTextBaseline, spacing: PDSpacing.s) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(Font.pd.lead)
+                    .foregroundStyle(isSelected ? Color.pd.accentWarm : Color.pd.inkTertiary)
+                    .accessibilityHidden(true)
 
-        ScrollView {
-            VStack(alignment: .leading, spacing: PDSpacing.m) {
-                Text("Other options.")
-                    .pdTitle()
-                    .foregroundStyle(Color.pd.ink)
-                Text("A bigger brain answers better and takes longer to fetch.")
-                    .pdSubtitle()
-                    .padding(.bottom, PDSpacing.xxs)
-
-                ForEach(Array(starters.enumerated()), id: \.element.id) { position, record in
-                    option(record, tier: OnboardingDownloadWords.tier(position, of: starters.count))
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, PDSpacing.gutter)
-            .padding(.vertical, PDSpacing.l)
-        }
-        .scrollIndicators(.hidden)
-        .background(Color.pd.canvasWarm.ignoresSafeArea())
-        .presentationDragIndicator(.visible)
-    }
-
-    private func option(_ record: ModelRecord, tier: String) -> some View {
-        let isChosen = (chosen ?? model.recommendedStarter)?.id == record.id
-        return Button {
-            Haptics.tap()
-            chosen = record
-            dismiss()
-        } label: {
-            PDCard(warm: true) {
-                VStack(alignment: .leading, spacing: PDSpacing.xs) {
-                    HStack(spacing: PDSpacing.xs) {
-                        MiniLabel(tier, tint: .pd.accentWarm)
-                        Spacer(minLength: 0)
-                        if isChosen {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 17))
-                                .foregroundStyle(Color.pd.accentWarm)
+                VStack(alignment: .leading, spacing: PDSpacing.xxs) {
+                    // Side by side while the title fits whole; the badge goes
+                    // under it at the accessibility sizes.
+                    if typeSize.isAccessibilitySize {
+                        VStack(alignment: .leading, spacing: PDSpacing.xxs) {
+                            titleText
+                            if isRecommended { badge }
+                        }
+                    } else {
+                        HStack(spacing: PDSpacing.xs) {
+                            titleText
+                            if isRecommended { badge }
                         }
                     }
-                    Text(record.displayName)
-                        .font(Font.pd.rowTitle)
-                        .foregroundStyle(Color.pd.ink)
-                    Text(OnboardingDownloadWords.sizeAndTime(record))
-                        .font(Font.pd.secondary)
-                        .foregroundStyle(Color.pd.inkSecondaryWarm)
-                    StatusPill(
-                        OnboardingDownloadWords.fitKind(model.fit(for: record)),
-                        OnboardingDownloadWords.fitWord(model.fit(for: record))
-                    )
-                    .padding(.top, PDSpacing.xxs)
+                    status
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(PDSpacing.cardPadding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .pdCardSurface(
+                fill: .pd.cardWarm,
+                stroke: isSelected ? .pd.accentWarm : .pd.cardStrokeWarm
+            )
+            .overlay {
+                // A second hairline inside the first, for the selected card
+                // only: the edge has to say "this one" in grayscale too.
+                if isSelected {
+                    RoundedRectangle(cornerRadius: PDRadius.card, style: .continuous)
+                        .strokeBorder(Color.pd.accentWarm, lineWidth: 2)
                 }
             }
             .contentShape(RoundedRectangle(cornerRadius: PDRadius.card, style: .continuous))
         }
         .buttonStyle(PDPressStyle())
-        .accessibilityLabel("\(record.displayName), \(tier)")
-        .accessibilityValue(OnboardingDownloadWords.fitWord(model.fit(for: record)))
-        .accessibilityAddTraits(isChosen ? [.isSelected] : [])
-    }
-}
-
-// MARK: - The words
-
-/// Everything on these two screens that turns a number into a sentence.
-///
-/// Its own type because the same three phrasings are needed by the recommended
-/// card, the options sheet and the transfer card on the last screen, and three
-/// copies of a rounding rule is how "about 4 minutes" and "about 5 minutes"
-/// end up on screen at the same time.
-enum OnboardingDownloadWords {
-    /// Wi-Fi, as a number that does not flatter.
-    ///
-    /// 5 MB/s is a pessimistic-but-common home connection. Over-promising a
-    /// download is the one estimate error people remember, so this rounds *up*
-    /// and never speaks in seconds: "about 1 min" is a promise a slow router
-    /// can keep, "about 40 seconds" is not.
-    static let assumedBytesPerSecond: Double = 5_000_000
-
-    static func sizeAndTime(_ record: ModelRecord) -> String {
-        "\(size(record.totalDownloadBytes)) · about \(minutes(record.totalDownloadBytes)) min on Wi-Fi"
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 
-    static func size(_ bytes: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    private var titleText: some View {
+        Text(title)
+            .font(Font.pd.rowTitle)
+            .foregroundStyle(Color.pd.ink)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
-    static func minutes(_ bytes: Int64) -> Int {
-        max(1, Int((Double(bytes) / assumedBytesPerSecond / 60).rounded(.up)))
-    }
-
-    /// "about 4 min left", from the measured rate rather than the assumed one.
-    ///
-    /// Padded by a fifth before rounding up, which is the whole trick: an
-    /// estimate that runs a little long shrinks as the download proceeds, and
-    /// people forgive a download that finishes early. The opposite — a
-    /// confident countdown that has to grow — is the single thing research
-    /// finds users rate worst in a progress indicator, so the padding is what
-    /// makes "revise upward rarely" true without any state to remember.
-    ///
-    /// Never seconds. "About 40 seconds" is a promise a slow router cannot
-    /// keep, and the floor of one minute is cheaper than being wrong.
-    static func remaining(_ pace: AppModel.DownloadPace?) -> String? {
-        guard let seconds = pace?.secondsRemaining, seconds > 0 else { return nil }
-        let padded = seconds * 1.2 / 60
-        // An hour and a half of download is a number nobody reads as a
-        // countdown, so past an hour it stops pretending to be one.
-        guard padded <= 90 else { return "over an hour left" }
-        return "about \(max(1, Int(padded.rounded(.up)))) min left"
-    }
-
-    /// The one sentence that turns a download somebody was given into one they
-    /// chose. Never a block: the button underneath still works.
-    static func mobileDataWarning(_ record: ModelRecord) -> String {
-        "On mobile data. This is about \(size(record.totalDownloadBytes)); Wi-Fi is quicker and cheaper."
-    }
-
-    /// The one claim a brain earns by being big enough to use tools.
-    ///
-    /// Asked of the catalogue rather than of the loaded engine, because at this
-    /// point nothing is loaded — the file is not even on the phone. The
-    /// declaration is the only evidence that exists, and the size test is the
-    /// same one `ToolGate` applies later when the weights are actually here.
-    static func strength(_ record: ModelRecord) -> String {
-        canUseTools(record)
-            ? "Understands your calendar and reminders"
-            : "Answers questions and drafts text"
-    }
-
-    static func canUseTools(_ record: ModelRecord) -> Bool {
-        switch ToolGate.declaredSupport(for: record) {
-        case .yes:
-            true
-        case .no:
-            false
-        case .unknown:
-            (ToolGate.parameterCount(fromSizeLabel: record.parameters) ?? 0)
-                > ToolGate.minimumParametersInBillions
-        }
-    }
-
-    /// Quick, Balanced, Smart — the axis, in words rather than in gigabytes.
-    static func tier(_ position: Int, of count: Int) -> String {
-        guard count > 1 else { return "Recommended" }
-        switch position {
-        case 0: return "Quick"
-        case count - 1: return "Smart"
-        default: return "Balanced"
-        }
-    }
-
-    static func fitWord(_ fit: DeviceBudget.Fit) -> String {
-        switch fit {
-        case .comfortable: "Fits well"
-        case .tight: "Tight fit"
-        case .willNotFit: "Too big for this iPhone"
-        }
-    }
-
-    static func fitKind(_ fit: DeviceBudget.Fit) -> StatusPill.Kind {
-        switch fit {
-        case .comfortable: .positive
-        case .tight: .caution
-        case .willNotFit: .neutral
-        }
-    }
-
-    /// "You already have Qwen3 1.7B on this phone." — the replay case.
-    static func alreadyInstalled(_ installed: [ModelRecord]) -> String {
-        guard let first = installed.first else {
-            return "There is already one on this phone, so there is nothing to fetch."
-        }
-        if installed.count == 1 {
-            return "You already have \(first.displayName) on this phone, so there is nothing to fetch."
-        }
-        return "You already have \(installed.count) on this phone, so there is nothing to fetch."
+    private var badge: some View {
+        Text(Intro.Copy.recommended)
+            .font(Font.pd.footnote.weight(.semibold))
+            .foregroundStyle(Color.pd.accentWarm)
+            .padding(.horizontal, PDSpacing.xs)
+            .padding(.vertical, 2)
+            .background(Color.pd.accentSoft, in: Capsule(style: .continuous))
     }
 }
 
@@ -362,11 +316,11 @@ enum OnboardingDownloadWords {
 }
 
 private struct OnboardingBrainStepPreview: View {
-    @State private var chosen: ModelRecord?
+    @State private var selection: Intro.BrainPlan.Option?
 
     var body: some View {
         OnboardingStepPreview {
-            OnboardingBrainStep(chosen: $chosen, onContinue: {}, onFindSmaller: {})
+            OnboardingBrainStep(selection: $selection, onContinue: {})
         }
         .environment(AppModel())
     }
