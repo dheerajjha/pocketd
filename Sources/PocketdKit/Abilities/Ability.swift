@@ -53,7 +53,9 @@ public enum Ability: String, Sendable, Equatable, CaseIterable, Identifiable, Co
         case .health:
             "Ask how you slept, how active you have been, or where your heart rate sits."
         case .localServer:
-            "Use this phone's model from your laptop — any Ollama or OpenAI client."
+            // No vendor names: none may appear in the app's words, and this
+            // one is a sentence a screen could print.
+            "Use Pocketd from your laptop, with the chat apps you already have."
         }
     }
 
@@ -117,8 +119,8 @@ public enum Ability: String, Sendable, Equatable, CaseIterable, Identifiable, Co
     public var systemSettingsPath: String? {
         switch self {
         case .calendar, .reminders: entity?.settingsPath
-        case .health: "Settings > Privacy & Security > Health > Pocketd"
-        case .localServer: "Settings > Privacy & Security > Local Network > Pocketd"
+        case .health: "Settings › Privacy & Security › Health › Pocketd"
+        case .localServer: "Settings › Privacy & Security › Local Network › Pocketd"
         }
     }
 

@@ -62,27 +62,7 @@ extension AppModel {
         await EventAccess.shared.undo(write) == .written
     }
 
-    // MARK: - Turning an ability on from a card
-
-    /// Switches on what a suggestion or an offer needs, from where it was asked.
-    ///
-    /// The same two lines `acceptToolOffer()` runs, reachable without an offer
-    /// in hand: a suggestion row on the empty state knows which ability it
-    /// wants, and there is no `ToolOffer` to accept because nobody has asked
-    /// anything yet. Flipping the switch is all it does — `applyPersonalDataTools`
-    /// is what then asks iOS, so the permission sheet appears from the same
-    /// place it always did.
-    func enableAbility(_ ability: Ability, source: AbilitySource = .chatOffer) {
-        switch ability {
-        case .calendar: calendarToolsEnabled = true
-        case .reminders: reminderToolsEnabled = true
-        case .health: healthToolsEnabled = true
-        // Never offered here. No sentence anybody types at an assistant is a
-        // request for a listening socket — see `ToolOffer.ability`.
-        case .localServer: return
-        }
-        record(.abilityEnabled(ability: ability.rawValue, source: source))
-    }
+    // MARK: - Whether a source is on
 
     /// Whether the ability a suggestion needs is switched on.
     ///

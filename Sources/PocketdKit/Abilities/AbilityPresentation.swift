@@ -233,8 +233,10 @@ public struct AbilityPresentation: Sendable, Equatable, Identifiable {
         case let .onButFailed(reason):
             switch ability {
             case .localServer: return "On, but the server could not start: \(reason)"
-            // Word for word what the health switch already says.
-            case .health: return "Pocketd could not ask iOS for access to Health: \(reason)"
+            // The reason alone: it is already one plain sentence ("Health is
+            // restricted on this iPhone…"), and a prefix in front of it made
+            // two sentences out of one problem.
+            case .health: return reason
             case .calendar, .reminders: return "On, but Pocketd could not ask iOS for access: \(reason)"
             }
         }

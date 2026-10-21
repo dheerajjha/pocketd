@@ -72,6 +72,10 @@ public enum AbilitySource: String, Sendable, CaseIterable {
     case settings
     case chatOffer = "chat_offer"
     case onboarding
+    /// A card or tile on Today.
+    case today
+    /// The routine editor's "Turn on", for a routine that reads a source.
+    case routines
 }
 
 /// Which half of the scheduling feature ran.
@@ -80,6 +84,9 @@ public enum ScheduledKind: String, Sendable, CaseIterable {
     case watcher
     /// Needs the model, so it can only run with the app in front.
     case prompt
+    /// A brief routine: the template brief, so it needs no model and runs
+    /// wherever a watcher can.
+    case brief
 }
 
 /// How someone left the intro.

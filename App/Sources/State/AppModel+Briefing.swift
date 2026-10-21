@@ -1,3 +1,4 @@
+import EventKit
 import Foundation
 import Observation
 import PocketdKit
@@ -69,6 +70,28 @@ final class BriefingState {
     /// write of the same file.
     @ObservationIgnored var isRefreshing = false
 
+    /// Something the day is read from has changed since the last reading — a
+    /// switch, an iOS permission, the calendar database, the app coming back
+    /// to the front — so the next refresh reads again however recent the last
+    /// one was. Starts true: nothing has been read this launch.
+    @ObservationIgnored var isStale = true
+
+    /// A forced refresh asked for while another was running. It runs when that
+    /// one finishes rather than being dropped.
+    ///
+    /// Dropping it was the stale first paint. On a launch the Today tab's own
+    /// refresh started first, under switches the launch had not finished
+    /// restoring; the launch's refresh then arrived, hit the guard above, and
+    /// went nowhere — so the tiles said "Off" for a calendar that was
+    /// connected until somebody pulled to refresh.
+    @ObservationIgnored var wantsForcedPass = false
+
+    /// Sleeps until the brief on screen next stops being true — a meeting
+    /// starting or ending, a timed reminder falling due, the greeting's part
+    /// of the day changing — and then reads the day again. See
+    /// `scheduleNextRewrite`.
+    @ObservationIgnored var nextRewrite: Task<Void, Never>?
+
     init() {}
 
     /// What the card actually prints: the model's words while they are
@@ -84,23 +107,8 @@ final class BriefingState {
     var isBusy: Bool { phase == .building || phase == .streaming }
 }
 
-// MARK: - Fabricated Health, for a simulator
+// MARK: - A clock for screenshots
 
-/// Health figures for a machine that has no Health.
-///
-/// A simulator has an empty HealthKit store and no way to fill one that does
-/// not involve writing samples — which this app promises it never does, on the
-/// Privacy screen, in the App Store listing and in its own permission copy. So
-/// the numbers are fabricated here, at the point the snapshot is assembled, and
-/// nothing is written anywhere: the store is not read, not asked for
-/// permission, and not touched.
-///
-/// Every member is `nil` unless `-pocketd.demoHealth` was passed, and the whole
-/// type is inside `#if DEBUG`, so a Release build has no path through any of
-/// it — the same shape `DemoSeed` uses and for the same reason. Kept here
-/// rather than in `DemoSeed` because that file stages the *device's* calendar
-/// and reminders, which are real stores a real install shares; this stages
-/// nothing and only decorates one value on its way to a view.
 /// A clock for screenshots, and nothing else.
 ///
 /// A store capture is taken whenever the capture session happens to run, and
@@ -126,25 +134,6 @@ enum DemoClock {
     }
 }
 
-enum DemoHealth {
-    #if DEBUG
-    static let isRequested = ProcessInfo.processInfo.arguments.contains("-pocketd.demoHealth")
-    #else
-    static let isRequested = false
-    #endif
-
-    /// 6h 36m, against a usual of 7h 05m — a slightly short night, which is the
-    /// state worth photographing because it is the one with a tone on it.
-    static var sleepLastNight: TimeInterval? { isRequested ? 23_760 : nil }
-    static var sleepUsual: TimeInterval? { isRequested ? 25_500 : nil }
-    /// Mid-morning against a whole day's usual, so the tile reads as a day in
-    /// progress rather than as a day that went wrong.
-    static var stepsToday: Double? { isRequested ? 4_120 : nil }
-    static var stepsUsual: Double? { isRequested ? 6_100 : nil }
-    static var restingHeartRate: Double? { isRequested ? 58 : nil }
-    static var restingHeartRateUsual: Double? { isRequested ? 61 : nil }
-}
-
 // MARK: - The engine
 
 extension AppModel {
@@ -167,52 +156,23 @@ extension AppModel {
 
     /// Everything today is, read from the real sources and without a model.
     ///
-    /// Every read runs concurrently and none of them runs on the main actor:
-    /// EventKit blocks on a daemon and HealthKit blocks on a database, and
-    /// doing either from a `body` drops frames on the one screen the app opens
-    /// to. The three static helpers below are `nonisolated` for exactly that.
+    /// One call to `DayReader`, which reads concurrently, off the main actor,
+    /// and never prompts. A source that is not readable is not read at all —
+    /// the same gate the tools respect — and `Availability` carries which of
+    /// "nothing on today" and "not allowed to look" this is.
     ///
-    /// A source that is not readable is not read at all. That is the same gate
-    /// the tools respect, and it is the difference between an app that shows a
-    /// clear diary and an app that shows a clear diary to somebody whose
-    /// calendar permission it lost three weeks ago — `Availability` carries
-    /// which of the two this is, and every consumer branches on it.
+    /// Under `-pocketd.demoHealth` Health is fabricated by `DemoDay` inside the
+    /// reader and nothing is written anywhere: this app promises it never
+    /// writes to Health, and a screenshot is not a reason to break that.
     func makeTodaySnapshot(now: Date = DemoClock.now, calendar: Calendar = .current) async -> TodaySnapshot {
-        let calendarAvailability = availability(for: .calendar)
-        let remindersAvailability = availability(for: .reminders)
-        let health: TodaySnapshot.Availability = DemoHealth.isRequested ? .connected : briefingHealthAvailability
-
-        async let events = Self.readEvents(readable: calendarAvailability.isReadable, now: now, calendar: calendar)
-        async let reminders = Self.readReminders(readable: remindersAvailability.isReadable, now: now, calendar: calendar)
-        // Not read at all under `-pocketd.demoHealth`: the fabricated figures
-        // below replace the reads rather than being written anywhere, because
-        // this app promises it never writes to Health and a screenshot is not a
-        // reason to break that.
-        async let sleep = Self.readSleep(
-            readable: health.isReadable && !DemoHealth.isRequested, now: now, calendar: calendar
-        )
-        async let steps = Self.readSteps(
-            readable: health.isReadable && !DemoHealth.isRequested, now: now, calendar: calendar
-        )
-
-        let (dueToday, overdue) = await reminders
-        let (sleptLastNight, usualSleep) = await sleep
-        let (stepsToday, usualSteps) = await steps
-
-        return TodaySnapshot(
-            generatedAt: now,
-            calendar: calendarAvailability,
-            reminders: remindersAvailability,
-            health: health,
-            events: await events,
-            dueToday: dueToday,
-            overdue: overdue,
-            sleepLastNight: DemoHealth.sleepLastNight ?? sleptLastNight,
-            sleepUsual: DemoHealth.sleepUsual ?? usualSleep,
-            stepsToday: DemoHealth.stepsToday ?? stepsToday,
-            stepsUsual: DemoHealth.stepsUsual ?? usualSteps,
-            restingHeartRate: DemoHealth.restingHeartRate,
-            restingHeartRateUsual: DemoHealth.restingHeartRateUsual
+        await DayReader.snapshot(
+            now: now,
+            calendar: calendar,
+            access: DayReader.Access(
+                calendar: availability(for: .calendar),
+                reminders: availability(for: .reminders),
+                health: DemoDay.isRequested ? .connected : briefingHealthAvailability
+            )
         )
     }
 
@@ -246,119 +206,17 @@ extension AppModel {
         return .of(AbilityState.of(.health, enabled: healthToolsEnabled, grant: grant))
     }
 
-    /// What is left of today, then tomorrow.
-    ///
-    /// The window opens at `now` rather than at midnight because the card's
-    /// job is the rest of the day: a standup that finished at 09:45 is not
-    /// news at eleven, and leaving it in pushes the meeting that has not
-    /// happened yet out of a prompt with a 900-character budget. EventKit
-    /// returns anything *overlapping* the window, so something in progress
-    /// still comes back — which is right, and which `nextEvent(now:)` then
-    /// filters out of the tile.
-    private nonisolated static func readEvents(
-        readable: Bool,
-        now: Date,
-        calendar: Calendar
-    ) async -> [BriefEvent] {
-        guard readable else { return [] }
-        let startOfToday = calendar.startOfDay(for: now)
-        guard let end = calendar.date(byAdding: .day, value: 2, to: startOfToday), end > now else { return [] }
-        switch await EventAccess.shared.events(in: DateInterval(start: now, end: end)) {
-        case let .rows(rows, _):
-            return rows.map(BriefEvent.init)
-        // Unreachable behind the `readable` gate, and still a value rather than
-        // a trap: a permission can be revoked between the check and the read.
-        case .unauthorized:
-            return []
-        }
-    }
-
-    /// Open reminders due by the end of today, split at this morning's midnight.
-    ///
-    /// "Due today" and "overdue" are one EventKit read rather than two, because
-    /// two predicates against the same daemon cost twice as much and can
-    /// disagree about the boundary if the clock ticks between them. Undated
-    /// reminders are excluded by the window — `DateWindow(start: nil, end: nil)`
-    /// is the only shape that returns them, and a shopping list is not a thing
-    /// that is due.
-    private nonisolated static func readReminders(
-        readable: Bool,
-        now: Date,
-        calendar: Calendar
-    ) async -> (due: [BriefReminder], overdue: [BriefReminder]) {
-        guard readable else { return ([], []) }
-        let startOfToday = calendar.startOfDay(for: now)
-        guard let endOfToday = calendar.date(byAdding: .day, value: 1, to: startOfToday) else { return ([], []) }
-        switch await EventAccess.shared.reminders(in: DateWindow(start: nil, end: endOfToday)) {
-        case let .rows(rows, _):
-            var due: [BriefReminder] = []
-            var overdue: [BriefReminder] = []
-            for row in rows {
-                guard let deadline = row.due else { continue }
-                if deadline < startOfToday {
-                    overdue.append(BriefReminder(row))
-                } else {
-                    due.append(BriefReminder(row))
-                }
-            }
-            return (due, overdue)
-        case .unauthorized:
-            return ([], [])
-        }
-    }
-
-    /// Last night, and what a night usually is for this person.
-    ///
-    /// The baseline deliberately excludes the night it is about. A night
-    /// included in its own median drags the median towards itself, and the
-    /// comparison the Sleep tile prints is then partly a comparison with
-    /// itself — the same argument `HealthSummary.baseline(endingBefore:)`
-    /// makes at greater length.
-    private nonisolated static func readSleep(
-        readable: Bool,
-        now: Date,
-        calendar: Calendar
-    ) async -> (lastNight: TimeInterval?, usual: TimeInterval?) {
-        guard readable else { return (nil, nil) }
-        let startOfToday = calendar.startOfDay(for: now)
-        // One night more than the baseline wants, because last night is read
-        // from this window too and is then dropped out of the baseline.
-        guard let from = calendar.date(byAdding: .day, value: -(Usual.baselineNights + 1), to: startOfToday) else {
-            return (nil, nil)
-        }
-        let readout = await HealthAccess.shared.readout(for: .sleep, in: DateInterval(start: from, end: now))
-        guard readout.availability == .available else { return (nil, nil) }
-        let nights = HealthArithmetic.nightlyTotals(readout.sleep, calendar: calendar)
-        let lastNight = nights.last { calendar.isDate($0.day, inSameDayAs: now) }?.value
-        let earlier = nights.filter { $0.day < startOfToday }.map(\.value)
-        return (lastNight, Usual.typicalSleep(earlier))
-    }
-
-    /// Today so far, and the median of the fortnight behind it.
-    ///
-    /// Today is excluded from its own baseline for the reason above and one
-    /// more that is specific to steps: today is a partial day and every other
-    /// day in the window is a whole one, so including it would pull "usual"
-    /// down every single morning.
-    private nonisolated static func readSteps(
-        readable: Bool,
-        now: Date,
-        calendar: Calendar
-    ) async -> (today: Double?, usual: Double?) {
-        guard readable else { return (nil, nil) }
-        let startOfToday = calendar.startOfDay(for: now)
-        guard let from = calendar.date(byAdding: .day, value: -Usual.baselineNights, to: startOfToday) else {
-            return (nil, nil)
-        }
-        let readout = await HealthAccess.shared.readout(for: .activity, in: DateInterval(start: from, end: now))
-        guard readout.availability == .available else { return (nil, nil) }
-        let days = HealthArithmetic.daily(readout.samples[.steps] ?? [], metric: .steps, calendar: calendar)
-        let today = days.last { calendar.isDate($0.day, inSameDayAs: now) }?.value
-        let earlier = days.filter { $0.day < startOfToday }.map(\.value)
-        return (today, Usual.median(earlier))
-    }
-
     // MARK: Writing the brief
+
+    /// How long a reading of the day is trusted before Today reads it again.
+    ///
+    /// The Today tab asks for a refresh every time it appears, and a refresh
+    /// used to read EventKit and fifteen nights of HealthKit every time — on
+    /// every tab switch. Five minutes is long enough that switching tabs is
+    /// free and short enough that "in 2h 10m" never drifts far; the events
+    /// that matter sooner than that (a permission, the calendar database,
+    /// the app coming back to the front) mark the reading stale on their own.
+    static let dayReadingShelfLife: TimeInterval = 5 * 60
 
     /// Rebuilds the day and, when there is a brain, has it write about it.
     ///
@@ -370,13 +228,57 @@ extension AppModel {
     /// between two good sentences and three better ones rather than the
     /// difference between a brief and a blank.
     ///
+    /// A call that is not forced returns at once while the last reading is
+    /// fresh (`dayReadingShelfLife`) and nothing has marked it stale. A call
+    /// that arrives while a refresh is running is folded into it: a forced one
+    /// runs straight after, and anything that marked the day stale meanwhile
+    /// makes the running refresh read once more before it finishes.
+    ///
     /// - Parameter force: Rewrite even if a model already wrote today's. What
     ///   the Refresh pill and pull-to-refresh pass.
     func refreshBrief(force: Bool = false) async {
-        guard !briefing.isRefreshing else { return }
+        if briefing.isRefreshing {
+            if force { briefing.wantsForcedPass = true }
+            return
+        }
+        guard force || briefNeedsReading(now: DemoClock.now) else { return }
         briefing.isRefreshing = true
-        defer { briefing.isRefreshing = false }
+        var forced = force
+        while true {
+            briefing.isStale = false
+            await rebuildBrief(force: forced)
+            if briefing.wantsForcedPass {
+                briefing.wantsForcedPass = false
+                forced = true
+            } else if briefing.isStale {
+                forced = false
+            } else {
+                break
+            }
+        }
+        briefing.isRefreshing = false
+    }
 
+    /// Something the day is read from has changed: mark the reading stale and
+    /// read it again.
+    ///
+    /// Called by the connect door, by a permission that changed while the app
+    /// was away, by the calendar database announcing a change, and by the app
+    /// coming back to the front. Folded into a refresh that is already running.
+    func dayMayHaveChanged() {
+        briefing.isStale = true
+        Task { await refreshBrief() }
+    }
+
+    private func briefNeedsReading(now: Date) -> Bool {
+        guard !briefing.isStale, let last = briefing.lastRefresh else { return true }
+        return now.timeIntervalSince(last) >= Self.dayReadingShelfLife
+            || !Calendar.current.isDate(last, inSameDayAs: now)
+    }
+
+    /// One pass of `refreshBrief`: read the day, publish the template, and let
+    /// a brain that can read the day rewrite it.
+    private func rebuildBrief(force: Bool) async {
         let now = DemoClock.now
         let calendar = Calendar.current
         let store = Self.dailyBriefStore()
@@ -386,9 +288,11 @@ extension AppModel {
         // to answer. Only today's: a brief written at 23:50 is about yesterday
         // ten minutes later, which is what `isForToday` is for.
         if briefing.brief == nil, let stored = store?.read(), stored.isForToday(now: now, calendar: calendar) {
-            briefing.brief = stored
             briefing.snapshot = stored.snapshot
-            briefing.phase = .ready
+            if keepsStoredBrief(stored) {
+                briefing.brief = stillTrue(stored, current: stored.snapshot, now: now, calendar: calendar)
+                briefing.phase = .ready
+            }
         }
         if briefing.phase == .idle { briefing.phase = .building }
 
@@ -399,15 +303,32 @@ extension AppModel {
         // A model wrote today's and nobody asked again. Left alone — including
         // its text, which describes the morning it was written in and would be
         // a different paragraph if regenerated at teatime for no reason.
+        //
+        // Unless a brief routine has fired since it was written: the Evening
+        // wrap-up at 21:00 is somebody asking again, and returning here kept
+        // this morning's paragraph under an evening notification.
+        //
+        // Or unless the day has moved on under it. A paragraph written at noon
+        // says lunch is next; at a quarter to two that lunch is being eaten,
+        // and keeping the paragraph "for the rest of the day" kept saying so.
         let today = briefing.brief.flatMap { $0.isForToday(now: now, calendar: calendar) ? $0 : nil }
-        if !force, let today, today.source != .template {
+        let askedAgain = today.map { briefRoutineFired(since: $0.generatedAt, now: now, calendar: calendar) } ?? false
+        let movedOn = today.map { !isStillTrue($0, current: snapshot, now: now, calendar: calendar) } ?? false
+        defer { scheduleNextRewrite(after: now, snapshot: snapshot, calendar: calendar) }
+        if !force, !askedAgain, !movedOn, let today, today.source != .template {
             briefing.phase = .ready
             return
         }
 
         // Whether a brain is free to take a turn at this, decided before
         // anything is published — because it decides what is published.
-        let willGenerate = loadedModelID != nil && !isGenerating && briefing.generation == nil
+        //
+        // Not when nothing is connected: a brain handed only the date writes
+        // "It is Wednesday, 21 October, at 9:41 AM." in place of the one
+        // sentence worth saying, which the template says — what connecting
+        // would show.
+        let brainIsBusy = isGenerating || briefing.generation != nil
+        let willGenerate = mayWriteBrief && snapshot.hasAnythingConnected && !brainIsBusy
 
         // The template, unless a model already wrote today's and the model that
         // could write it again is merely busy. That case is a Refresh tapped
@@ -416,28 +337,17 @@ extension AppModel {
         // one. The words stay; the snapshot travelling with them moves on,
         // which is what the widget in the other process reads.
         //
-        // `loadedModelID != nil` is the whole of the difference, and without it
-        // Refresh was a button that did nothing: with no brain resident there
-        // is no better paragraph coming, ever, and the card went on showing
-        // what a brain that has since been removed wrote hours ago — under a
-        // callout inviting the reader to get a brain so it could write one.
+        // `mayWriteBrief` is the whole of the difference, and without it
+        // Refresh was a button that did nothing: with no brain that can write
+        // resident there is no better paragraph coming, ever, and the card went
+        // on showing what a brain that has since been removed wrote hours ago.
         let republished: DailyBrief
-        if loadedModelID != nil, !willGenerate, let today, today.source != .template {
+        if mayWriteBrief, brainIsBusy, !movedOn, let today, today.source != .template {
             republished = DailyBrief(
                 text: today.text, generatedAt: today.generatedAt, source: today.source, snapshot: snapshot
             )
         } else {
-            republished = DailyBrief(
-                text: BriefPrompt.fallback(
-                    snapshot: snapshot,
-                    name: profile.greetingName,
-                    now: now,
-                    calendar: calendar
-                ),
-                generatedAt: now,
-                source: .template,
-                snapshot: snapshot
-            )
+            republished = templateBrief(for: snapshot, now: now, calendar: calendar)
         }
         publish(republished, store: store, now: now, calendar: calendar)
         briefing.phase = .ready
@@ -449,6 +359,142 @@ extension AppModel {
             calendar: calendar,
             source: force ? .manual : .auto
         )
+    }
+
+    /// Whether a brain may write the brief, as opposed to the template.
+    ///
+    /// Three conditions, each one a failure seen on screen:
+    /// - the brain is resident and not mid-load;
+    /// - it can read the day. A brain that cannot use tools is a brain this
+    ///   app has watched print its own instructions as the brief, and turn a
+    ///   lunch into a letter asking for an appointment. The template is always
+    ///   true; that brain's paragraph is not.
+    /// - the intro is over. A brief written before anyone has given a name or
+    ///   connected a calendar greets nobody about nothing, and it used to stay
+    ///   on Today until a manual refresh.
+    var mayWriteBrief: Bool {
+        brainStatus.canWriteBrief && hasCompletedOnboarding
+    }
+
+    /// The deterministic brief, from the snapshot and the name.
+    private func templateBrief(for snapshot: TodaySnapshot, now: Date, calendar: Calendar) -> DailyBrief {
+        DailyBrief(
+            text: BriefPrompt.fallback(
+                snapshot: snapshot,
+                name: profile.greetingName,
+                now: now,
+                calendar: calendar
+            ),
+            generatedAt: now,
+            source: .template,
+            snapshot: snapshot
+        )
+    }
+
+    /// A brief read back from disk, or — when the day has moved on since it
+    /// was written — the template for that same reading at `now`.
+    ///
+    /// For the first frame of a launch, before anything has been read: a
+    /// paragraph from this morning saying lunch is next must not greet
+    /// somebody opening the app mid-afternoon, even for the second it takes
+    /// EventKit to answer. Not written to disk; the real reading does that.
+    private func stillTrue(_ stored: DailyBrief, current: TodaySnapshot, now: Date, calendar: Calendar) -> DailyBrief {
+        guard !isStillTrue(stored, current: current, now: now, calendar: calendar) else { return stored }
+        return templateBrief(for: current, now: now, calendar: calendar)
+    }
+
+    /// Whether a brief still describes the day as it is now read.
+    ///
+    /// False once the day has moved on under it (`BriefPrompt.isOutdated`),
+    /// and false when what the day is read from has changed since it was
+    /// written: a paragraph written with the calendar off says nothing about
+    /// the calendar somebody has just connected, and one written with it on
+    /// goes on quoting it after it was switched off.
+    private func isStillTrue(_ brief: DailyBrief, current: TodaySnapshot, now: Date, calendar: Calendar) -> Bool {
+        let written = brief.snapshot
+        guard written.calendar == current.calendar,
+              written.reminders == current.reminders,
+              written.health == current.health
+        else { return false }
+        return !BriefPrompt.isOutdated(writtenAt: brief.generatedAt, snapshot: current, now: now, calendar: calendar)
+    }
+
+    /// Reads the day again at the moment the brief stops being true.
+    ///
+    /// A screen left open on Today gets no appearance and no scene change to
+    /// hang a refresh on, so without this the paragraph above a tile reading
+    /// "In 3m" went on saying the meeting was next well after it began. One
+    /// task, replaced on every reading: it sleeps until `BriefPrompt.nextRewrite`
+    /// — the next start, end or timed reminder, or the next change of
+    /// greeting — and marks the reading stale, which rewrites the template at
+    /// once and lets a brain that can write it take its turn.
+    ///
+    /// A process that is suspended is asleep too, and catches up when it comes
+    /// back, where the scene becoming active marks the reading stale anyway.
+    private func scheduleNextRewrite(after now: Date, snapshot: TodaySnapshot, calendar: Calendar) {
+        briefing.nextRewrite?.cancel()
+        briefing.nextRewrite = nil
+        guard let moment = BriefPrompt.nextRewrite(after: now, snapshot: snapshot, calendar: calendar) else { return }
+        // A second past the moment, so the reading lands on the far side of
+        // it; and never more than a few hours ahead, so one long sleep cannot
+        // outlive a clock change.
+        let delay = min(max(moment.timeIntervalSince(now) + 1, 1), 6 * 60 * 60)
+        briefing.nextRewrite = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            self?.dayMayHaveChanged()
+        }
+    }
+
+    /// Whether a brief read back from disk may go back on screen.
+    ///
+    /// The template always may. A brain's paragraph may not when that brain
+    /// is one that cannot read the day — those were the briefs that read the
+    /// prompt back, and `brief.json` kept one on Today across relaunches — or
+    /// when the text is mostly its own instructions, whoever wrote it.
+    func keepsStoredBrief(_ brief: DailyBrief) -> Bool {
+        guard case let .model(id) = brief.source else { return true }
+        // Apple's model is in no catalogue, and reads the day.
+        guard let writer = (catalog + [ModelRecord.builtIn]).first(where: { $0.id == id }),
+              writer.dayAccess(resident: loadedModelID == id ? personalDataToolGate : nil).readsYourDay
+        else { return false }
+        return Self.screenedBrief(
+            brief.text,
+            instructions: Self.briefInstructions(name: profile.greetingName, now: brief.generatedAt),
+            facts: BriefFacts(snapshot: brief.snapshot, now: brief.generatedAt)
+        ) == brief.text
+    }
+
+    /// The brief's prompt as a brain would be handed it for a moment, for the
+    /// echo check. Only its system turn counts as instructions; the day in
+    /// the user turn is material a brief is supposed to repeat.
+    private static func briefInstructions(name: String?, now: Date) -> [ChatMessage] {
+        let calendar = Calendar.current
+        return BriefPrompt.messages(
+            snapshot: .empty,
+            name: name,
+            now: now,
+            calendar: calendar,
+            timeOfDay: TimeOfDayKind.from(now: now, calendar: calendar)
+        )
+    }
+
+    /// What may be published of a brain's paragraph, or `nil` for the
+    /// template.
+    ///
+    /// Two screens, in order. `PromptEcho` takes out instruction sentences the
+    /// brain read back — SmolLM2 once wrote the whole system prompt as the
+    /// brief, and the cache kept it on Today across relaunches — and refuses a
+    /// paragraph that was mostly echo. `BriefPrompt.screened` then refuses a
+    /// data dump or a time spelled out in words ("at eleven fifty seven AM"),
+    /// puts plain counts into digits and keeps it to whole sentences — and
+    /// checks every time, length and number against the day it was written
+    /// from (`BriefFacts`): a brief that puts tomorrow's meeting this
+    /// afternoon, or gets the sleep gap wrong, keeps the template instead.
+    static func screenedBrief(_ text: String, instructions: [ChatMessage], facts: BriefFacts) -> String? {
+        let cleaned = PromptEcho.clean(BriefPrompt.clean(text), against: instructions)
+        guard !cleaned.isMostlyEcho else { return nil }
+        return BriefPrompt.screened(cleaned.text, facts: facts)
     }
 
     /// Stores the brief, mirrors it for the widget, and puts it on screen.
@@ -508,7 +554,11 @@ extension AppModel {
             guard let self else { return }
             var raw = ""
             do {
-                for try await event in try await self.engine.generate(request) {
+                // Without tools: every fact the brief may use is in its
+                // prompt, and Apple's model handed tools would look the day up
+                // again and write about a card the brief never shows. A
+                // download answers exactly as before.
+                for try await event in try await self.phoneBrain.generateWithoutTools(request) {
                     guard case let .token(chunk) = event else { continue }
                     raw += chunk
                     // Cleaned on every token rather than at the end, because
@@ -524,6 +574,7 @@ extension AppModel {
             }
             self.finishBriefGeneration(
                 raw: raw,
+                instructions: request.messages,
                 modelID: modelID,
                 snapshot: snapshot,
                 source: source,
@@ -536,6 +587,7 @@ extension AppModel {
 
     private func finishBriefGeneration(
         raw: String,
+        instructions: [ChatMessage],
         modelID: String,
         snapshot: TodaySnapshot,
         source: BriefSource,
@@ -548,11 +600,22 @@ extension AppModel {
         briefing.phase = .ready
         guard !Task.isCancelled else { return }
 
-        let text = Self.trimmedToSentences(BriefPrompt.clean(raw))
         // A model that emitted nothing usable leaves the template standing.
         // Replacing two true sentences with an empty card is the one outcome
-        // worse than not having a brain at all.
-        guard text.count >= 20 else { return }
+        // worse than not having a brain at all. The same goes for a paragraph
+        // that is mostly its own instructions read back, or that spells the
+        // time out in words; see `screenedBrief`.
+        guard let text = Self.screenedBrief(
+            raw,
+            instructions: instructions,
+            facts: BriefFacts(snapshot: snapshot, now: now, calendar: calendar)
+        ) else {
+            // Refused: the template already on screen stays, and that is the
+            // right outcome — it is true, and a paragraph with one wrong figure
+            // is not. Counted, so how often the brain is overruled is known.
+            DiagnosticLog.record(.failure(area: .model, code: "brief_screened_out"))
+            return
+        }
 
         publish(
             DailyBrief(text: text, generatedAt: now, source: .model(id: modelID), snapshot: snapshot),
@@ -561,33 +624,6 @@ extension AppModel {
             calendar: calendar
         )
         record(.briefGenerated(source: source, durationMilliseconds: milliseconds))
-    }
-
-    /// At most four sentences, and never half of one.
-    ///
-    /// Two separate faults, both seen on a 360M model on a simulator, and both
-    /// of them land on the home tab.
-    ///
-    /// The token cap cuts wherever the budget runs out — "…we'll have a few
-    /// minutes before they arrive at 10:00 PM, and I'd like" — and a paragraph
-    /// that stops mid-clause reads as a crash rather than as a brief. And a
-    /// small model told to write three sentences sometimes writes nine, which
-    /// on this screen pushes all four tiles off the bottom of the phone.
-    ///
-    /// Cut at a terminator rather than at a character count, so what survives
-    /// is whole sentences; text with no terminator at all comes back untouched,
-    /// because losing the paragraph entirely is worse than showing an odd one.
-    /// An abbreviation costs a sentence of the budget — "Mr." counts — which is
-    /// the price of not shipping a sentence tokeniser for a card that wants
-    /// three lines.
-    static func trimmedToSentences(_ text: String, limit: Int = 4) -> String {
-        var ends: [String.Index] = []
-        for index in text.indices where ".!?".contains(text[index]) {
-            ends.append(index)
-            if ends.count == limit { break }
-        }
-        guard let last = ends.last else { return text }
-        return String(text[...last])
     }
 
     /// A generation that threw.
@@ -626,6 +662,78 @@ extension AppModel {
         record(.briefReadAloud)
     }
 
+    // MARK: First paint, names, and the calendar database
+
+    /// What Today shows in its very first frame, before anything is read.
+    ///
+    /// Called from `init`, synchronously, because the first frame is drawn
+    /// before `bootstrap` gets a turn. It used to be `TodaySnapshot.empty`,
+    /// which is every source switched off: a phone with Calendar connected
+    /// opened on four "Off" tiles and an invitation to connect what was
+    /// already connected. Now it is today's last reading from disk, with each
+    /// source's availability taken from the switches and iOS as they stand
+    /// this moment — a cheap, synchronous lookup — and the real reading
+    /// replaces it a second later.
+    func primeTodayFromDisk(now: Date = DemoClock.now, calendar: Calendar = .current) {
+        var snapshot = TodaySnapshot.empty
+        let stored = Self.dailyBriefStore()?.read().flatMap { $0.isForToday(now: now, calendar: calendar) ? $0 : nil }
+        if let stored { snapshot = stored.snapshot }
+        snapshot.calendar = availability(for: .calendar)
+        snapshot.reminders = availability(for: .reminders)
+        snapshot.health = DemoDay.isRequested ? .connected : briefingHealthAvailability
+        // Judged against the sources as they stand now, not as they stood
+        // when it was written: see `isStillTrue`.
+        if let stored, keepsStoredBrief(stored) {
+            briefing.brief = stillTrue(stored, current: snapshot, now: now, calendar: calendar)
+            briefing.phase = .ready
+        }
+        briefing.snapshot = snapshot
+    }
+
+    /// The name changed, so the greeting is wrong.
+    ///
+    /// The template is re-rendered at once from the reading already on
+    /// screen — a name is not a reason to read the calendar again. A brain's
+    /// paragraph greets by the old name, so it is replaced by the template and
+    /// written again by a brain that can.
+    func nameDidChange() {
+        cancelBriefGeneration()
+        guard briefing.lastRefresh != nil else {
+            // Nothing read yet: the first reading uses the new name anyway.
+            dayMayHaveChanged()
+            return
+        }
+        let now = DemoClock.now
+        let calendar = Calendar.current
+        publish(
+            templateBrief(for: briefing.snapshot, now: now, calendar: calendar),
+            store: Self.dailyBriefStore(),
+            now: now,
+            calendar: calendar
+        )
+        briefing.phase = .ready
+        guard mayWriteBrief else { return }
+        Task { await refreshBrief(force: true) }
+    }
+
+    /// Reads the day again whenever the calendar database changes — another
+    /// app, a sync, or one of Pocketd's own writes.
+    ///
+    /// Without it a reading stays trusted for `dayReadingShelfLife`, which is
+    /// right for tab switches and wrong for the meeting somebody just moved.
+    /// EventKit posts in bursts; a burst during a reading costs one more
+    /// reading, because `refreshBrief` folds the rest into it.
+    func watchCalendarDatabase() {
+        guard calendarDatabaseObserver == nil else { return }
+        calendarDatabaseObserver = NotificationCenter.default.addObserver(
+            forName: .EKEventStoreChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.dayMayHaveChanged() }
+        }
+    }
+
     /// A refresh that only runs if today's brief is still the template.
     ///
     /// What `loadModel` calls on the way out. A brain that has just arrived is
@@ -636,7 +744,10 @@ extension AppModel {
     /// during launch — `bootstrap` has its own call at the end and this one
     /// stepping in front of it would read EventKit twice for one paragraph.
     func refreshBriefIfStillTemplate() async {
-        guard let brief = briefing.brief, brief.source == .template else { return }
+        // Only for a brain that may write it: a brain that cannot read the day
+        // leaves the template standing, and forcing a pass for it would read
+        // EventKit and HealthKit again to publish the same paragraph.
+        guard mayWriteBrief, let brief = briefing.brief, brief.source == .template else { return }
         await refreshBrief(force: true)
     }
 }

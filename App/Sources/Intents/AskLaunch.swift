@@ -7,7 +7,7 @@ import Foundation
 /// copy of it: that type has to compile into the widget extension too, since
 /// it is what the control writes, so it stays in `App/Shared` and stays
 /// Foundation-only. This is the one place in the app that reads it back,
-/// mirroring how `RootView` already reads `IntentInbox` for a Siri question.
+/// mirroring how the shell reads `IntentInbox` for a Siri question.
 @MainActor
 enum AskLaunch {
     typealias Mode = AskLaunchRequest.Mode

@@ -7,8 +7,8 @@ import Foundation
 ///
 /// It carries no question, unlike `AskPocketdIntent`. A control is a single
 /// tap with no room for a parameter, a Siri dialog or a Shortcuts input; all
-/// it can ask for is the composer, ready. `AskLaunch` turns that into a
-/// routed tab and a focus request on the other side of the launch — see
+/// it can ask for is the composer, ready. `AskLaunch` turns that into the
+/// conversation, open and listening, on the other side of the launch — see
 /// `AskLaunchRequest` for why the hand-off is an App Group marker rather
 /// than a call straight into `IntentInbox`.
 ///
@@ -20,7 +20,7 @@ struct OpenAskIntent: AppIntent {
     static let title: LocalizedStringResource = "Ask Pocketd"
 
     static let description = IntentDescription(
-        "Opens Pocketd straight into the Ask tab, ready for a question."
+        "Opens a conversation with Pocketd, ready for your question."
     )
 
     /// Required, and for the same reason `AskPocketdIntent` gives: the model

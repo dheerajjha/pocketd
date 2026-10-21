@@ -21,7 +21,10 @@ struct AskPocketdIntent: AppIntent {
     static let title: LocalizedStringResource = "Ask Pocketd"
 
     static let description = IntentDescription(
-        "Ask the assistant on this phone a question. It can read your calendar, your reminders and your Health data, and answers without anything leaving the device.",
+        // Plain, and no promise about what it can read: that depends on what
+        // is connected and on the brain, and Shortcuts shows this line to
+        // somebody who may have connected neither.
+        "Ask Pocketd about your day. It answers on this iPhone, and nothing you ask leaves it.",
         categoryName: "Assistant"
     )
 

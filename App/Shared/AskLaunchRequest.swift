@@ -1,6 +1,6 @@
 import Foundation
 
-/// A request to open straight into the Ask tab, left for the app by a tap on
+/// A request to open straight into the conversation, left for the app by a tap on
 /// the "Ask Pocketd" control.
 ///
 /// `IntentInbox` cannot serve this the way it serves Siri: that inbox is an
@@ -19,11 +19,20 @@ import Foundation
 /// tap before the app is foregrounded is impatience, not a second request.
 enum AskLaunchRequest {
 
-    /// How the tap wants the Ask tab to open.
+    /// How the tap wants the conversation to open. One case today — the control
+    /// asks for the microphone — kept as a type so a future control that asks
+    /// for the keyboard has a spelling to use.
     enum Mode: String, Codable, Sendable {
-        case text
         case voice
     }
+
+    /// How long a tap is worth acting on.
+    ///
+    /// The marker waits for the main screen, and the main screen does not
+    /// exist while the intro is up: a tap made then used to open the
+    /// microphone whenever the intro finished, minutes later, with nobody
+    /// expecting it. A minute covers the slowest cold launch.
+    static let freshness: TimeInterval = 60
 
     private struct Marker: Codable, Sendable {
         var mode: Mode
@@ -53,9 +62,12 @@ enum AskLaunchRequest {
 
     /// Takes the marker and clears it, so a scene that becomes active twice
     /// does not act on one tap twice.
-    static func take() -> Mode? {
+    static func take(now: Date = Date()) -> Mode? {
         guard let defaults, let data = defaults.data(forKey: key) else { return nil }
         defaults.removeObject(forKey: key)
-        return try? JSONDecoder().decode(Marker.self, from: data).mode
+        guard let marker = try? JSONDecoder().decode(Marker.self, from: data),
+              now.timeIntervalSince(marker.at) < freshness
+        else { return nil }
+        return marker.mode
     }
 }

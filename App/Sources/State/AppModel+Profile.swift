@@ -40,8 +40,15 @@ final class Profile {
             } else {
                 defaults.set(trimmed, forKey: Self.nameKey)
             }
+            if trimmed != oldValue.trimmingCharacters(in: .whitespacesAndNewlines) {
+                onNameChange?()
+            }
         }
     }
+
+    /// Told when the name changes, so the brief that greets by it can be
+    /// rewritten at once rather than at the next refresh. Set by `AppModel`.
+    @ObservationIgnored var onNameChange: (@MainActor () -> Void)?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
