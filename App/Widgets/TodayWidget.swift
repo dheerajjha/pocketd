@@ -1,6 +1,4 @@
-import AppIntents
 import SwiftUI
-import UIKit
 import WidgetKit
 
 /// The brief, on a home screen and a lock screen.
@@ -18,52 +16,6 @@ struct TodayEntry: TimelineEntry {
     /// an error. See `TodayCopy`, which turns that into a sentence rather than a
     /// blank rectangle.
     let brief: WidgetBrief?
-}
-
-// MARK: - Palette
-
-/// The app's warm cream, redeclared here.
-///
-/// The widget extension does not compile the app's Design folder and has no
-/// asset catalogue of its own — see project.yml, where `PocketdWidgets` takes
-/// four named files and `App/Widgets` and nothing else. So the six colours are
-/// literals in this file, which is a duplicate and is meant to be read as one:
-/// if the app's cream moves, this moves with it by hand.
-///
-/// A `UIColor` dynamic provider rather than two `Color`s and a `colorScheme`
-/// check, because the widget's rendering environment resolves the trait for us
-/// in every place a widget is drawn — gallery, home screen, StandBy, the
-/// Xcode preview — and a manual branch would have to be threaded into every
-/// nested view that draws anything.
-private enum TodayPalette {
-    /// Computed rather than stored. These are cheap, and a stored global would
-    /// be a global initialiser running a UIKit closure on whichever thread got
-    /// there first.
-    static var cream: Color { dynamic(light: 0xFFFEFB, dark: 0x1E1C19) }
-    static var ink: Color { dynamic(light: 0x242424, dark: 0xF1EFEA) }
-    /// The one colour that does not flip. It is legible on both backgrounds and
-    /// a second value would be a second thing to keep in step for no gain.
-    static var secondary: Color { solid(0x7B7B7B) }
-    static var accent: Color { solid(0x39649E) }
-
-    private static func dynamic(light: UInt32, dark: UInt32) -> Color {
-        Color(uiColor: UIColor { traits in
-            traits.userInterfaceStyle == .dark ? uiColor(dark) : uiColor(light)
-        })
-    }
-
-    private static func solid(_ rgb: UInt32) -> Color {
-        Color(uiColor: uiColor(rgb))
-    }
-
-    private static func uiColor(_ rgb: UInt32) -> UIColor {
-        UIColor(
-            red: CGFloat((rgb >> 16) & 0xFF) / 255,
-            green: CGFloat((rgb >> 8) & 0xFF) / 255,
-            blue: CGFloat(rgb & 0xFF) / 255,
-            alpha: 1
-        )
-    }
 }
 
 // MARK: - Copy
@@ -119,6 +71,10 @@ private struct TodayCopy {
         dueCount = brief.dueCount
     }
 
+    /// "2 due" — digits through the app's own formatter, never a spelled-out
+    /// number.
+    var dueText: String { "\(Format.count(dueCount)) due" }
+
     /// Duplicated from `TimeOfDayKind`, and knowingly.
     ///
     /// That type lives in `BriefPrompt.swift`, which is PocketdKit, which this
@@ -152,19 +108,21 @@ struct TodayProvider: TimelineProvider {
     /// Invented and plausible rather than empty, for the reason `SchedulesProvider`
     /// gives: a widget that previews as "nothing here yet" is a widget nobody
     /// adds. Sam is not a user and the standup is not a meeting; both exist so
-    /// that the gallery shows the shape of the thing.
+    /// that the gallery shows the shape of the thing — in the brief's own
+    /// words, digits and all.
     static var sample: WidgetBrief {
         let now = Date()
         var components = Calendar.current.dateComponents([.year, .month, .day], from: now)
         components.hour = 9
         components.minute = 30
+        let standup = Calendar.current.date(from: components) ?? now.addingTimeInterval(1_500)
         return WidgetBrief(
             // No trailing stop, exactly as the app publishes it. The views add
             // one; a sample that carried its own would hide a bug in that.
             greetingLine: "Good morning, Sam",
-            firstSentence: "Standup at 9:30 is next, and two reminders are due today.",
+            firstSentence: "Standup at \(Format.time(standup)) is next. You have 2 reminders due today.",
             nextEventTitle: "Standup",
-            nextEventTime: Calendar.current.date(from: components) ?? now.addingTimeInterval(1_500),
+            nextEventTime: standup,
             dueCount: 2,
             generatedAt: now
         )
@@ -185,28 +143,43 @@ struct TodayProvider: TimelineProvider {
     func getTimeline(in context: Context, completion: @escaping (Timeline<TodayEntry>) -> Void) {
         let now = Date()
         let brief = WidgetBriefStore().read()
-        var entries = [TodayEntry(date: now, brief: brief)]
+        let entries = Self.entryDates(from: now, event: brief?.nextEventTime)
+            .map { TodayEntry(date: $0, brief: brief) }
 
-        // A second entry at the event itself, and it is not about the countdown.
-        //
-        // `Text(_:style:.relative)` is drawn by the system and ticks on its own
-        // between reloads, so "in 25 min" needs no entries at all to reach "in 1
-        // min" — an entry per minute would spend the whole refresh budget
-        // redrawing a clock iOS is already drawing. What it cannot do is stop:
-        // left alone it rolls straight past 09:30 and starts counting *up*,
-        // so a meeting that started ten minutes ago reads "10 min" and looks
-        // like one starting in ten. This entry is the flip to a wall-clock
-        // time at the moment that would happen.
-        if let firing = brief?.nextEventTime, firing > now {
-            entries.append(TodayEntry(date: firing, brief: brief))
-        }
-
-        // The quarter hour, because the parts of this that are not self-ticking
-        // — the stale label, the greeting crossing noon — move on the clock and
-        // not on anything the app does. The app also reloads this explicitly
-        // whenever it publishes a brief, which covers every change a person
-        // makes; this covers the one nobody makes, where time simply passes.
+        // The quarter hour, because the parts of this that are not covered by
+        // the entries — the stale label, the greeting crossing noon — move on
+        // the clock and not on anything the app does. The app also reloads
+        // this explicitly whenever it publishes a brief, which covers every
+        // change a person makes; this covers the one nobody makes, where time
+        // simply passes.
         completion(Timeline(entries: entries, policy: .after(Self.nextQuarterHour(after: now))))
+    }
+
+    /// When the countdown needs redrawing: now, every minute boundary until the
+    /// event or for the next hour, whichever comes first, and the event itself.
+    ///
+    /// Rendered entries rather than `Text(_:style: .relative)`, which ticks by
+    /// itself but in the system's spelling — "2 hr, 10 min" — on a widget whose
+    /// app says "in 2h 10m" (`Format.relative`), and which, left alone, rolls
+    /// past the start and counts *up*, so a meeting that began ten minutes ago
+    /// reads like one starting in ten. Entries are not reloads and cost no
+    /// refresh budget; an hour of them outlasts the quarter-hour reload with
+    /// room to spare, so a late reload still leaves the minutes right. The last
+    /// one, at the event, is the flip to a wall-clock time.
+    static func entryDates(from now: Date, event: Date?, horizon: TimeInterval = 3_600) -> [Date] {
+        guard let event, event > now else { return [now] }
+        var dates = [now]
+        let minute: TimeInterval = 60
+        var tick = (now.timeIntervalSinceReferenceDate / minute).rounded(.down) * minute + minute
+        let end = min(event.timeIntervalSinceReferenceDate, now.timeIntervalSinceReferenceDate + horizon)
+        while tick < end {
+            dates.append(Date(timeIntervalSinceReferenceDate: tick))
+            tick += minute
+        }
+        if event.timeIntervalSinceReferenceDate <= now.timeIntervalSinceReferenceDate + horizon {
+            dates.append(event)
+        }
+        return dates
     }
 
     /// The next :00, :15, :30 or :45.
@@ -232,9 +205,9 @@ struct TodayWidgetView: View {
 
     var body: some View {
         content
-            // One destination for the whole widget. Every family lands on the
-            // Today tab; the medium family's Ask button is the one exception and
-            // it wins inside its own bounds.
+            // One destination for the whole widget: Today, with nothing on top
+            // of it (`Navigator.follow`). The medium family's Ask button is the
+            // one exception and it wins inside its own bounds.
             .widgetURL(URL(string: "pocketd://today"))
             .containerBackground(for: .widget) { background }
     }
@@ -260,7 +233,7 @@ struct TodayWidgetView: View {
         switch family {
         case .accessoryCircular: AccessoryWidgetBackground()
         case .accessoryInline, .accessoryRectangular: Color.clear
-        default: TodayPalette.cream
+        default: WidgetPalette.background
         }
     }
 
@@ -272,14 +245,14 @@ struct TodayWidgetView: View {
             Spacer(minLength: 6)
             Text(copy.greeting)
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(TodayPalette.ink)
+                .foregroundStyle(WidgetPalette.ink)
                 .lineLimit(3)
                 .minimumScaleFactor(0.85)
             Spacer(minLength: 6)
             if let title = copy.nextTitle, let time = copy.nextTime {
                 Text(title)
                     .font(.system(size: 13))
-                    .foregroundStyle(TodayPalette.ink)
+                    .foregroundStyle(WidgetPalette.ink)
                     .lineLimit(1)
                 monospacedTime(time)
             } else {
@@ -290,7 +263,7 @@ struct TodayWidgetView: View {
                 // it is also what the first-run widget says.
                 Text(copy.sentence)
                     .font(.system(size: 12))
-                    .foregroundStyle(TodayPalette.secondary)
+                    .foregroundStyle(WidgetPalette.secondary)
                     .lineLimit(3)
             }
             if copy.dueCount > 0 {
@@ -303,23 +276,22 @@ struct TodayWidgetView: View {
 
     private var medium: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline) {
-                fieldLabel(copy.label)
-                Spacer(minLength: 8)
-                askButton
-            }
+            fieldLabel(copy.label)
             Text(copy.greeting)
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(TodayPalette.ink)
+                .foregroundStyle(WidgetPalette.ink)
                 .lineLimit(1)
+                // Clear of the Ask button above it in the corner.
+                .padding(.trailing, 64)
             Text(copy.sentence)
                 .font(.system(size: 13))
-                .foregroundStyle(TodayPalette.ink)
+                .foregroundStyle(WidgetPalette.ink)
                 .lineLimit(3)
             Spacer(minLength: 4)
             footer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .overlay(alignment: .topTrailing) { askButton }
     }
 
     @ViewBuilder private var footer: some View {
@@ -329,7 +301,7 @@ struct TodayWidgetView: View {
                     fieldLabel("NEXT")
                     Text(title)
                         .font(.system(size: 13))
-                        .foregroundStyle(TodayPalette.ink)
+                        .foregroundStyle(WidgetPalette.ink)
                         .lineLimit(1)
                     monospacedTime(time)
                 }
@@ -341,31 +313,53 @@ struct TodayWidgetView: View {
                     // The number and never the titles. See `WidgetBrief`: a
                     // count discloses nothing, and "2" is the whole of what a
                     // glance wants.
-                    Text("\(copy.dueCount)")
+                    Text(Format.count(copy.dueCount))
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(TodayPalette.accent)
+                        .foregroundStyle(WidgetPalette.accent)
                 }
             }
             Spacer(minLength: 0)
         }
     }
 
-    /// The one interactive part of the widget.
+    /// The one part of the widget that goes somewhere other than the brief.
     ///
-    /// A `Button(intent:)` rather than a second `widgetURL` — a widget gets
-    /// exactly one URL, and spending it on Ask would cost the tap-anywhere
-    /// gesture that takes somebody to the brief this widget is showing them.
-    /// The intent is the same one the Control Center button runs, so there is
-    /// one definition of "open into Ask" and not two.
+    /// A `Link` to `pocketd://ask` rather than a second `widgetURL` — a widget
+    /// gets exactly one of those, and spending it on Ask would cost the
+    /// tap-anywhere gesture that takes somebody to the brief this widget is
+    /// showing them. A medium widget may carry links of its own as well, and
+    /// the shell's `Navigator.follow` opens the conversation for this one.
+    ///
+    /// Not `Button(intent: OpenAskIntent())`, which it used to be. That intent
+    /// runs in this extension and leaves its "open Ask" marker in the App Group
+    /// for the app to find; a link needs neither, so a tap opens the
+    /// conversation even where the group is missing — which is every unsigned
+    /// build — rather than opening nothing at all.
+    ///
+    /// A word and a 44pt target rather than a lone 13pt sparkle: the glyph on
+    /// its own was a thumb's width smaller than anything Apple asks a finger to
+    /// hit, and said nothing about what it did. Laid over the corner instead of
+    /// into the first row, so the target can be the size of a finger without
+    /// pushing the sentence below it off the widget.
     private var askButton: some View {
-        Button(intent: OpenAskIntent()) {
-            Image(systemName: "sparkles")
+        Link(destination: Self.askURL) {
+            Label("Ask", systemImage: "sparkles")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(TodayPalette.accent)
+                .foregroundStyle(WidgetPalette.accent)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Capsule().fill(WidgetPalette.accent.opacity(0.13)))
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        // The capsule's top on the label row's; the rest of the target spills
+        // into the widget's margin, where nothing else can be tapped.
+        .offset(x: 6, y: -12)
         .accessibilityLabel("Ask Pocketd")
     }
+
+    /// `DeepLink.ask`'s spelling. A literal, so the unwrap cannot fail.
+    private static let askURL = URL(string: "pocketd://ask")!
 
     // MARK: Lock screen
 
@@ -402,7 +396,7 @@ struct TodayWidgetView: View {
                 Image(systemName: "calendar")
             }
         } else if copy.dueCount > 0 {
-            Label("\(copy.dueCount) due", systemImage: "checklist")
+            Label(copy.dueText, systemImage: "checklist")
         } else {
             Label("Nothing due", systemImage: "checklist")
         }
@@ -412,10 +406,10 @@ struct TodayWidgetView: View {
         VStack(spacing: 0) {
             Image(systemName: "checklist")
                 .font(.system(size: 11, weight: .semibold))
-            Text("\(copy.dueCount)")
+            Text(Format.count(copy.dueCount))
                 .font(.system(size: 17, weight: .semibold, design: .rounded))
         }
-        .accessibilityLabel(copy.dueCount == 1 ? "1 reminder due" : "\(copy.dueCount) reminders due")
+        .accessibilityLabel("\(Format.counted(copy.dueCount, "reminder")) due")
     }
 
     // MARK: Pieces
@@ -427,35 +421,35 @@ struct TodayWidgetView: View {
             .font(.system(size: 11, weight: .medium, design: .monospaced))
             .tracking(1.4)
             .textCase(.uppercase)
-            .foregroundStyle(TodayPalette.secondary)
+            .foregroundStyle(WidgetPalette.secondary)
     }
 
     private func monospacedTime(_ time: Date) -> some View {
         timePhrase(time)
             .font(.system(size: 11, weight: .medium, design: .monospaced))
             .textCase(.uppercase)
-            .foregroundStyle(TodayPalette.accent)
+            .foregroundStyle(WidgetPalette.accent)
     }
 
-    /// "in 25 min" before it starts, "9:30 AM" after.
+    /// "in 25 min" before it starts, "9:30 AM" after — `Format`'s spellings,
+    /// the ones the app's Up next tile uses.
     ///
-    /// Returns `Text` rather than `some View` so the inline family can
-    /// concatenate it, and so `.relative` keeps its self-ticking behaviour —
-    /// the system redraws that phrase between timeline reloads, which is the
-    /// whole reason `WidgetBrief` publishes an instant and not a sentence.
+    /// Worked out against the entry's date, not the clock: each entry is drawn
+    /// for its own minute (see `TodayProvider.entryDates`). Returns `Text` so the
+    /// inline family can concatenate it.
     private func timePhrase(_ time: Date) -> Text {
-        time > entry.date ? Text("in ") + Text(time, style: .relative) : Text(time, style: .time)
+        Text(time > entry.date ? Format.relative(time, from: entry.date) : Format.time(time))
     }
 
     private var duePill: some View {
-        Text("\(copy.dueCount) due")
+        Text(copy.dueText)
             .font(.system(size: 11, weight: .medium, design: .monospaced))
             .tracking(1.4)
             .textCase(.uppercase)
-            .foregroundStyle(TodayPalette.accent)
+            .foregroundStyle(WidgetPalette.accent)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
-            .background(Capsule().fill(TodayPalette.accent.opacity(0.13)))
+            .background(Capsule().fill(WidgetPalette.accent.opacity(0.13)))
     }
 }
 
@@ -467,7 +461,7 @@ struct TodayWidget: Widget {
             TodayWidgetView(entry: entry)
         }
         .configurationDisplayName("Today")
-        .description("Your brief, what is next, and how much is due.")
+        .description("Your brief, what's next, and how much is due.")
         .supportedFamilies([
             .systemSmall,
             .systemMedium,

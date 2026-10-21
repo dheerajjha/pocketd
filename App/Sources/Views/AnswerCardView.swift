@@ -1,24 +1,26 @@
 import PocketdKit
 import SwiftUI
 
-/// Draws what a tool found.
+/// Draws what a tool found, as one block of an answer.
 ///
 /// Everything here is a rendering of `AnswerCard`, which was built from a tool
 /// payload and never from a token the model produced — so nothing on screen can
-/// disagree with what the phone actually read. The model's sentence is the card
-/// above; this is the part that is true.
+/// disagree with what the phone actually read. The model's sentence sits above
+/// this in the same card (`AskMessageRow`); this is the part that is true.
+///
+/// A block, not a card. It used to draw its own white card under a second one
+/// holding the model's sentence, so one answer was two surfaces — a remark and
+/// then a table, with the reader left to work out that they were one reply.
+/// Now the answer is one card: the sentence, then the day it is about.
 ///
 /// Two layout rules run through the whole file, both of them about text that
 /// does not fit. Anything in a right-hand track wraps and shrinks rather than
 /// truncating, and at accessibility sizes those tracks collapse into stacked
-/// rows instead of fighting for a width that is no longer there. The specific
-/// failure being designed against is a metric tile narrow enough to break
-/// "Conversational" across lines as "Convers/ational", which no amount of
-/// careful copy prevents and one `minimumScaleFactor` does.
+/// rows instead of fighting for a width that is no longer there.
 ///
 /// Two of the shapes below are live rather than drawn. A reminder row carries a
-/// circle that ticks it off, and a card that reports a write carries an Undo for
-/// five minutes. Both go through `AppModel`, never EventKit directly — see
+/// circle that ticks it off, and a block that reports a write carries an Undo
+/// for five minutes. Both go through `AppModel`, never EventKit directly — see
 /// `AppModel+Reminders`.
 struct AnswerCardView: View {
     let card: AnswerCard
@@ -28,8 +30,13 @@ struct AnswerCardView: View {
     /// circles rather than leaving dead ones on screen.
     var onCompleteReminder: ((String) -> Void)?
 
-    /// The write this card reports, while it can still be taken back.
+    /// The write this block reports, while it can still be taken back.
     var undo: UndoOffer?
+
+    /// The block's own sentence has already been drawn as the answer's lead,
+    /// because the model said nothing else. Drawing it twice would be the same
+    /// fact one line apart.
+    var omitsLede: Bool = false
 
     /// What an Undo needs to know: when it stops being offered, and what it
     /// does. The decision about *whether* there is one belongs to `WriteUndo`,
@@ -43,74 +50,69 @@ struct AnswerCardView: View {
 
     /// Titles ticked off in this view's lifetime.
     ///
-    /// View-local on purpose. The card is a rendering of a payload that was true
-    /// when the tool ran, and re-reading EventKit to redraw it would make the
-    /// transcript disagree with itself as the day went on. What a tap changes is
-    /// the reminders list; what it changes *here* is only the mark beside the
-    /// row the finger landed on.
+    /// View-local on purpose. The block is a rendering of a payload that was
+    /// true when the tool ran, and re-reading EventKit to redraw it would make
+    /// the transcript disagree with itself as the day went on. What a tap
+    /// changes is the reminders list; what it changes *here* is only the mark
+    /// beside the row the finger landed on.
     @State private var completed: Set<String> = []
 
     var body: some View {
-        PDCard {
-            VStack(alignment: .leading, spacing: PDSpacing.m) {
-                header
-                lede
-                sections
-                undoRow
-            }
+        VStack(alignment: .leading, spacing: PDSpacing.s) {
+            header
+            lede
+            sections
+            undoRow
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(card.title.map { "\($0), from your device" } ?? "From your device")
     }
 
     // MARK: - Head
 
-    /// The mono line, the icon tile, and — only where there is no eyebrow to
-    /// carry it — the title.
+    /// The icon tile and the mono line: `TOMORROW · 3 EVENTS`.
     ///
     /// The title folds into the eyebrow when the first block has one, because
-    /// "Tomorrow" over "3 EVENTS" is the same fact written twice and the
-    /// reference sets it as one line: `TOMORROW · 3 EVENTS`.
+    /// "Tomorrow" over "3 EVENTS" is the same fact written twice.
+    ///
+    /// None at all on a block that is only a sentence the answer has already
+    /// used as its lead — a write, a refusal — where a heading over nothing
+    /// but an Undo pill would label an empty shelf.
     @ViewBuilder
     private var header: some View {
-        let head = headline
-        if head.eyebrow != nil || head.title != nil || card.symbol != nil {
+        if let line = headline, !(visibleSections.isEmpty && (omitsLede || card.lede == nil)) {
             HStack(spacing: PDSpacing.s) {
                 if let symbol = card.symbol {
-                    // Decoration: the line beside it already says what this is,
-                    // and a second announcement of "calendar" is noise in the
-                    // rotor.
+                    // Decoration: the line beside it already says what this
+                    // is, and a second announcement of "calendar" is noise in
+                    // the rotor.
                     IconTile.small(symbol)
                 }
-                if let eyebrow = head.eyebrow {
-                    SectionLabel(eyebrow)
-                } else if let title = head.title {
-                    Text(title)
-                        .font(Font.pd.headline)
-                        .foregroundStyle(Color.pd.ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                SectionLabel(line)
                 Spacer(minLength: 0)
             }
         }
     }
 
-    private var headline: (eyebrow: String?, title: String?) {
+    private var headline: String? {
         let first = card.sections.first.flatMap(Self.eyebrow(of:))
-        guard let title = card.title else { return (first, nil) }
-        guard let first else { return (nil, title) }
-        return ("\(title) · \(first)", nil)
+        switch (card.title, first) {
+        case let (title?, first?): return "\(title) · \(first)"
+        case let (title?, nil): return title
+        case let (nil, first?): return first
+        case (nil, nil): return nil
+        }
     }
 
-    /// One short sentence — the only part of a card a model is trusted with, and
-    /// on a write card the whole answer.
+    /// A refusal or a write: the block's own sentence. Body size, because the
+    /// answer's lead above it is the larger line.
     @ViewBuilder
     private var lede: some View {
-        if let text = card.lede, !text.isEmpty {
-            Text(text)
-                .font(Font.pd.lead)
+        if !omitsLede, let text = card.lede, !text.isEmpty {
+            Text(AnswerWords.screened(text))
+                .font(Font.pd.body)
                 .foregroundStyle(Color.pd.ink)
-                .lineSpacing(5)
+                .modifier(PDLineSpacing(4, relativeTo: .body))
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -119,20 +121,32 @@ struct AnswerCardView: View {
 
     @ViewBuilder
     private var sections: some View {
+        let shown = visibleSections
         // Nothing at all rather than an empty stack: a `VStack` with no children
-        // is still a view, and the enclosing stack puts its 16pt gap around it —
-        // which is the dead band under the sentence on a write card, whose only
-        // content is a lede.
-        if !card.sections.isEmpty {
-            // The first block's eyebrow is already in the header when the card
-            // had a title to fold it into; drawing it again is the same words
-            // twice.
-            let foldedFirst = headline.eyebrow != nil
+        // is still a view, and the enclosing stack puts its gap around it —
+        // which is the dead band under the sentence on a write block, whose
+        // only content is a lede.
+        if !shown.isEmpty {
             VStack(alignment: .leading, spacing: PDSpacing.m) {
-                ForEach(Array(card.sections.enumerated()), id: \.offset) { index, section in
-                    block(section, showsEyebrow: !(index == 0 && foldedFirst))
+                ForEach(Array(shown.enumerated()), id: \.offset) { index, section in
+                    // The first section's eyebrow is already in the header.
+                    block(section, showsEyebrow: index != 0)
                 }
             }
+            .padding(.top, PDSpacing.xxs)
+        }
+    }
+
+    /// The sections worth a reader's time.
+    ///
+    /// The priority scale goes: "Priority: 1 is highest, 9 is lowest." is a
+    /// sentence the *model* needs, to read the numbers in the payload, and it
+    /// was printed under every reminder list for a person who never sees those
+    /// numbers — the rows mark an urgent reminder with "!" instead.
+    private var visibleSections: [AnswerCard.Section] {
+        card.sections.filter { section in
+            if case let .note(body) = section, body.text.hasPrefix("Priority:") { return false }
+            return true
         }
     }
 
@@ -162,24 +176,33 @@ struct AnswerCardView: View {
                 }
             }
         case .note(let body):
-            Callout(
-                symbol: body.symbol ?? Self.defaultSymbol(for: body.tone),
-                text: body.text,
-                tint: Self.colour(for: body.tone),
-                fill: body.tone == .caution ? .pd.cautionSoft : .pd.callout
+            quietLine(
+                body.text,
+                symbol: body.symbol ?? (body.tone == .caution ? "exclamationmark.triangle" : "info.circle"),
+                tint: body.tone == .caution ? .pd.caution : .pd.inkSecondary
             )
         case .empty(let body):
-            // Nothing found, drawn. Deliberately not a smaller, greyer version
-            // of a row: an answer with no data in it is the one a reader is most
-            // likely to mistrust, so it gets a shape of its own rather than an
-            // absence.
-            Callout(
-                symbol: body.symbol ?? "tray",
-                text: body.text,
-                tint: .pd.inkSecondary,
-                fill: .pd.fillTile
-            )
+            // Nothing found, said plainly. The sentence above usually says it
+            // too, so this is the quiet confirmation, not a second headline.
+            quietLine(body.text, symbol: body.symbol ?? "tray", tint: .pd.inkSecondary)
         }
+    }
+
+    /// A glyph and one grey sentence, with no box. A tinted bubble inside an
+    /// answer made "there are more events" look like a warning.
+    private func quietLine(_ text: String, symbol: String, tint: Color) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: PDSpacing.xs) {
+            Image(systemName: symbol)
+                .font(Font.pd.secondary)
+                .foregroundStyle(tint)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(Font.pd.secondary)
+                .foregroundStyle(Color.pd.inkSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityElement(children: .combine)
     }
 
     /// Hairline-separated rows, which is how the eye finds the row it wants
@@ -203,7 +226,7 @@ struct AnswerCardView: View {
 
     /// A list of the same thing, drawn as whatever that thing is.
     ///
-    /// The tool that produced the card decides the shape, not the section:
+    /// The tool that produced the block decides the shape, not the section:
     /// events are a day and want a rail with times on it, reminders are a list
     /// of things to do and want something to tick, and anything else is a row.
     @ViewBuilder
@@ -212,11 +235,7 @@ struct AnswerCardView: View {
         case PersonalDataToolNames.calendar:
             EventRow.timeline(of: items)
         case PersonalDataToolNames.reminders:
-            VStack(alignment: .leading, spacing: PDSpacing.s) {
-                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                    checkRow(item)
-                }
-            }
+            ruled(items.indices) { checkRow(items[$0]) }
         default:
             ruled(items.indices) { plainItem(items[$0]) }
         }
@@ -225,13 +244,13 @@ struct AnswerCardView: View {
     /// A reminder, with the circle that ticks it off.
     private func checkRow(_ item: AnswerCard.Item) -> some View {
         let isDone = completed.contains(item.text)
-        return HStack(alignment: .firstTextBaseline, spacing: PDSpacing.s) {
+        return HStack(alignment: .firstTextBaseline, spacing: PDSpacing.xs) {
             circle(for: item.text, isDone: isDone)
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.text)
                     .font(Font.pd.rowTitle)
-                    .foregroundStyle(isDone ? Color.pd.inkTertiary : Color.pd.ink)
-                    .strikethrough(isDone, color: Color.pd.inkTertiary)
+                    .foregroundStyle(isDone ? Color.pd.inkSecondary : Color.pd.ink)
+                    .strikethrough(isDone, color: Color.pd.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if let detail = item.detail, !detail.isEmpty {
                     Text(detail)
@@ -241,15 +260,24 @@ struct AnswerCardView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            if let accent = item.accent {
+            if Self.isUrgent(item.accent) {
+                urgentMark
+            } else if let accent = item.accent, Self.priority(of: accent) == nil {
                 accentText(accent)
             }
         }
-        .accessibilityElement(children: .combine)
+        // The circle's 44pt target overhangs the rows' hairlines rather than
+        // pushing them apart.
+        .padding(.vertical, -PDSpacing.xs)
     }
 
+    /// A reminder's circle, in the text's own size so it grows with it, inside
+    /// a 44pt target.
     @ViewBuilder
     private func circle(for title: String, isDone: Bool) -> some View {
+        let glyph = Text(Image(systemName: isDone ? "checkmark.circle.fill" : "circle"))
+            .font(Font.pd.lead)
+            .foregroundStyle(isDone ? Color.pd.positive : Color.pd.inkTertiary)
         if let onCompleteReminder {
             Button {
                 guard !isDone else { return }
@@ -261,22 +289,40 @@ struct AnswerCardView: View {
                 completed.insert(title)
                 onCompleteReminder(title)
             } label: {
-                Image(systemName: isDone ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 19, weight: .regular))
-                    .foregroundStyle(isDone ? Color.pd.positive : Color.pd.inkTertiary)
-                    .frame(width: 30, height: 30)
-                    .contentShape(Circle())
+                glyph.pdHitTarget()
             }
             .buttonStyle(PDPressStyle())
             .disabled(isDone)
-            .accessibilityLabel(isDone ? "Done" : "Tick off \(title)")
+            .accessibilityLabel(isDone ? "\(title), done" : "Tick off \(title)")
+            // The 44pt target is centred on the circle; this puts the circle
+            // itself back on the card's text edge, under the header's tile,
+            // and lets the target overhang into the card's padding.
+            .padding(.leading, -PDSpacing.xs)
         } else {
-            Image(systemName: "circle")
-                .font(.system(size: 19, weight: .regular))
-                .foregroundStyle(Color.pd.inkTertiary)
-                .frame(width: 30, height: 30)
+            glyph
+                .frame(minWidth: PDMetric.minHitTarget, minHeight: PDMetric.minHitTarget)
+                .padding(.leading, -PDSpacing.xs)
                 .accessibilityHidden(true)
         }
+    }
+
+    /// "!" for a reminder somebody marked urgent. EventKit's 1–4 is "high";
+    /// the old "P1" badge was the payload's number, printed for a person.
+    private var urgentMark: some View {
+        Text(Image(systemName: "exclamationmark"))
+            .font(Font.pd.secondary.weight(.bold))
+            .foregroundStyle(Color.pd.caution)
+            .accessibilityLabel("Urgent")
+    }
+
+    private static func priority(of accent: String) -> Int? {
+        guard accent.hasPrefix("P"), let value = Int(accent.dropFirst()), (1...9).contains(value) else { return nil }
+        return value
+    }
+
+    private static func isUrgent(_ accent: String?) -> Bool {
+        guard let accent, let value = priority(of: accent) else { return false }
+        return value <= 4
     }
 
     private func plainItem(_ item: AnswerCard.Item) -> some View {
@@ -285,7 +331,7 @@ struct AnswerCardView: View {
                 HStack(alignment: .firstTextBaseline, spacing: PDSpacing.xs) {
                     if let symbol = item.symbol {
                         Image(systemName: symbol)
-                            .font(.system(size: 12, weight: .regular))
+                            .font(Font.pd.footnote)
                             .foregroundStyle(Color.pd.accent)
                             // firstTextBaseline keeps a marker on the line it
                             // belongs to; at accessibility sizes a top-aligned
@@ -323,7 +369,7 @@ struct AnswerCardView: View {
                         Text(value)
                             .font(Font.pd.secondary)
                             .foregroundStyle(Color.pd.inkSecondary)
-                            .lineSpacing(3)
+                            .modifier(PDLineSpacing(3, relativeTo: .subheadline))
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -359,7 +405,7 @@ struct AnswerCardView: View {
     private func accentText(_ accent: String) -> some View {
         Text(accent)
             .font(Font.pd.monoValue)
-            .foregroundStyle(Color.pd.accent)
+            .foregroundStyle(Color.pd.inkSecondary)
             .multilineTextAlignment(typeSize.isAccessibilitySize ? .leading : .trailing)
             // Wrap, then shrink, and never truncate: an accent is a time or a
             // count, and half of either is worse than a smaller whole one.
@@ -374,10 +420,11 @@ struct AnswerCardView: View {
     /// `.adaptive` drops to one column as the width runs out, and the minimum
     /// grows at accessibility sizes so the strip becomes a single column instead
     /// of two unreadable ones. `StatTile` shrinks rather than breaking a long
-    /// figure mid-word.
+    /// figure mid-word. Grey tiles, because they are nested inside the answer's
+    /// white card.
     private func metrics(_ tiles: [AnswerCard.Tile]) -> some View {
         LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: typeSize.isAccessibilitySize ? 240 : 130), spacing: PDSpacing.tileGap)],
+            columns: [GridItem(.adaptive(minimum: typeSize.isAccessibilitySize ? 240 : 120), spacing: PDSpacing.tileGap)],
             alignment: .leading,
             spacing: PDSpacing.tileGap
         ) {
@@ -392,7 +439,6 @@ struct AnswerCardView: View {
             Text("\(number)")
                 .font(Font.pd.monoValue)
                 .foregroundStyle(Color.pd.accent)
-                .frame(minWidth: 20, alignment: .trailing)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(step.title)
@@ -430,20 +476,6 @@ struct AnswerCardView: View {
         case .metrics(let body): body.eyebrow
         case .steps(let body): body.eyebrow
         case .note, .empty: nil
-        }
-    }
-
-    private static func colour(for tone: AnswerCard.Tone) -> Color {
-        switch tone {
-        case .info: .pd.accent
-        case .caution: .pd.caution
-        }
-    }
-
-    private static func defaultSymbol(for tone: AnswerCard.Tone) -> String {
-        switch tone {
-        case .info: "info.circle"
-        case .caution: "exclamationmark.triangle"
         }
     }
 }
@@ -708,11 +740,11 @@ private let sampleEvents = AnswerCard(
         .list(AnswerCard.Items(eyebrow: "3 events", items: [
             AnswerCard.Item(
                 text: "Design review with the platform team",
-                detail: "Thu 11 Sep, 14:30 – 15:30 · Conference room B",
+                detail: "Thu, Oct 22, 2:30 PM – 3:30 PM · Conference room B",
                 symbol: "circle.fill"
             ),
-            AnswerCard.Item(text: "Offsite", detail: "Thu 11 Sep", accent: "All day", symbol: "circle.fill"),
-            AnswerCard.Item(text: "Dentist", detail: "Thu 11 Sep, 17:15 – 18:00", symbol: "circle.fill"),
+            AnswerCard.Item(text: "Offsite", detail: "Thu, Oct 22", accent: "All day", symbol: "circle.fill"),
+            AnswerCard.Item(text: "Dentist", detail: "Thu, Oct 22, 5:15 PM – 6:00 PM", symbol: "circle.fill"),
         ])),
         .note(AnswerCard.Note(text: "Only the first 20 events are listed; there are more.", symbol: "ellipsis")),
     ]
@@ -724,10 +756,10 @@ private let sampleReminders = AnswerCard(
     title: "Overdue",
     sections: [
         .list(AnswerCard.Items(eyebrow: "2 reminders", items: [
-            AnswerCard.Item(text: "Call the dentist", detail: "Due yesterday, 16:00", accent: "P1", symbol: "circle"),
-            AnswerCard.Item(text: "Send the invoice", detail: "Due Mon 8 Sep", symbol: "circle"),
+            AnswerCard.Item(text: "Call the dentist", detail: "Tue, Oct 20, 4:00 PM", accent: "P1", symbol: "circle"),
+            AnswerCard.Item(text: "Send the invoice", detail: "Mon, Oct 19", symbol: "circle"),
         ])),
-        .note(AnswerCard.Note(text: "Priority: 1 is highest, 9 is lowest.", symbol: "exclamationmark.circle")),
+        .note(AnswerCard.Note(text: "Priority: 1 is highest, 9 is lowest.", symbol: "exclamationmark.circle", tone: .info)),
     ]
 )
 
@@ -748,37 +780,41 @@ private let sampleHealth = AnswerCard(
     title: "Sleep",
     sections: [
         .metrics(AnswerCard.Metrics(eyebrow: "Latest whole day", tiles: [
-            AnswerCard.Tile(value: "7 h 45 m", caption: "Sleep"),
+            AnswerCard.Tile(value: "7h 45m", caption: "Sleep"),
             AnswerCard.Tile(value: "13.5 breaths/min", caption: "Respiratory rate"),
         ])),
         .facts(AnswerCard.Facts(eyebrow: "Against your own baseline", rows: [
             AnswerCard.Fact(
                 label: "Sleep",
-                value: "on Wed, Sep 10 — 12% below your 28-day average of 8 h 48 m, below your usual range."
+                value: "on Wed, Oct 21 — 12% below your 28-day average of 8h 48m, below your usual range."
             ),
             AnswerCard.Fact(
                 label: "Respiratory rate",
-                value: "on Wed, Sep 10, against a 28-day average of 13.6 breaths/min — in your usual range."
+                value: "on Wed, Oct 21, against a 28-day average of 13.6 breaths/min — in your usual range."
             ),
         ])),
         .list(AnswerCard.Items(eyebrow: "Worth noting", items: [
-            AnswerCard.Item(text: "Highest sleep since May 2025.", symbol: "sparkles"),
+            AnswerCard.Item(text: "Highest sleep since May.", symbol: "sparkles"),
         ])),
     ]
 )
 
+/// Each block inside the white card an answer is drawn on, as `AskMessageRow`
+/// draws it.
 private struct CardGallery: View {
     var body: some View {
         ScrollView {
             VStack(spacing: PDSpacing.cardGap) {
-                AnswerCardView(card: sampleEvents)
-                AnswerCardView(card: sampleReminders, onCompleteReminder: { _ in })
-                AnswerCardView(
-                    card: sampleWrite,
-                    undo: AnswerCardView.UndoOffer(expiresAt: .now.addingTimeInterval(300)) {}
-                )
-                AnswerCardView(card: sampleHealth)
-                AnswerCardView(card: .nothing("No events next week.", title: "Next week", symbol: "calendar"))
+                PDCard { AnswerCardView(card: sampleEvents) }
+                PDCard { AnswerCardView(card: sampleReminders, onCompleteReminder: { _ in }) }
+                PDCard {
+                    AnswerCardView(
+                        card: sampleWrite,
+                        undo: AnswerCardView.UndoOffer(expiresAt: .now.addingTimeInterval(300)) {}
+                    )
+                }
+                PDCard { AnswerCardView(card: sampleHealth) }
+                PDCard { AnswerCardView(card: .nothing("No events next week.", title: "Next week", symbol: "calendar")) }
             }
             .padding(PDSpacing.gutter)
         }
@@ -786,51 +822,10 @@ private struct CardGallery: View {
     }
 }
 
-#Preview("Cards light") { CardGallery() }
+#Preview("Blocks light") { CardGallery() }
 
-#Preview("Cards dark") { CardGallery().preferredColorScheme(.dark) }
+#Preview("Blocks dark") { CardGallery().preferredColorScheme(.dark) }
 
-#Preview("Cards at accessibility3") {
+#Preview("Blocks at accessibility3") {
     CardGallery().dynamicTypeSize(.accessibility3)
-}
-
-#Preview("Every other section") {
-    ScrollView {
-        VStack(spacing: PDSpacing.cardGap) {
-            AnswerCardView(card: AnswerCard(
-                symbol: "chart.bar",
-                title: "This week",
-                sections: [
-                    // "Conversational" is the exact caption a competitor's own
-                    // metric strip breaks as "Convers/ational". It stays here as
-                    // the thing this layout has to survive.
-                    .metrics(AnswerCard.Metrics(eyebrow: "At a glance", tiles: [
-                        AnswerCard.Tile(value: "12", caption: "Meetings"),
-                        AnswerCard.Tile(value: "4h 20m", caption: "Conversational"),
-                        AnswerCard.Tile(value: "3", caption: "Free afternoons"),
-                    ])),
-                    .facts(AnswerCard.Facts(eyebrow: "Where to find it", rows: [
-                        AnswerCard.Fact(
-                            label: "Address",
-                            value: "Shop 20, Gyandeep Apartments, Sector 3–4, Vashi",
-                            accent: "Vashi"
-                        ),
-                        AnswerCard.Fact(label: "Closed", value: "Monday", accent: "Monday"),
-                    ])),
-                    .steps(AnswerCard.Steps(eyebrow: "To turn it on", steps: [
-                        AnswerCard.Step(title: "Open Settings", detail: "Privacy & Security"),
-                        AnswerCard.Step(title: "Tap Calendars, then Pocketd"),
-                        AnswerCard.Step(title: "Choose Full Access"),
-                    ])),
-                    .note(AnswerCard.Note(
-                        text: "Pocketd can only add to your calendar, not read it.",
-                        symbol: "lock",
-                        tone: .caution
-                    )),
-                ]
-            ))
-        }
-        .padding(PDSpacing.gutter)
-    }
-    .pdCanvas()
 }

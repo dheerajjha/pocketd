@@ -2,11 +2,12 @@ import Foundation
 
 /// Where a `pocketd://` URL is asking the app to go.
 ///
-/// A widget cannot select a tab. It runs in another process, and the two ways
+/// A widget cannot move the app. It runs in another process, and the two ways
 /// out of one are an App Intent and a URL — `OpenAskIntent` is the first, and
-/// this is the second. A tap on the Today widget has no parameters and no
-/// dialog; all it can say is "the thing you were looking at", so the URL is the
-/// whole message and this type is the whole parser.
+/// this is the second. A tap on a widget has no parameters and no dialog; all
+/// it can say is "the thing you were looking at", so the URL is the whole
+/// message and this type is the whole parser. `Navigator.follow(_:)` is where
+/// each one lands.
 ///
 /// A closed enum rather than a string handed to the router, and that is the
 /// point of having a type at all: the URL arrives from outside this process and
@@ -21,20 +22,25 @@ import Foundation
 /// worth mentioning in each other's comments.
 enum DeepLink: String, Equatable, Sendable {
 
-    /// `pocketd://today` — the brief. What the Today widget's `widgetURL` sends.
+    /// `pocketd://today` — home, with nothing on top of it. What the Today
+    /// widget's `widgetURL` sends.
     case today
 
-    /// `pocketd://ask` — the composer. Not yet sent by anything: the "Ask
-    /// Pocketd" control opens the app through `OpenAskIntent` instead, because a
-    /// control has to run an intent and cannot open a URL. It is here so that a
-    /// Shortcut, or the widget's own Ask affordance on a future family that
-    /// cannot host a button, has a spelling to use that already works.
+    /// `pocketd://ask` — the conversation, over wherever the app was. What the
+    /// Today widget's Ask button sends. The "Ask Pocketd" control opens the app
+    /// through `OpenAskIntent` instead, because a control has to run an intent
+    /// and cannot open a URL.
     case ask
 
-    /// `pocketd://you` — the profile. Nothing on a home screen sends it yet; it
-    /// is here so that a Shortcut, and the screenshot harness under `#if
-    /// DEBUG`, can reach the tab by the same spelling as the other two rather
-    /// than by a second mechanism that only one of them understands.
+    /// `pocketd://routines` — the list of routines. What the Routines widget's
+    /// `widgetURL` sends: a widget about what Pocketd does on its own should
+    /// open onto the screen where those things are, not onto the brief.
+    case routines
+
+    /// `pocketd://you` — the profile. Nothing on a home screen sends it; it is
+    /// here so that a Shortcut, and the screenshot harness under `#if DEBUG`,
+    /// can reach You by the same spelling as the rest rather than by a second
+    /// mechanism that only one of them understands.
     case you
 
     static let scheme = "pocketd"

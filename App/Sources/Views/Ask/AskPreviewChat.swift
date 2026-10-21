@@ -58,7 +58,9 @@ enum AskPreviewChat {
         messages.append(.user("What's on tomorrow?"))
         messages.append(ChatMessage(
             role: .assistant,
-            content: "Two things tomorrow: the design review at ten, then yoga at half past six.",
+            // Digits, as the brief and the tiles write them: a time spelled
+            // out on screen ("at half past six") is one the reader re-reads.
+            content: "Two things tomorrow: the design review at \(Format.time(tomorrowAt(10, 0))), then yoga at \(Format.time(tomorrowAt(18, 30))).",
             cards: [calendarCard()].compactMap { $0 }
         ))
         messages.append(.user("Anything overdue?"))
@@ -66,10 +68,10 @@ enum AskPreviewChat {
         // repeated the payload — see `NarrationEcho` — and the card has to stand
         // on its own with no empty bubble above it.
         messages.append(ChatMessage(role: .assistant, content: "", cards: [remindersCard()].compactMap { $0 }))
-        messages.append(.user("How did I sleep this week?"))
+        messages.append(.user("How did I sleep last night?"))
         messages.append(ChatMessage(
             role: .assistant,
-            content: "You were about three quarters of an hour short on Wednesday, and steady the rest of the week.",
+            content: "6h 36m — a little under your usual, and still in your normal range.",
             cards: [healthCard()].compactMap { $0 }
         ))
 
@@ -85,11 +87,13 @@ enum AskPreviewChat {
 
     // MARK: - The three read shapes
 
-    private static func calendarCard() -> AnswerCard? {
+    private static func tomorrowAt(_ hour: Int, _ minute: Int) -> Date {
         let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: DemoClock.now) ?? DemoClock.now
-        func at(_ hour: Int, _ minute: Int) -> Date {
-            Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: tomorrow) ?? tomorrow
-        }
+        return Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: tomorrow) ?? tomorrow
+    }
+
+    private static func calendarCard() -> AnswerCard? {
+        func at(_ hour: Int, _ minute: Int) -> Date { tomorrowAt(hour, minute) }
         // The same two events `DemoSeed` puts in tomorrow, so that a capture of
         // this card and a capture of the Today tiles describe one calendar.
         let events: [[String: any Sendable]] = [
@@ -116,39 +120,38 @@ enum AskPreviewChat {
     /// card built from invented names would draw three controls that can only
     /// ever report "I could not find that" — a demonstration of the failure path
     /// dressed up as the feature. With the seeded names they work.
+    ///
+    /// Overdue means overdue: only the reminder that slipped yesterday, the
+    /// one the Due tile counts. The card used to list today's and tomorrow's
+    /// under an OVERDUE heading as well.
     private static func remindersCard() -> AnswerCard? {
-        // Due dates relative to the demo clock, matching `DemoSeed`: expenses
-        // slipped yesterday evening, the plumber is today at five, the passport
-        // is tomorrow morning.
         let rows: [[String: any Sendable]] = [
-            ["title": "Submit expenses", "due": due(dayOffset: -1, hour: 18), "priority": 1],
-            ["title": "Call the plumber", "due": due(dayOffset: 0, hour: 17)],
-            ["title": "Renew passport", "due": due(dayOffset: 1, hour: 9)],
+            ["title": "Submit expenses", "due": due(dayOffset: -1, hour: 18)],
         ]
-        let payload: [String: any Sendable] = [
-            "reminders": rows,
-            "priority_scale": "1 is highest, 9 is lowest",
-        ]
+        let payload: [String: any Sendable] = ["reminders": rows]
         return AnswerCardBuilders.reminders(#"{"action":"list","filter":"overdue"}"#, payload)
     }
 
-    /// "Thu 18 Sep, 17:00" for a day relative to the demo clock.
+    /// The due date exactly as the reminders tool writes it — this phone's own
+    /// locale, so "6:00 PM" where the phone says 6 PM. The fixture used to pin
+    /// British English and print "18:00" on every screenshot.
     private static func due(dayOffset: Int, hour: Int, minute: Int = 0) -> String {
         let calendar = Calendar.current
         let day = calendar.date(byAdding: .day, value: dayOffset, to: DemoClock.now) ?? DemoClock.now
         let moment = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day) ?? day
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_GB")
-        formatter.dateFormat = "EEE d MMM, HH:mm"
-        return formatter.string(from: moment)
+        return PersonalDataFormat.moment(moment)
     }
 
+    /// The demo health figures (`DemoDay`: 6h 36m last night against a usual
+    /// 7h 5m), in the clause shape `HealthSummary.reading` writes.
     private static func healthCard() -> AnswerCard? {
+        let night = Calendar.current.date(byAdding: .day, value: -1, to: DemoClock.now) ?? DemoClock.now
+        let when = PersonalDataFormat.day(night)
         let readings: [String] = [
-            "Sleep: 6 h 12 m on Wed, Sep 10 — 12% below your 28-day average of 7 h 04 m, below your usual range.",
-            "Resting heart rate: 58 bpm on Wed, Sep 10, against a 28-day average of 57 bpm — in your usual range.",
+            "Sleep: 6h 36m on \(when) — 7% below your 28-day average of 7h 5m, in your usual range.",
+            "Resting heart rate: 58 bpm on \(when), against a 28-day average of 57 bpm — in your usual range.",
         ]
-        let notable: [String] = ["Three nights over seven hours this week, the most since May."]
+        let notable: [String] = ["Three nights over seven hours this week, the most in a month."]
         let payload: [String: any Sendable] = ["readings": readings, "notable": notable]
         return AnswerCardBuilders.health(#"{"focus":"sleep"}"#, payload)
     }

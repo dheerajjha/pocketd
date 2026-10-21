@@ -1,53 +1,52 @@
 import PocketdKit
 import SwiftUI
 
-/// Ask: the assistant, and the only screen where the phone talks back.
+/// The conversation: what was asked, what came back, and the box.
 ///
-/// The shape is three fixed things and one scrolling one. The header and the
-/// brain chip say what is answering; the transcript scrolls; the notices and the
-/// composer are pinned to the bottom so that neither an offer nor the box can be
-/// scrolled away from.
+/// Two things, and only two: the transcript scrolling, and the bar pinned
+/// under it — the composer with exactly one thing above it. That one thing is
+/// the Stop pill while a reply is being written, else the notice the
+/// conversation has to give (`AppModel.askNotice`), else one follow-up
+/// question. No brain pill, no model name, no stack of warnings: the old tab
+/// spent nearly half the screen on chrome and left the rest for the answer.
 ///
 /// Everything this screen can do to the user's own data goes through `AppModel`
 /// — see `AppModel+Reminders`. Nothing here touches EventKit.
+///
+/// The content of `ConversationSheet`, which owns the navigation bar (✕,
+/// History, New chat) around it.
 struct AskView: View {
     @Environment(AppModel.self) private var model
     @Environment(Navigator.self) private var navigator
     @Environment(ToastCenter.self) private var toasts: ToastCenter?
 
-    @State private var isShowingHistory = false
     /// Writes still inside their undo window, pulled after every generation.
     @State private var writes: [PersonalDataWrite] = []
-    @State private var silencedNotices: Set<String> = []
 
     var body: some View {
-        VStack(spacing: PDSpacing.s) {
-            AskHeader(
-                onHistory: { isShowingHistory = true },
-                onNew: { Task { await model.newConversation() } }
-            )
-            AskBrainChip(
-                name: model.loadedModelID == nil ? nil : model.loadedModelName,
-                isLoading: model.isLoadingModel,
-                readsYourDay: !BrainUpgrade.cannotReadYourDay(model),
-                onChoose: { navigator.openYou(.brain) }
-            )
-
-            transcript
-
-            AskNotices(silenced: $silencedNotices, forcedOffer: stagedOffer)
-            AskComposer(followUp: followUp)
+        ConversationContent(
+            writes: writes,
+            forcedThinking: stagesPendingStates,
+            onExample: ask(_:),
+            onConnect: connect(_:),
+            onCompleteReminder: completeReminder(_:),
+            onUndo: undo(_:),
+            onCopy: copy(_:),
+            onFeedback: feedback(_:)
+        )
+        .pdBottomBar {
+            AskComposer {
+                AskBarAccessory(stagedNotice: stagedNotice)
+            }
+            .padding(.horizontal, PDSpacing.gutter)
+            .padding(.top, PDSpacing.xs)
+            .padding(.bottom, PDSpacing.xs)
         }
-        .padding(.top, PDSpacing.xs)
         .pdCanvas()
-        .sheet(isPresented: $isShowingHistory) {
-            ConversationHistoryView()
-        }
         .task {
             #if DEBUG
-            // A simulator cannot hold a model that calls tools, so the one
-            // screen whose job is drawing tool results would have nothing to
-            // draw. See `AskPreviewChat`.
+            // Every card shape on screen at once, without waiting on a brain
+            // for each — see `AskPreviewChat`.
             await AskPreviewChat.seedIfRequested(into: model)
             #endif
             await refreshWrites()
@@ -60,64 +59,11 @@ struct AskView: View {
         }
     }
 
-    // MARK: - The conversation
-
-    @ViewBuilder
-    private var transcript: some View {
-        if model.conversation.isEmpty {
-            ScrollView {
-                VStack(alignment: .leading, spacing: PDSpacing.cardGap) {
-                    if model.loadedModelID == nil { noBrainCard }
-                    AskEmptyState(
-                        onAsk: ask(_:),
-                        onConnect: connect(_:),
-                        isOn: { model.isOn($0) }
-                    )
-                }
-                .padding(.bottom, PDSpacing.l)
-            }
-            .scrollIndicators(.hidden)
-            .scrollDismissesKeyboard(.interactively)
-        } else {
-            AskTranscript(
-                writes: writes,
-                onCompleteReminder: completeReminder(_:),
-                onUndo: undo(_:),
-                onCopy: copy(_:),
-                onFeedback: feedback(_:),
-                forcedThinking: stagesPendingStates
-            )
-        }
-    }
-
-    /// The one dead end this screen can reach, with the way out on it.
-    private var noBrainCard: some View {
-        PDCard {
-            VStack(alignment: .leading, spacing: PDSpacing.s) {
-                SectionLabel("Nothing to answer with")
-                Text(
-                    model.installed.isEmpty
-                        ? "Pocketd needs a brain before it can answer."
-                        : "You have one downloaded — load it and it can answer."
-                )
-                .font(Font.pd.lead)
-                .foregroundStyle(Color.pd.ink)
-                .fixedSize(horizontal: false, vertical: true)
-                PillButton(title: "Choose a brain", symbol: "brain", isOn: true) {
-                    navigator.openYou(.brain)
-                }
-            }
-        }
-        .padding(.horizontal, PDSpacing.gutter)
-        .padding(.top, PDSpacing.s)
-    }
-
     /// The two mid-generation states, staged rather than reached.
     ///
-    /// Both need a resident model, and no model that can call a tool fits in a
-    /// simulator — so on the machine every screenshot comes from they are not
-    /// rare, they are unreachable. DEBUG only; in a Release build these are a
-    /// constant `false` and a constant `nil`, and nothing can set them.
+    /// Both last a second or two under a real brain, which is too short to
+    /// screenshot. DEBUG only; in a Release build these are a constant `false`
+    /// and a constant `nil`, and nothing can set them.
     private var stagesPendingStates: Bool {
         #if DEBUG
         AskPreviewChat.showsPendingStates
@@ -126,44 +72,52 @@ struct AskView: View {
         #endif
     }
 
-    private var stagedOffer: ToolOffer? {
-        stagesPendingStates ? ToolOffer(ability: .calendar) : nil
-    }
-
-    /// The chip above the composer, from what the last answer drew.
-    private var followUp: AskSuggestion? {
-        guard !model.isGenerating else { return nil }
-        guard let last = model.conversation.last(where: { !$0.cards.isEmpty }) else { return nil }
-        return AskSuggestion.followUp(after: last.cards)
+    private var stagedNotice: AskNotice? {
+        stagesPendingStates ? .offer(ToolOffer(ability: .calendar)) : nil
     }
 
     // MARK: - Actions
 
-    private func ask(_ suggestion: AskSuggestion) {
-        model.draft = suggestion.text
-        // `send()` no-ops without a resident model, which would leave somebody
-        // staring at their own words with no reply and no explanation. The
-        // question stays in the box instead, beside a card that says why.
-        guard model.loadedModelID != nil else { return }
-        model.send()
+    /// An example from the empty conversation: asked at once, or — for
+    /// "Remind me to…" — started in the box with the cursor after it.
+    private func ask(_ example: AskSuggestion) {
+        if let stem = example.stem {
+            // The same hand-off a "Remind me to…" chip on Today makes: in the
+            // box, cursor after it. Not `askComposerFocusRequested`, which
+            // opens the microphone where the phone can listen.
+            navigator.ask(stem, send: false)
+        } else {
+            model.draft = example.text
+            model.send()
+        }
     }
 
+    /// Through the one door. "Connected" only when iOS said yes.
     private func connect(_ ability: Ability) {
-        model.enableAbility(ability)
-        toasts?.show("\(ability.title) connected", symbol: "checkmark.circle", tint: .pd.positive)
+        Task {
+            let outcome = await model.connect(ability, from: .chatOffer)
+            if outcome.isConnected {
+                toasts?.show("\(ability.title) connected", symbol: "checkmark.circle", tint: .pd.positive)
+            } else if let sentence = outcome.sentence(for: ability) {
+                toasts?.show(sentence, symbol: "exclamationmark.circle", tint: .pd.caution)
+            }
+        }
     }
 
     private func completeReminder(_ title: String) {
         Task {
             let result = await model.completeReminder(named: title)
             guard !result.completed else {
+                // Today's Due tile is counting it until the day is read again,
+                // and Today is under this sheet.
+                model.dayMayHaveChanged()
                 toasts?.show("Ticked off", symbol: "checkmark.circle", tint: .pd.positive)
                 return
             }
             // The sentence rather than "failed": the interesting cases are an
             // ambiguous title and a permission that is off, and both are
             // answerable by the person reading them.
-            toasts?.show(result.sentence, symbol: "exclamationmark.circle", tint: .pd.caution, seconds: 3.4)
+            toasts?.show(AnswerWords.curlingQuotes(result.sentence), symbol: "exclamationmark.circle", tint: .pd.caution)
         }
     }
 
@@ -176,7 +130,15 @@ struct AskView: View {
                 return
             }
             Haptics.success()
-            toasts?.show(WriteUndo.undoneSentence(for: write), symbol: "arrow.uturn.backward", tint: .pd.ink, seconds: 3)
+            // The block that said "Reminder set" now says it was removed: the
+            // transcript is a record, and that line is no longer true.
+            model.markWriteUndone(write)
+            model.dayMayHaveChanged()
+            toasts?.show(
+                AnswerWords.curlingQuotes(WriteUndo.undoneSentence(for: write)),
+                symbol: "arrow.uturn.backward",
+                tint: .pd.ink
+            )
         }
     }
 
@@ -184,7 +146,7 @@ struct AskView: View {
     /// than written, so copying the prose alone hands back "here is your day"
     /// and none of the day.
     private func copy(_ message: ChatMessage) {
-        UIPasteboard.general.string = ([message.content] + message.cards.map(\.transcript))
+        UIPasteboard.general.string = ([ReplyMarker.strippingStopped(message.content)] + message.cards.map(\.transcript))
             .filter { !$0.isEmpty }
             .joined(separator: "\n\n")
         Haptics.tap()
@@ -199,5 +161,135 @@ struct AskView: View {
 
     private func refreshWrites() async {
         writes = await model.recentWrites()
+    }
+}
+
+// MARK: - The scrolling part
+
+/// The transcript, or — before the first question — the empty conversation.
+///
+/// Its own view so that `model.conversation`, which changes on every token, is
+/// read here and not by `AskView`: the screen's body, and the bar under it, do
+/// not run again per word.
+private struct ConversationContent: View {
+    let writes: [PersonalDataWrite]
+    let forcedThinking: Bool
+    let onExample: (AskSuggestion) -> Void
+    let onConnect: (Ability) -> Void
+    let onCompleteReminder: (String) -> Void
+    let onUndo: (PersonalDataWrite) -> Void
+    let onCopy: (ChatMessage) -> Void
+    let onFeedback: (Bool) -> Void
+
+    @Environment(AppModel.self) private var model
+    /// Read so the source row is re-judged on coming back from Settings,
+    /// where a refusal may just have been turned into a yes.
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        if model.conversation.isEmpty && !forcedThinking {
+            ScrollView {
+                AskEmptyState(
+                    readsYourDay: model.brainStatus != .cannotReadYourDay,
+                    onExample: onExample,
+                    onConnect: onConnect,
+                    offSource: offSource
+                )
+                .padding(.bottom, PDSpacing.l)
+            }
+            .scrollIndicators(.hidden)
+            .scrollDismissesKeyboard(.interactively)
+            .conversationScrollEdges()
+        } else {
+            AskTranscript(
+                writes: writes,
+                onCompleteReminder: onCompleteReminder,
+                onUndo: onUndo,
+                onCopy: onCopy,
+                onFeedback: onFeedback,
+                forcedThinking: forcedThinking
+            )
+        }
+    }
+
+    /// Calendar, then Reminders: the first that Pocketd cannot read yet.
+    ///
+    /// Off means the switch is off *or* iOS has not said yes — a switch left
+    /// on over a refusal still reads nothing. Health is not offered here: it
+    /// is optional, and a sheet about your day opens with your day.
+    private var offSource: Ability? {
+        // `standingGrant` asks EventKit directly, which SwiftUI cannot watch.
+        // The door writes iOS's answer here when Connect gets one, so reading
+        // it is what redraws this row the moment Calendar is allowed.
+        _ = model.personalDataAuthorization
+        _ = scenePhase
+        return [Ability.calendar, .reminders].first { ability in
+            !(model.isOn(ability) && model.standingGrant(for: ability) == .granted)
+        }
+    }
+}
+
+// MARK: - Above the bar
+
+/// The one thing above the composer: Stop, a notice, or a follow-up question.
+///
+/// In that order. Stop while a reply is being written, because it is the only
+/// control that matters then; the notice next, because it is something the
+/// reader may need to act on; and only when there is nothing to say, the next
+/// question — chosen from the last answer's own subject.
+private struct AskBarAccessory: View {
+    /// A notice to draw instead of the model's own. DEBUG launch argument only.
+    let stagedNotice: AskNotice?
+
+    @Environment(AppModel.self) private var model
+    @Environment(Navigator.self) private var navigator
+
+    var body: some View {
+        Group {
+            if model.isGenerating {
+                PillButton(title: "Stop", symbol: "stop.fill") {
+                    Haptics.tap()
+                    model.stopGenerating()
+                }
+                .accessibilityHint("Stops the answer being written")
+            } else if let refusal = model.dayRefusal, model.brainStatus == .cannotReadYourDay {
+                // The question just asked, answered honestly: this brain
+                // cannot see what it was about. Shown even when the general
+                // warning was put away — this one is about this question.
+                //
+                // No ✕. It goes by itself with the next question sent or a new
+                // conversation, and the ✕'s column was what squeezed the
+                // sentence onto two lines ("This brain can't read / your
+                // reminders.") beside a card with room to spare.
+                NoticeCard(
+                    symbol: refusal.symbol,
+                    tint: .pd.caution,
+                    text: refusal.sentence,
+                    linkTitle: "Switch",
+                    action: { navigator.openYou(.brain) }
+                )
+            } else if let notice = stagedNotice ?? model.askNotice {
+                AskNoticeView(notice: notice)
+            } else if let followUp {
+                SuggestionChip(followUp.text, symbol: followUp.symbol) {
+                    model.draft = followUp.text
+                    model.send()
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .transition(.opacity)
+        .animation(PDMotion.gentle, value: model.isGenerating)
+    }
+
+    /// From the last answer only, and only one that drew something: what to
+    /// ask next depends on what was just read.
+    private var followUp: AskSuggestion? {
+        guard let lastIndex = model.conversation.indices.last else { return nil }
+        let last = model.conversation[lastIndex]
+        guard last.role == .assistant, !last.cards.isEmpty,
+              !ReplyMarker.isMarkedStopped(last.content) else { return nil }
+        let question = model.conversation[..<lastIndex].last(where: { $0.role == .user })?.content
+        return AskSuggestion.followUp(after: last.cards, lastQuestion: question)
     }
 }

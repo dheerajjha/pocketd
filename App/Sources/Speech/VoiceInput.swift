@@ -98,11 +98,7 @@ final class VoiceInput {
     /// once; calling this again after a decision re-reads that decision
     /// instead of asking again.
     func requestAuthorization() async -> Bool {
-        let speechStatus = await withCheckedContinuation { (continuation: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Never>) in
-            SFSpeechRecognizer.requestAuthorization { status in
-                continuation.resume(returning: status)
-            }
-        }
+        let speechStatus = await Self.speechAuthorization()
         // Asking for the microphone after Speech Recognition was refused
         // would show a permission sheet for a capability that refusal already
         // makes useless, right after the user just said no to the thing next
@@ -146,12 +142,12 @@ final class VoiceInput {
         let liveAuthorization = Self.currentAuthorization()
         authorization = liveAuthorization
         guard liveAuthorization == .granted else {
-            error = "Pocketd needs microphone and Speech Recognition access. Turn them on in Settings."
+            error = Self.refusedSentence
             return
         }
 
         guard let recognizer = SFSpeechRecognizer(), recognizer.isAvailable else {
-            error = "Speech recognition isn't available right now. Try again in a moment."
+            error = Self.unavailableSentence
             return
         }
 
@@ -182,25 +178,15 @@ final class VoiceInput {
         token = sessionToken
 
         // The tap block runs on the audio engine's real-time render thread,
-        // never the main actor, so nothing here touches `self` directly.
-        // `request` is captured as the local it already is, the level is
-        // computed by a nonisolated function, and only those two plain,
-        // Sendable values cross the hop to the main actor below.
-        //
-        // `[weak self]` is repeated on this outer closure even though its own
-        // body never names `self`: this closure is stored on `audioEngine`,
-        // which `self` owns, and leaving it off let the compiler infer a
-        // strong capture from the `self` used inside the `Task` nested in it
-        // — a real retain cycle (self → audioEngine → tap → self), not just a
-        // style warning, and exactly what `[weak self]` on the inner closure
-        // alone looked like it was already preventing.
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-            request.append(buffer)
-            let level = Self.rmsLevel(of: buffer)
-            Task { @MainActor [weak self] in
-                self?.updateLevel(level, for: sessionToken)
-            }
-        }
+        // never the main actor — see `tapBlock`, which builds it outside this
+        // actor and holds `self` weakly (the block is stored on `audioEngine`,
+        // which `self` owns).
+        inputNode.installTap(
+            onBus: 0,
+            bufferSize: 1024,
+            format: format,
+            block: Self.tapBlock(appendingTo: request, token: sessionToken, owner: self)
+        )
 
         audioEngine.prepare()
         do {
@@ -217,18 +203,10 @@ final class VoiceInput {
         transcript = ""
         isListening = true
 
-        task = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            // Neither `SFSpeechRecognitionResult` nor `Error` is Sendable, so
-            // everything worth keeping is read out here, on whatever thread
-            // the recognizer calls back on, and only plain values make the
-            // hop to the main actor.
-            let transcript = result?.bestTranscription.formattedString
-            let isFinal = result?.isFinal ?? false
-            let description = error.map { String(describing: $0) }
-            Task { @MainActor [weak self] in
-                self?.handle(token: sessionToken, transcript: transcript, isFinal: isFinal, errorDescription: description)
-            }
-        }
+        task = recognizer.recognitionTask(
+            with: request,
+            resultHandler: Self.resultHandler(token: sessionToken, owner: self)
+        )
 
         scheduleAutoStop(for: sessionToken)
     }
@@ -264,6 +242,61 @@ final class VoiceInput {
         // nothing is running.
         audioEngine.inputNode.removeTap(onBus: 0)
         if audioEngine.isRunning { audioEngine.stop() }
+    }
+
+    // MARK: - Callbacks the system makes on its own threads
+
+    // Every closure below is handed to the system and called back on a
+    // thread of the system's choosing — the audio engine's real-time render
+    // thread, the recogniser's queue, TCC's reply queue. Written inline in
+    // this main-actor class, Swift 6 makes each one main-actor-isolated and
+    // checks that at run time: tapping "Don't Allow" on the Speech
+    // Recognition prompt crashed the app ("BUG IN CLIENT OF LIBDISPATCH:
+    // Block was expected to execute on queue com.apple.main-thread"), and the
+    // tap block would have done the same on the first buffer of audio. Built
+    // in `nonisolated` functions instead, so the closures belong to no actor,
+    // and only plain values hop to the main actor.
+
+    private nonisolated static func speechAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
+        await withCheckedContinuation { continuation in
+            SFSpeechRecognizer.requestAuthorization { status in
+                continuation.resume(returning: status)
+            }
+        }
+    }
+
+    /// The block `installTap` calls per buffer: appends it to the request and
+    /// reports its level. `owner` is held weakly — the block is stored on
+    /// `audioEngine`, which `owner` owns, so a strong capture is a cycle.
+    private nonisolated static func tapBlock(
+        appendingTo request: SFSpeechAudioBufferRecognitionRequest,
+        token: UUID,
+        owner: VoiceInput
+    ) -> AVAudioNodeTapBlock {
+        { [weak owner] buffer, _ in
+            request.append(buffer)
+            let level = rmsLevel(of: buffer)
+            Task { @MainActor [weak owner] in
+                owner?.updateLevel(level, for: token)
+            }
+        }
+    }
+
+    /// The recogniser's result handler. Neither `SFSpeechRecognitionResult`
+    /// nor `Error` is Sendable, so everything worth keeping is read out here,
+    /// on whatever thread the recogniser calls back on.
+    private nonisolated static func resultHandler(
+        token: UUID,
+        owner: VoiceInput
+    ) -> (SFSpeechRecognitionResult?, (any Error)?) -> Void {
+        { [weak owner] result, error in
+            let transcript = result?.bestTranscription.formattedString
+            let isFinal = result?.isFinal ?? false
+            let description = error.map { String(describing: $0) }
+            Task { @MainActor [weak owner] in
+                owner?.handle(token: token, transcript: transcript, isFinal: isFinal, errorDescription: description)
+            }
+        }
     }
 
     // MARK: - Session bookkeeping
@@ -358,11 +391,44 @@ final class VoiceInput {
     private static func plainMessage(forDescription text: String) -> String {
         let text = text.lowercased()
         if text.contains("permission") || text.contains("denied") || text.contains("not authorized") {
-            return "Pocketd needs microphone and Speech Recognition access. Turn them on in Settings."
+            return refusedSentence
         }
-        if text.contains("no speech") {
-            return "Didn't catch any speech. Try again."
+        if text.contains("no speech") || text.contains("code=1110") {
+            return "Pocketd didn't hear anything. Try again."
         }
-        return "Listening stopped. Try again."
+        // The on-device recogniser itself: its language files are missing or
+        // being replaced, or Dictation is off. Seen on the simulator as
+        // kLSRErrorDomain 300, "Failed to initialize recognizer", on every
+        // attempt — "Try again" there only fails again, so it says why instead.
+        if text.contains("klsrerrordomain") || text.contains("initialize recognizer")
+            || text.contains("asset") || text.contains("dictation") || text.contains("unavailable") {
+            return unavailableSentence
+        }
+        if text.contains("audio") || text.contains("microphone") {
+            return "Pocketd couldn't use the microphone. Try again."
+        }
+        return "Pocketd couldn't turn that into words. Try again."
+    }
+
+    /// Which permission is missing, by name — the Settings switch somebody has
+    /// to find is either Microphone or Speech Recognition, and saying both
+    /// sends them looking for one that is already on.
+    static var refusedSentence: String {
+        if SFSpeechRecognizer.authorizationStatus() != .authorized {
+            return "Speech Recognition is off for Pocketd in iOS Settings."
+        }
+        if AVAudioApplication.shared.recordPermission != .granted {
+            return "Microphone is off for Pocketd in iOS Settings."
+        }
+        return "Pocketd can't listen right now. Try again."
+    }
+
+    static let unavailableSentence = "Speech recognition isn't available on this iPhone right now."
+
+    /// Whether iOS has never asked for Speech Recognition — the moment a
+    /// primer goes up, before the system's own prompt.
+    static var hasNeverAsked: Bool {
+        SFSpeechRecognizer.authorizationStatus() == .notDetermined
+            || AVAudioApplication.shared.recordPermission == .undetermined
     }
 }

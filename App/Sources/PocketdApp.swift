@@ -1,3 +1,4 @@
+import PocketdKit
 import SwiftUI
 import UIKit
 
@@ -11,6 +12,9 @@ struct PocketdApp: App {
     /// survives the view being torn down and rebuilt — which happens every time
     /// onboarding finishes, desk mode ends, or the scene is restored.
     @State private var navigator = Navigator()
+    /// Pocketd Pro. Made with the app because its App Store listener has to be
+    /// running from launch; see `ProStore`.
+    @State private var pro = ProStore()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -18,13 +22,24 @@ struct PocketdApp: App {
             RootView()
                 .environment(model)
                 .environment(navigator)
+                .environment(pro)
                 .task {
                     #if DEBUG
-                    // A screenshot run says which tab it wants before anything
-                    // renders. Whole call inside `#if DEBUG`; see `YouStage`.
+                    // A screenshot run says where it wants to start before
+                    // anything renders. Whole call inside `#if DEBUG`; see `YouStage`.
                     YouStage.selectTabIfRequested(navigator)
+                    SystemModelProbe.runIfRequested()
                     #endif
                     await model.bootstrap()
+                }
+                // "Use from your laptop" is Pro, and the switch only asks when
+                // it is turned on. A server left on from before — a TestFlight
+                // build, a refund — would otherwise come back by itself at every
+                // launch. Once the App Store has answered and the answer is no,
+                // it goes off and stays off until someone turns it on again.
+                .task(id: [pro.hasChecked, pro.isPro]) {
+                    guard pro.hasChecked, !pro.isPro, model.serverShouldRun else { return }
+                    await model.stopServer()
                 }
                 .onChange(of: scenePhase) { _, phase in
                     // Both the socket and the resident model are torn down by
@@ -42,6 +57,10 @@ struct PocketdApp: App {
                         BackgroundWake.scheduleNextRefresh()
                     }
                 }
+                #if DEBUG
+                .componentGalleryIfRequested() // -pocketd.gallery: Design/Gallery/ComponentGallery.swift
+                .proSheetIfRequested(pro) // -pocketd.proSheet: Views/Pro/ProGate.swift
+                #endif
         }
     }
 }
@@ -71,5 +90,26 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         BackgroundWake.register()
         NotificationCentre.shared.attach()
         return true
+    }
+
+    /// A brain download finished while Pocketd was suspended or closed.
+    ///
+    /// iOS relaunches the app to hand over the file, and the handover only
+    /// happens once the download session is rebuilt under the identifier iOS
+    /// names — `BackgroundDownloads.handleEvents` does that and calls iOS back
+    /// when the last event is delivered. Without this method the bytes sat in
+    /// the system's care until the next time somebody opened the app, and a
+    /// brain that had finished downloading in a pocket was still "downloading"
+    /// on the lock screen.
+    func application(
+        _ application: UIApplication,
+        handleEventsForBackgroundURLSession identifier: String,
+        completionHandler: @escaping () -> Void
+    ) {
+        // UIKit calls this on the main thread and wants the handler called on
+        // it too; the Kit hops back to main before calling, so handing the
+        // non-Sendable handler across is safe.
+        nonisolated(unsafe) let finish = completionHandler
+        BackgroundDownloads.handleEvents(forSession: identifier) { finish() }
     }
 }

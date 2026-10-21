@@ -44,15 +44,16 @@ struct MessageContentView: View {
                 HStack(spacing: PDSpacing.xs) {
                     Text(disclosureLabel(isComplete: isComplete))
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(Font.pd.tick)
                         .rotationEffect(.degrees(isReasoningExpanded ? 0 : -90))
                 }
                 .font(Font.pd.caption.weight(.medium))
                 .foregroundStyle(Color.pd.inkSecondary)
                 .padding(.horizontal, PDSpacing.s)
-                .frame(height: PDMetric.linkPillHeight + 4)
+                .padding(.vertical, PDSpacing.xxs)
+                .frame(minHeight: PDMetric.linkPillHeight + 4)
                 .background(Color.pd.chip, in: Capsule(style: .continuous))
-                .contentShape(Capsule(style: .continuous))
+                .pdHitTarget(alignment: .leading)
             }
             .buttonStyle(PDPressStyle())
             .accessibilityLabel(isComplete ? "Show working" : "Still working")
@@ -62,7 +63,7 @@ struct MessageContentView: View {
                 Text(reasoning.trimmingCharacters(in: .whitespacesAndNewlines))
                     .font(Font.pd.secondary)
                     .foregroundStyle(Color.pd.inkSecondary)
-                    .lineSpacing(4)
+                    .modifier(PDLineSpacing(4, relativeTo: .subheadline))
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.leading, PDSpacing.s)
                     .overlay(alignment: .leading) {
@@ -105,14 +106,15 @@ struct MessageContentView: View {
             Text(inline(text))
                 .font(Font.pd.body)
                 .foregroundStyle(Color.pd.ink)
-                .lineSpacing(5)
+                .modifier(PDLineSpacing(5, relativeTo: .body))
                 .fixedSize(horizontal: false, vertical: true)
 
         case let .heading(level, text):
             Text(inline(text, style: headingStyle(level)))
-                .font(.system(size: headingSize(level), weight: .semibold))
+                .font(.system(headingStyle(level), weight: .semibold))
                 .foregroundStyle(Color.pd.ink)
                 .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
 
         case let .quote(text):
             HStack(alignment: .top, spacing: PDSpacing.xs) {
@@ -122,7 +124,7 @@ struct MessageContentView: View {
                 Text(inline(text))
                     .font(Font.pd.body)
                     .foregroundStyle(Color.pd.inkSecondary)
-                    .lineSpacing(5)
+                    .modifier(PDLineSpacing(5, relativeTo: .body))
                     .fixedSize(horizontal: false, vertical: true)
             }
             .fixedSize(horizontal: false, vertical: true)
@@ -141,7 +143,7 @@ struct MessageContentView: View {
                         Text(inline(item.text))
                             .font(Font.pd.body)
                             .foregroundStyle(Color.pd.ink)
-                            .lineSpacing(5)
+                            .modifier(PDLineSpacing(5, relativeTo: .body))
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(.leading, CGFloat(item.depth) * 14)
@@ -155,18 +157,6 @@ struct MessageContentView: View {
             Rectangle()
                 .fill(Color.pd.divider)
                 .frame(height: 1)
-        }
-    }
-
-    /// The same four steps `headingStyle` names, at the absolute sizes this
-    /// design is drawn at. Kept beside it rather than derived from it because
-    /// `inline(_:style:)` still needs the `TextStyle` for its monospaced runs.
-    private func headingSize(_ level: Int) -> CGFloat {
-        switch level {
-        case 1: 22
-        case 2: 20
-        case 3: 19
-        default: 17
         }
     }
 
@@ -200,12 +190,14 @@ struct MessageContentView: View {
         return attributed
     }
 
+    /// Text styles, so a heading grows with the reader's text size like
+    /// everything around it: 22 / 20 / 17 / 17 at the default size, the
+    /// sizes this design was drawn at.
     private func headingStyle(_ level: Int) -> Font.TextStyle {
         switch level {
         case 1: .title2
         case 2: .title3
-        case 3: .headline
-        default: .subheadline
+        default: .headline
         }
     }
 }
@@ -229,7 +221,7 @@ struct CodeBlockView: View {
             // accessibility text sizes almost every line is too wide to fit.
             ScrollView(.horizontal) {
                 Text(code.isEmpty ? " " : code)
-                    .font(.system(size: 13, design: .monospaced))
+                    .font(Font.pd.code)
                     .foregroundStyle(Color.pd.ink)
                     .fixedSize()
                     .padding(.horizontal, PDSpacing.s)
@@ -252,9 +244,8 @@ struct CodeBlockView: View {
 
             Button(action: copy) {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 13, weight: .regular))
-                    .frame(minWidth: 44, minHeight: 32)
-                    .contentShape(Rectangle())
+                    .font(Font.pd.footnote)
+                    .pdHitTarget()
             }
             .buttonStyle(.plain)
             .foregroundStyle(copied ? Color.pd.positive : Color.pd.inkSecondary)

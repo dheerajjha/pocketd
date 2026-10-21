@@ -2,7 +2,8 @@ import PhotosUI
 import PocketdKit
 import SwiftUI
 
-/// The bottom of the Ask screen: what is attached, what to ask next, and the bar.
+/// The bottom of the conversation: what is attached, the one thing above the
+/// bar, and the bar.
 ///
 /// Its own `View` for one specific reason, and it is the difference between a
 /// chat that types smoothly and one that locks up. SwiftUI registers an
@@ -16,33 +17,47 @@ import SwiftUI
 ///
 /// Keeping the draft in here means a keystroke invalidates a bar, not a
 /// transcript. Nothing above this view may read `model.draft`.
-struct AskComposer: View {
-    /// The one question worth offering after the last answer, or `nil`.
-    let followUp: AskSuggestion?
+///
+/// It never asks whether a brain can answer. `model.send()` holds a question
+/// until one can and the notice above says so; a composer that refused to send
+/// left somebody staring at their own words with no reply and no reason.
+struct AskComposer<Accessory: View>: View {
+    /// The notice, the Stop pill or the follow-up chip — whichever the
+    /// conversation needs above the bar. Drawn here only so the waveform can
+    /// take its place while the microphone is open; it reads its own state.
+    @ViewBuilder var accessory: Accessory
 
     @Environment(AppModel.self) private var model
     @Environment(Navigator.self) private var navigator
+    @Environment(ToastCenter.self) private var toasts: ToastCenter?
 
     @FocusState private var isFocused: Bool
     @State private var voice = VoiceInput()
     @State private var picked: [PhotosPickerItem] = []
     @State private var isPickingPhoto = false
     @State private var levels: [Float] = []
+    /// A question handed over while a reply was still being written. It waits
+    /// in the box and goes when that reply ends; sending over it would cut the
+    /// reply off, and dropping it would lose the question.
+    @State private var queued: String?
+    /// One line above the bar just before iOS asks for Speech Recognition for
+    /// the first time. The system's prompt says speech "will be sent to
+    /// Apple"; this says first what Pocketd actually does with it.
+    @State private var primer: String?
 
     var body: some View {
         @Bindable var model = model
 
-        VStack(alignment: .leading, spacing: PDSpacing.xs) {
+        VStack(alignment: .leading, spacing: PDSpacing.s) {
             if !model.attachments.isEmpty { attachments }
             if voice.isListening {
                 VoiceWaveform(levels: levels)
-            } else if model.isGenerating {
-                stopPill
-            } else if let followUp, !model.conversation.isEmpty {
-                SuggestionChip(followUp.text, symbol: followUp.symbol) {
-                    model.draft = followUp.text
-                    model.send()
-                }
+            } else if let primer {
+                Primer(primer)
+                    .padding(.horizontal, PDSpacing.xxs)
+                    .transition(.opacity)
+            } else {
+                accessory
             }
 
             AskBar(
@@ -58,8 +73,6 @@ struct AskComposer: View {
                 focus: $isFocused
             )
         }
-        .padding(.horizontal, PDSpacing.gutter)
-        .padding(.bottom, PDSpacing.xs)
         .photosPicker(
             isPresented: $isPickingPhoto,
             selection: $picked,
@@ -79,15 +92,25 @@ struct AskComposer: View {
             guard voice.isListening else { return }
             levels = Array((levels + [level]).suffix(VoiceWaveform.barCount))
         }
-        .onAppear {
-            takeHandoff()
-            takeFocusRequest()
+        // Already a sentence for a person, with the reason in it — see
+        // `VoiceInput.plainMessage`. The cursor goes back in the box, so the
+        // question can be typed instead.
+        .onChange(of: voice.error) { _, error in
+            guard let error else { return }
+            toasts?.show(error, symbol: "mic.slash", tint: .pd.caution)
+            isFocused = true
         }
-        .onChange(of: navigator.askHandoff?.id) { _, _ in takeHandoff() }
-        .onChange(of: model.askComposerFocusRequested) { _, _ in takeFocusRequest() }
+        .onAppear(perform: arrive)
+        .onChange(of: navigator.askHandoff?.id) { _, _ in takeHandoff(arriving: false) }
+        .onChange(of: model.askComposerFocusRequested) { _, _ in takeFocusRequest(arriving: false) }
+        .onChange(of: model.isGenerating) { _, generating in
+            guard !generating else { return }
+            sendQueued()
+        }
     }
 
-    /// Byte-for-byte the predicate `AppModel.send()` guards on.
+    /// Byte-for-byte the predicate `AppModel.send()` guards on, minus the
+    /// brain: a question with nothing to answer it yet is still sent, and held.
     ///
     /// Two deciders answering one question is how a button lights up over a
     /// `send()` that returns immediately: `.whitespaces` does not include
@@ -95,7 +118,6 @@ struct AskComposer: View {
     /// landed on nothing.
     private var canSend: Bool {
         !model.isGenerating
-            && model.loadedModelID != nil
             && (!model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !model.attachments.isEmpty)
     }
@@ -103,12 +125,6 @@ struct AskComposer: View {
     private func send() {
         isFocused = false
         model.send()
-    }
-
-    private var stopPill: some View {
-        PillButton(title: "Stop", symbol: "stop.fill") {
-            model.stopGenerating()
-        }
     }
 
     // MARK: - Attachments
@@ -140,11 +156,12 @@ struct AskComposer: View {
                         model.removeAttachment(at: index)
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 15))
+                            .font(Font.pd.secondary)
                             .symbolRenderingMode(.palette)
                             .foregroundStyle(.white, .black.opacity(0.6))
+                            .pdHitTarget(alignment: .topTrailing)
                     }
-                    .padding(2)
+                    .padding(-PDSpacing.xs)
                     .accessibilityLabel("Remove photo \(index + 1)")
                 }
         }
@@ -176,9 +193,23 @@ struct AskComposer: View {
         levels = []
         Task {
             if voice.authorization != .granted {
+                if VoiceInput.hasNeverAsked {
+                    withAnimation(PDMotion.gentle) {
+                        primer = "Pocketd turns your voice into text on this iPhone. Next, tap **Allow**."
+                    }
+                    // Long enough to be read before the system's alert dims
+                    // the screen; it stays readable beneath it.
+                    try? await Task.sleep(for: .milliseconds(900))
+                }
                 // iOS shows each prompt once; asking again after a decision
                 // re-reads it rather than nagging.
-                guard await voice.requestAuthorization() else { return }
+                let granted = await voice.requestAuthorization()
+                withAnimation(PDMotion.gentle) { primer = nil }
+                guard granted else {
+                    toasts?.show(VoiceInput.refusedSentence, symbol: "mic.slash", tint: .pd.caution)
+                    isFocused = true
+                    return
+                }
             }
             voice.reset()
             voice.start()
@@ -195,40 +226,105 @@ struct AskComposer: View {
             try? await Task.sleep(for: .milliseconds(400))
             levels = []
             let said = voice.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !said.isEmpty else { return }
-            model.draft = said
-            model.record(.voiceAskUsed)
-            guard model.loadedModelID != nil else {
-                // Nothing to answer with. The words stay in the box rather than
-                // disappearing into a send that cannot happen.
+            guard !said.isEmpty else {
                 isFocused = true
                 return
             }
+            model.draft = said
+            model.record(.voiceAskUsed)
+            // Unconditionally. With no brain yet it is held, in the box, with
+            // the notice above saying it will go.
             model.send()
         }
     }
 
     // MARK: - Arriving with something to say
 
-    /// A question handed over from Today, Siri or a Shortcut.
-    private func takeHandoff() {
-        guard let handoff = navigator.takeAskHandoff() else { return }
-        model.draft = handoff.draft
-        guard handoff.send, model.loadedModelID != nil else {
-            isFocused = true
-            return
+    /// The sheet has just come up.
+    ///
+    /// Every way in wants the cursor in the box — the field on Today, a detail
+    /// page's composer, `pocketd://ask`, the "Ask Pocketd" control — except a
+    /// question that is being sent: its answer is about to appear, and the
+    /// keyboard would cover it.
+    private func arrive() {
+        if navigator.askHandoff != nil {
+            takeHandoff(arriving: true)
+        } else if model.askComposerFocusRequested {
+            takeFocusRequest(arriving: true)
+        } else {
+            focus(after: true)
         }
-        model.send()
     }
 
-    /// A tap on the Control Center button, which asks for the cursor and — where
-    /// the phone can hear on-device — for the microphone too.
-    private func takeFocusRequest() {
+    /// A question handed over from Today, a detail page, Siri or a Shortcut.
+    ///
+    /// `send: true` asks it — in a new conversation unless this one was used
+    /// in the last half hour, so a question about sleep never lands at the
+    /// bottom of yesterday's chat (`askFresh`). `send: false` starts the
+    /// sentence and leaves the cursor after it.
+    private func takeHandoff(arriving: Bool) {
+        guard let handoff = navigator.takeAskHandoff() else { return }
+        if handoff.send {
+            guard !model.isGenerating else {
+                queued = handoff.draft
+                model.draft = handoff.draft
+                return
+            }
+            Task { await model.askFresh(handoff.draft) }
+        } else {
+            Task {
+                await startFreshIfStale()
+                model.draft = handoff.draft
+                focus(after: arriving)
+            }
+        }
+    }
+
+    /// The handed-over question, once the reply it arrived during has ended —
+    /// if the box still holds it. Somebody who has since typed something else
+    /// has changed their mind.
+    private func sendQueued() {
+        guard let question = queued else { return }
+        queued = nil
+        guard model.draft.trimmingCharacters(in: .whitespacesAndNewlines) == question
+            .trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+        Task { await model.askFresh(question) }
+    }
+
+    /// `askFresh`'s rule for a sentence that is started rather than sent.
+    private func startFreshIfStale() async {
+        guard !model.conversation.isEmpty, !model.isGenerating,
+              Date().timeIntervalSince(model.lastConversationActivity) > AppModel.freshConversationAfter
+        else { return }
+        await model.newConversation()
+    }
+
+    /// The "Ask Pocketd" control, or a page's mic: the cursor in the box, and
+    /// the microphone open where this phone can hear on-device.
+    ///
+    /// Both, in that order. Listening alone left nowhere to type when it
+    /// failed — a mic tap that ended in a toast and an empty, unfocused box.
+    /// The box is greyed while the microphone is open and takes the cursor
+    /// back when it closes without sending.
+    private func takeFocusRequest(arriving: Bool) {
         guard model.askComposerFocusRequested else { return }
         model.askComposerFocusRequested = false
-        isFocused = true
-        guard voice.isSupported else { return }
-        startListening()
+        focus(after: arriving)
+        guard voice.isSupported, !model.isGenerating else { return }
+        Task {
+            if arriving { try? await Task.sleep(for: .milliseconds(500)) }
+            startListening()
+        }
+    }
+
+    /// Puts the cursor in the box. On arrival the sheet is still sliding up,
+    /// and a field that is not in a window yet cannot take focus — so the
+    /// request waits for the presentation to land.
+    private func focus(after arriving: Bool) {
+        Task {
+            if arriving { try? await Task.sleep(for: .milliseconds(450)) }
+            isFocused = true
+        }
     }
 }
 
@@ -251,10 +347,10 @@ struct VoiceWaveform: View {
             }
             Spacer(minLength: 0)
             Text("Listening…")
-                .font(Font.pd.caption)
+                .font(Font.pd.secondary)
                 .foregroundStyle(Color.pd.inkSecondary)
         }
-        .frame(height: 24)
+        .frame(minHeight: 24)
         .padding(.horizontal, PDSpacing.s)
         .accessibilityElement()
         .accessibilityLabel("Listening")
