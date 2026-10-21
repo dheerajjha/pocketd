@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Privacy Policy · Pocketd</title>
-<meta name="description" content="Your conversations never leave your phone. Two hosts are contacted: Hugging Face for models, Mixpanel for a fixed list of usage events.">
+<meta name="description" content="Your conversations never leave your phone. Hugging Face is contacted for models, Mixpanel for a fixed list of usage events you can turn off, and Apple's App Store for Pocketd Pro. No purchase data is collected.">
 <style>
   :root {
     color-scheme: light dark;
@@ -74,35 +74,54 @@
 
 <h1>Privacy Policy</h1>
 
-<p class="meta"><strong>Pocketd</strong> · Last updated 17 September 2026</p>
+<p class="meta"><strong>Pocketd</strong> · Last updated 21 October 2026</p>
 
-<p>Two kinds of request leave your phone: model searches and downloads, which go
-to Hugging Face, and a fixed list of usage events, which go to Mixpanel. Nothing
-else is sent anywhere. Your conversations, everything the model says back, and
-anything Pocketd reads from Health, Calendar or Reminders stay on the device and
-cannot appear in either kind of request.</p>
+<p>Three kinds of request leave your phone: model searches and downloads, which
+go to Hugging Face; a fixed list of usage events, which go to Mixpanel unless
+you turn them off; and, for Pocketd Pro, the requests Apple's StoreKit makes to
+the App Store. Nothing else is sent anywhere. Your conversations, everything the
+model says back, and anything Pocketd reads from Health, Calendar or Reminders
+stay on the device and cannot appear in any of them.</p>
 
-<p>The rest of this page is the detail behind those two sentences, including the
+<p>The rest of this page is the detail behind those sentences, including the
 parts that are less tidy than the sentences are.</p>
 
 <h2>What Pocketd collects about you</h2>
 
 <p>Usage events, and nothing besides. There are twenty-eight of them and the complete
 list is one readable file, <a href="https://github.com/dheerajjha/pocketd/blob/main/Sources/PocketdKit/Analytics/AnalyticsEvent.swift"><code>AnalyticsEvent.swift</code></a>: the app was opened;
-the intro was finished or skipped; a model download started, finished, was
-cancelled or failed; a model loaded or failed to load; a message was sent; the
-server started or stopped; a client on your Wi-Fi was answered; a request was
-refused because the phone was too hot, too low on battery, or already busy.</p>
+the intro showed a step or was finished; a model download started, finished,
+was cancelled or failed; a model loaded or failed to load; a message was sent;
+an answer got a thumbs up or down; the brief was written or read aloud; the
+microphone was used to ask; a Today tile was tapped; Calendar, Reminders or
+Health was switched on or off, or offered in a conversation; a routine was
+created, ran, or came due when it could not run; the server started or
+stopped; a client on your Wi-Fi, or the chat page on the phone itself, was
+answered; a request was refused because the phone was too hot, too low on
+battery, or already busy.</p>
 
-<p>An event may carry a model's id, a file size in bytes, how long something
-took, a rounded memory class for the phone (<code>4gb</code>, <code>8gb</code>,
-<code>16gb_plus</code>), a reason drawn from a fixed list, and which of the two
-APIs a client spoke. Alongside those, the analytics SDK attaches an identifier
-for this installation of the app, the app version, the iOS version and the
-device model.</p>
+<p>An event may carry whether this is the first launch, a model's id, a file
+size in bytes, how far a download got, how long something took, a rounded
+memory class for the phone (<code>3gb</code> up to <code>16gb_plus</code>), a
+reason drawn from a fixed list, which of the two APIs a client spoke, which of
+Calendar, Reminders or Health was switched on and from where, which step of the
+intro, which kind of routine ran and from which template it was made, whether
+a brief was written on its own or on request, a thumbs up or down, and which
+Today tile was tapped. Apple's built-in model is reported by the id
+<code>system:apple-intelligence</code>. Alongside those, the analytics SDK
+attaches the same facts to every event: an identifier for this installation of
+the app, the app's version and build number, the iOS version, the device model
+and screen size, whether the phone is on Wi-Fi or which kind of mobile network,
+a mobile-carrier field that current iOS answers only with a placeholder, and the
+SDK's own version.
+Mixpanel is told not to work out a location from the IP address the events
+arrive from.</p>
 
-<p>These events are sent from every installation. There is no switch that turns
-them off.</p>
+<p>These events are on by default. You › Privacy has a switch, <strong>Share
+anonymous usage counts</strong>, that turns them off; turning it off also throws
+away anything queued and not yet sent, and the installation's identifier. The
+intro's first screen says the switch is there. Debug builds, including any you
+make yourself from the source, never send them at all.</p>
 
 <p>What an event cannot contain is not a matter of anyone's good intentions. The
 property names an event is permitted to use are written out by hand in
@@ -117,9 +136,16 @@ any event carries a banned name, or a name that appears on neither list.</p>
 reading:</p>
 
 <ul>
-  <li>No account, no sign-in, no email address, no name.</li>
+  <li>No account, no sign-in, no email address. The name you give Pocketd to
+    greet you is never sent anywhere.</li>
   <li>Nothing you type, and nothing the model replies, is transmitted to anyone.
-    Inference happens on the phone.</li>
+    Inference happens on the phone, whether the model is Apple's built-in one or
+    one you downloaded.</li>
+  <li>No purchase data. Pocketd Pro is bought through Apple's App Store. Pocketd
+    learns whether this Apple Account owns it and, to recognise someone who
+    installed Pocketd before Pro existed, which build was first installed. It
+    stores neither, reads nothing about the payment, and no usage event mentions
+    a purchase.</li>
   <li>No crash reporting.</li>
   <li>No advertising and no ad identifier. Pocketd does not link an advertising
     framework and never asks for permission to track. Usage events are not
@@ -128,7 +154,8 @@ reading:</p>
   <li>Three outside components, and only one of them reports anything: an HTTP server
     (<a href="https://github.com/swhitty/FlyingFox">FlyingFox</a>), the inference runtime (<a href="https://github.com/tattn/LocalLLMClient">LocalLLMClient</a>, wrapping
     <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a>), and the analytics SDK (<a href="https://github.com/mixpanel/mixpanel-swift">Mixpanel</a>), which sends the events
-    above and nothing else.</li>
+    above and nothing else. The built-in model and the purchase come from
+    Apple's own frameworks, FoundationModels and StoreKit.</li>
 </ul>
 
 <p>The app's <code>PrivacyInfo.xcprivacy</code> says the same thing to Apple: tracking off,
@@ -138,9 +165,10 @@ collected for analytics.</p>
 
 <h2>What leaves your phone</h2>
 
-<p>Two hosts. <strong><code>huggingface.co</code></strong>, with the CDN it redirects downloads
-to, for models; and <strong><code>api.mixpanel.com</code></strong>, for the usage events above.
-Only these things cause a request:</p>
+<p>Three destinations. <strong><code>huggingface.co</code></strong>, with the CDN it redirects
+downloads to, for models; <strong><code>api.mixpanel.com</code></strong>, for the usage events
+above; and <strong>Apple's App Store</strong>, which StoreKit reaches on Pocketd's behalf
+for Pocketd Pro. Only these things cause a request:</p>
 
 <div class="table-wrap">
 <table>
@@ -151,7 +179,8 @@ Only these things cause a request:</p>
     <tr><td>You search for a model</td><td>The text you typed, as a search term, and your phone's IP address</td></tr>
     <tr><td>You open a repository to see its files</td><td>The repository's name, and your phone's IP address</td></tr>
     <tr><td>You download a model</td><td>Which repository and file you are fetching, and your phone's IP address</td></tr>
-    <tr><td>You use the app</td><td>One of the twenty-eight usage events, the identifier for this installation, and your phone's IP address</td></tr>
+    <tr><td>You use the app, with usage counts on</td><td>One of the twenty-eight usage events, the identifier for this installation, the device facts above, and your phone's IP address</td></tr>
+    <tr><td>Pocketd checks for Pocketd Pro, or you open, buy or restore it</td><td>What StoreKit sends Apple for any app's in-app purchase: the product, and the purchase or restore you asked for. The payment itself is between you and Apple</td></tr>
   </tbody>
 </table>
 </div>
@@ -159,8 +188,10 @@ Only these things cause a request:</p>
 <p>A paired device on your network can ask the phone to run a search or start a
 download on its behalf, which sends the same things and nothing more.</p>
 
-<p>Neither an account nor a token is attached to any of them, because Pocketd
-has neither to attach. The identifier in the last row is one the analytics SDK generates for
+<p>Pocketd attaches no account and no token to the first four, because it has
+neither to attach. The App Store's requests carry your Apple Account, as every
+purchase on an iPhone does, under Apple's privacy policy rather than this one.
+The identifier in the usage-events row is one the analytics SDK generates for
 the installation; it is not the advertising identifier and it is attached to
 nothing but those twenty-eight events. Every download address is assembled as
 <code>huggingface.co</code>, then a repository and a filename; the search API accepts a
@@ -168,18 +199,19 @@ repository and a filename and never a host. The stored record for a model
 carries a field that could name a different address, and nothing in the app or
 its HTTP API ever sets it.</p>
 
-<p>Nothing else is contacted. Inference does not call out — the weights are a file
-on your phone, and answering a question reads that file. The web pages Pocketd
-serves are self-contained, with no fonts, scripts or images loaded from
-anywhere.</p>
+<p>Nothing else is contacted. Inference does not call out — Apple's built-in
+model runs on the phone through the FoundationModels framework, a downloaded
+model is a file on your phone, and answering a question reads one or the other.
+The web pages Pocketd serves are self-contained, with no fonts, scripts or
+images loaded from anywhere.</p>
 
 <h2>What Pocketd asks permission for</h2>
 
-<p>Every one of these is declared in the app's own <code>Info.plist</code>, which is
-where the Privacy screen inside the app reads its list from — so a permission
-added to Pocketd shows up there whether or not anyone remembered to update this
-page. Nothing below is asked for at launch: each prompt appears at the moment
-you turn the thing on.</p>
+<p>Every one of these but Notifications is declared in the app's own
+<code>Info.plist</code>, which is where Privacy details, inside the app, reads its list
+from — so a permission added to Pocketd shows up there whether or not anyone
+remembered to update this page. Nothing below is asked for at launch: each
+prompt appears at the moment you turn the thing on.</p>
 
 <div class="table-wrap">
 <table>
@@ -187,33 +219,37 @@ you turn the thing on.</p>
     <tr><th>Permission</th><th>What it is for</th><th>Where the data goes</th></tr>
   </thead>
   <tbody>
-    <tr><td>Calendar (full access)</td><td>Answering what is on today, and adding an event when you ask for one</td><td>Read and written on this device. Never uploaded, and never sent to a device Pocketd is serving</td></tr>
-    <tr><td>Reminders (full access)</td><td>Answering what is due or overdue, and adding or ticking off a reminder when you ask</td><td>Read and written on this device, same as above</td></tr>
-    <tr><td>Health (read)</td><td>Answering how you slept, how active you have been, or where your heart rate sits</td><td>Read on this device. Never uploaded, never sent to a served device, never used for advertising and never sold</td></tr>
+    <tr><td>Calendar (full access)</td><td>Telling you what is next, and adding an event when you ask for one</td><td>Read and written on this device. Never uploaded, and never sent to a device Pocketd is serving</td></tr>
+    <tr><td>Reminders (full access)</td><td>Telling you what is due or overdue, and adding or ticking off a reminder when you ask</td><td>Read and written on this device, same as above</td></tr>
+    <tr><td>Health (read)</td><td>Comparing today with your usual, and answering questions about it: sleep; steps, active energy, exercise, distance, stand hours and workouts; heart rate, resting and walking heart rate and heart-rate variability; blood oxygen, respiratory rate, mindful minutes, weight and VO2 max. Not ECG or heart rhythm, cycle tracking, blood glucose, medications or clinical records</td><td>Read on this device. Never uploaded, never sent to a served device, never used for advertising and never sold</td></tr>
     <tr><td>Health (write)</td><td>Nothing. iOS requires the description from any app that links HealthKit, and Pocketd never writes</td><td>Nowhere — the set of types passed to the authorisation request is empty</td></tr>
-    <tr><td>Microphone</td><td>Hearing your question while you hold the microphone button in Ask</td><td>Nothing is recorded and nothing is sent. The audio is handed to the recogniser below and discarded</td></tr>
-    <tr><td>Speech recognition</td><td>Turning that held audio into text so you can ask by speaking</td><td>On the device. <code>requiresOnDeviceRecognition</code> is set, so the recogniser never reaches Apple's servers — and where a device cannot do it locally the microphone button is hidden rather than falling back to the network one</td></tr>
-    <tr><td>Local network</td><td>Serving the model to a laptop or tablet on your own Wi-Fi, and announcing the phone over Bonjour so one can find it</td><td>Your local network only. It stops when the server stops</td></tr>
-    <tr><td>Notifications</td><td>Telling you a scheduled routine has a result waiting</td><td>Delivered by iOS on this device. The text is written on the phone</td></tr>
+    <tr><td>Microphone</td><td>Hearing your question while the microphone is on: while you hold its button in the conversation, or after a tap on it until you tap again</td><td>Nothing is recorded and nothing is sent. The audio is handed to the recogniser below and discarded</td></tr>
+    <tr><td>Speech recognition</td><td>Turning what you said into text so you can ask by speaking</td><td>On the device. <code>requiresOnDeviceRecognition</code> is set, so the recogniser never reaches Apple's servers — and where a device cannot do it locally the microphone button is hidden rather than falling back to the network one</td></tr>
+    <tr><td>Local network</td><td>Serving a model to a laptop or tablet on your own Wi-Fi when you turn on Use from your laptop, and announcing the phone over Bonjour so one can find it</td><td>Your local network only. It stops when the server stops</td></tr>
+    <tr><td>Notifications</td><td>Telling you a routine has something for you: your morning brief is ready, a reminder is overdue, a weekly review is waiting</td><td>Delivered by iOS on this device. The text is written on the phone, and it never names an event or a reminder, because a Lock Screen can be read by whoever holds the phone</td></tr>
   </tbody>
 </table>
 </div>
 
 <h2>Health, Calendar and Reminders</h2>
 
-<p>If you grant access, the assistant can answer questions about your activity,
-heart and sleep, your calendar and your reminders.</p>
+<p>If you grant access, Today shows what is next, what is due, how you slept and
+how active you have been, and the assistant can answer questions about your
+activity, heart and sleep, your calendar and your reminders.</p>
 
 <ul>
-  <li><strong>The data is read on this device and is never uploaded.</strong> It goes to a file
-    of weights on your phone and comes back as an answer.</li>
+  <li><strong>The data is read on this device and is never uploaded.</strong> Today and the
+    pages under it read it directly, with no model involved. A question goes to
+    the model on your phone — Apple's built-in one, or a file you downloaded —
+    and comes back as an answer.</li>
   <li><strong>Network callers cannot reach it.</strong> Pocketd serves other devices on your
     network, and those devices are refused this data — including the chat page
     Pocketd itself serves, which is treated as a network client like any other.
     The decision is made from the connection's own peer address, before any read
     happens, so a refused request causes no read at all rather than a filtered
-    one. Only someone holding the phone and using the Chat tab can get an answer
-    containing personal data.</li>
+    one. Your personal data is shown only on the phone itself: on Today and its
+    pages, in the brief and its widget, in the conversation, and in what your
+    routines found.</li>
   <li><strong>Health data is never used for advertising or marketing, never sold, and
     never disclosed to anyone.</strong> It cannot ride out in a usage event either:
     <code>steps</code>, <code>heart_rate</code>, <code>sleep</code>, <code>workout</code>,
@@ -222,50 +258,69 @@ heart and sleep, your calendar and your reminders.</p>
     not explicitly permitted fails the build.</li>
   <li><strong>Pocketd never writes to Health.</strong> The write permission string exists only
     because iOS requires one from any app that links HealthKit.</li>
-  <li><strong>Health data stays out of iCloud.</strong> Conversation transcripts are excluded
-    from iCloud Backup, because an answer about your sleep or resting heart rate
-    is saved in the transcript along with the rest of the conversation.</li>
+  <li><strong>Health data is kept out of iCloud Backup.</strong>
+    Conversations, the brief, the Today widget's copy of it and your routines are
+    excluded from iCloud Backup, because an answer about your sleep or resting
+    heart rate can be saved in them.</li>
 </ul>
 
 <p>One thing Pocketd cannot tell you: <strong>iOS never reports to an app whether a
 request to read Health was allowed.</strong> That is deliberate on Apple's part — it
 stops an app distinguishing "you said no" from "you have no data of that
-kind" — and it applies to Pocketd like every other app. The app's own Data
-screen says so rather than guessing. Health → Data Access &amp; Devices → Pocketd
-is the only place with the answer.</p>
+kind" — and it applies to Pocketd like every other app. The app's own Privacy
+details screen says so rather than guessing. Settings › Privacy &amp; Security ›
+Health › Pocketd is the only place with the answer.</p>
 
 <h2>What is stored on your phone</h2>
 
-<p>Everything Pocketd keeps stays inside the app's own container:</p>
+<p>Almost everything Pocketd keeps stays inside the app's own container:</p>
 
 <ul>
   <li><strong>Models</strong> you downloaded. Not about you.</li>
-  <li><strong>Conversations</strong> — everything typed in the Chat tab and everything the
+  <li><strong>Conversations</strong> — everything you asked and everything the
     model replied, as plain text, one file each.</li>
-  <li><strong>Settings</strong>, including the API key other devices use to reach this phone.</li>
+  <li><strong>Routines</strong>, and what each one last found.</li>
+  <li><strong>Today's brief</strong>, and the facts it was written from.</li>
+  <li><strong>Settings</strong>, including the name you gave Pocketd, which model
+    you chose, whether usage counts are on, and the API key other devices use to
+    reach this phone.</li>
   <li><strong>Queued usage events</strong>, held by the analytics SDK until they are sent
     and deleted once they are.</li>
   <li>Caches iOS keeps on the app's behalf, and snapshots iOS takes of the app
     when you switch away.</li>
 </ul>
 
-<p>Models and conversations are both excluded from iCloud Backup. The Data screen
-inside the app walks the container and accounts for every byte, names what it
-cannot delete and says who can, and offers to delete the rest. Deleting the app
-removes all of it.</p>
+<p>Two small files live outside it, in the container the app shares with its
+widgets, because a widget runs in a process of its own and cannot read the
+app's: the line the Today widget shows — a greeting with your name, the first
+sentence of the brief, the next event's title and time, and how many reminders
+are due — and, for the Routines widget, your routines' names, when the next one
+runs and whether something is waiting, with nothing any routine found. A tap on
+the Ask Pocketd control also leaves a small marker there — when the tap
+happened, and that it asked for the microphone — which the app clears when it
+opens.</p>
+
+<p>Models, conversations, routines and the brief are excluded from iCloud
+Backup. Privacy details, under You › Privacy, walks the container, counts the
+widget's copy of the brief alongside it, accounts for every byte, and offers to
+delete conversations, unfinished downloads, the network cache or everything.
+Deleting the app removes all of it, the widgets' files included.</p>
 
 <h2>The local network</h2>
 
-<p>When you press Start, your phone runs an HTTP server for other devices on your
-Wi-Fi.</p>
+<p>When you turn on Use from your laptop, your phone runs an HTTP server for
+other devices on your Wi-Fi.</p>
 
 <ul>
   <li><strong>The server only answers.</strong> It accepts connections and never opens one.</li>
+  <li><strong>It serves only a model you downloaded.</strong> Apple's built-in model
+    answers the phone's own questions and is never exposed to another device.</li>
   <li>While it is running, the phone <strong>announces itself over Bonjour</strong> to everyone
-    on the same Wi-Fi: the device name iOS knows it by, the app version, which
-    APIs it speaks, whether a key is required, and the id of the loaded model.
-    That is how a laptop finds the phone without anyone typing an address. It
-    does not leave the local network, and it stops when the server stops.</li>
+    on the same Wi-Fi: the name iOS gives apps for the device (on current
+    versions of iOS, simply "iPhone"), the app version, which APIs it speaks,
+    whether a key is required, and the id of the model it serves. That is how a
+    laptop finds the phone without anyone typing an address. It does not leave
+    the local network, and it stops when the server stops.</li>
   <li>Requests can require a key, and pairing is a six-digit code shown on the
     phone. Anything reaching the server still cannot read your Health, Calendar
     or Reminders — see above.</li>
@@ -278,31 +333,31 @@ privacy page usually leaves out:</p>
 
 <ul>
   <li><strong>The usage events are on by default.</strong> You are not asked during
-    the intro; the intro tells you they exist and where the switch is. Settings
-    has a Usage section that turns them off, and turning it off also discards
-    anything queued and not yet sent. On-by-default is a real choice with a real
-    cost — most people never change a default, so most installs will send these
-    events. That is the point of them, and it is why the schema and the test
-    that stand between them and anything you typed matter more than the
-    switch does.</li>
-  <li><strong>Opening a model's page hands the address to Safari.</strong> What Safari sends
-    from that point is Safari's business, with Safari's cookies, not Pocketd's.</li>
-  <li><strong>Copying the API key or the server address puts it on the system
-    pasteboard.</strong> If Handoff is on, Universal Clipboard forwards the pasteboard
-    to your other Apple devices through iCloud. That is an iOS feature and
-    applies to anything you copy.</li>
+    the intro; the intro tells you they exist and where the switch is. You ›
+    Privacy has the switch, and turning it off also discards anything queued and
+    not yet sent. On-by-default is a real choice with a real cost — most people
+    never change a default, so most installs will send these events. That is the
+    point of them, and it is why the schema and the test that stand between them
+    and anything you typed matter more than the switch does.</li>
+  <li><strong>Opening a model's page hands the address to Safari</strong>, and
+    <strong>Directions</strong>, on the Your day page, hands the event's location to
+    Maps. What Safari or Maps sends from that point is their business, not
+    Pocketd's.</li>
+  <li><strong>Copying puts things on the system pasteboard</strong> — the API key, the
+    server address, an answer, the diagnostics log. If Handoff is on, Universal
+    Clipboard forwards the pasteboard to your other Apple devices through iCloud.
+    That is an iOS feature and applies to anything you copy.</li>
   <li><strong>Hugging Face sees your IP address</strong> when you search or download, as any
     website does, and its CDN may set cookies that the system's HTTP client
-    stores. The Data screen lists that cache and can delete it.</li>
+    stores. Privacy details lists that cache and can delete it.</li>
 </ul>
 
 <h2>Children</h2>
 
 <p>Pocketd has no account, no sign-up and no social features, and asks nobody
-their age, because it has no reason to know it. The usage events above are sent
-from every installation and describe what the app did rather than who was
-holding it: no name, no email address, no age, no location, and nothing anyone
-typed.</p>
+their age, because it has no reason to know it. The usage events above, unless
+they are switched off, describe what the app did rather than who was holding it:
+no name, no email address, no age, no location, and nothing anyone typed.</p>
 
 <h2>Changes</h2>
 
