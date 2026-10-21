@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyLists/PrivacyManifest-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  The widget extension's own manifest. An extension is a bundle of its own,
+	  and it compiles App/Shared, so it carries the one required-reason API that
+	  code uses. It collects nothing and tracks nothing: it reads two small JSON
+	  files from the App Group and draws them.
+	-->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<!--
+				  1C8F.1 — AskLaunchRequest (App/Shared) writes the "open Ask"
+				  request into the App Group's defaults, which only this app and
+				  this extension can read.
+				-->
+				<string>1C8F.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

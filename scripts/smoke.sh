@@ -132,7 +132,11 @@ contains "GET /api/tags lists $MODEL" "\"$MODEL\"" "$TAGS"
 contains "tags carry parent_model" '"parent_model"' "$TAGS"
 contains "tags carry families" '"families"' "$TAGS"
 contains "tags carry capabilities" '"capabilities"' "$TAGS"
-contains "GET /api/version is semver" '"version":"0.' "$(curl -s "${AUTH[@]}" "$BASE/api/version")"
+# The server reports the app's own MARKETING_VERSION (see `PocketdKit` in
+# Routes.swift), so the expected value is read from the project rather than
+# written here, where it went stale the moment the app left 0.x.
+APP_VERSION=$(grep -oE 'MARKETING_VERSION: *"[^"]+"' "$(dirname "$0")/../project.yml" | head -1 | grep -oE '[0-9]+(\.[0-9]+)+')
+contains "GET /api/version is $APP_VERSION" "\"version\":\"$APP_VERSION\"" "$(curl -s "${AUTH[@]}" "$BASE/api/version")"
 contains "GET /api/ps reports the resident model" "\"$MODEL\"" "$(curl -s "${AUTH[@]}" "$BASE/api/ps")"
 
 NDJSON=$(curl -s -N "${AUTH[@]}" -H 'Content-Type: application/json' \

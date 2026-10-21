@@ -84,6 +84,12 @@ targets:
       # an app icon, it is a file in the bundle, and the home screen shows the
       # grey placeholder.
       - path: App/Resources/Assets.xcassets
+      # Pocketd Pro's product for Xcode's StoreKit testing, chosen by the Run
+      # scheme below. In the project so Xcode can open and edit it, and in no
+      # build phase: it is a test fixture, and the App Store sells the real
+      # product from App Store Connect.
+      - path: App/Resources/Pocketd.storekit
+        buildPhase: none
     info:
       path: App/Resources/Info.plist
       properties:
@@ -165,36 +171,31 @@ targets:
         # place a user is most entitled to a straight answer, and it is the
         # string App Review reads first.
         # The wording says where the data goes because that is the honest and
-        # unusual part of this app: the model doing the reading is a file on
-        # this phone, and no request leaves the device to answer.
+        # unusual part of this app: the reading happens on this phone, and no
+        # request leaves the device to answer. Short on purpose: this is the
+        # first sentence of the app most people read closely, and it arrives in
+        # the middle of the intro, under a primer that already said why.
         NSCalendarsFullAccessUsageDescription: >-
-          Pocketd lets the AI assistant running on this iPhone answer questions
-          about your schedule, such as what is on today, and add events when you
-          ask it to. Your events are read and written on this device only, are
-          never uploaded, and are never sent to the other devices this app
-          serves.
+          Pocketd reads your calendar to tell you what's next, and adds events
+          when you ask. Your events stay on this iPhone, and other devices can't
+          read them.
         NSRemindersFullAccessUsageDescription: >-
-          Pocketd lets the AI assistant running on this iPhone answer questions
-          about your reminders, such as what is overdue, and add or tick off
-          reminders when you ask it to. Your reminders are read and written on
-          this device only, are never uploaded, and are never sent to the other
-          devices this app serves.
+          Pocketd reads your reminders to tell you what's due, and adds or ticks
+          them off when you ask. They stay on this iPhone, and other devices
+          can't read them.
         # Both are required, and the app crashes on requestAuthorization if
         # either is missing — not a warning, a termination. The write string is
         # present because HealthKit demands it whenever the framework is linked,
         # even though nothing here writes: the read tools are read-only and the
         # share set passed to requestAuthorization is empty.
         NSHealthShareUsageDescription: >-
-          Pocketd lets the AI assistant running on this iPhone answer questions
-          about your activity, heart and sleep, such as how last night compares
-          with your usual. Your health data is read on this device only, is
-          never uploaded, and is never sent to the other devices this app
-          serves.
+          Pocketd reads your sleep, activity and heart data to compare today with
+          your usual. It stays on this iPhone, and other devices can't read it.
         NSHealthUpdateUsageDescription: >-
           Pocketd does not write to Health. This permission is requested only
           because iOS requires the description to be present whenever an app
           links HealthKit.
-        # Hold-to-talk on the Ask bar, and the two keys are not
+        # The microphone on the composer, and the two keys are not
         # interchangeable: the microphone string is what iOS shows when the
         # audio session starts, and the speech one is what it shows before
         # `SFSpeechRecognizer` runs. Ship one without the other and the app is
@@ -209,16 +210,16 @@ targets:
           Pocketd turns your voice into text on this iPhone so you can ask by
           speaking. Audio is processed on the device and never uploaded.
         NSMicrophoneUsageDescription: >-
-          Pocketd listens only while you hold the microphone button, to hear
-          your question. Nothing is recorded or sent anywhere.
+          Pocketd listens only while the microphone is on, to hear your
+          question. Nothing is recorded or sent anywhere.
         # Required to advertise over Bonjour. Without these exact service types
         # publish fails silently and the phone is discoverable by nothing.
         NSBonjourServices:
           - _pocketd._tcp
           - _ollama._tcp
         NSLocalNetworkUsageDescription: >-
-          Pocketd serves the language model running on this device to other
-          devices on your network. Everything stays on your local network.
+          When you turn on Use from your laptop, Pocketd answers your other
+          devices over your Wi-Fi. Nothing leaves your local network.
         # Background refresh, and an honest account of what it buys.
         #
         # Without `fetch` here, BGTaskScheduler refuses the app outright:
@@ -343,6 +344,10 @@ targets:
       # half references PocketdKit and stays app-side.
       - path: Sources/PocketdKit/Widgets/WidgetBrief.swift
       - path: Sources/PocketdKit/Widgets/WidgetBriefStore.swift
+      # The one set of on-screen formats ("9:30 AM", "in 25 min", "4,120"),
+      # so a widget says a time the way the app does. Foundation-only, like
+      # the four above, and compiled in for the same reason.
+      - path: Sources/PocketdKit/Format/Format.swift
     info:
       path: App/Resources/Widgets-Info.plist
       properties:
@@ -389,6 +394,12 @@ schemes:
         Pocketd: all
     run:
       config: Debug
+      # Run from Xcode, Pocketd Pro loads from this file instead of the App
+      # Store: the price, a purchase, Ask to Buy and refunds can all be tried
+      # in Debug > StoreKit > Manage Transactions with no sandbox account.
+      # `simctl launch` and `xcodebuild build` ignore it; see `ProStage` for
+      # the simulator.
+      storeKitConfiguration: App/Resources/Pocketd.storekit
     # No test targets here: the suite is the Swift package's, run with
     # `swift test`, and it deliberately does not need a simulator.
     test:

@@ -50,17 +50,17 @@
 		<string>_ollama._tcp</string>
 	</array>
 	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>Pocketd lets the AI assistant running on this iPhone answer questions about your schedule, such as what is on today, and add events when you ask it to. Your events are read and written on this device only, are never uploaded, and are never sent to the other devices this app serves.</string>
+	<string>Pocketd reads your calendar to tell you what's next, and adds events when you ask. Your events stay on this iPhone, and other devices can't read them.</string>
 	<key>NSHealthShareUsageDescription</key>
-	<string>Pocketd lets the AI assistant running on this iPhone answer questions about your activity, heart and sleep, such as how last night compares with your usual. Your health data is read on this device only, is never uploaded, and is never sent to the other devices this app serves.</string>
+	<string>Pocketd reads your sleep, activity and heart data to compare today with your usual. It stays on this iPhone, and other devices can't read it.</string>
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>Pocketd does not write to Health. This permission is requested only because iOS requires the description to be present whenever an app links HealthKit.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Pocketd serves the language model running on this device to other devices on your network. Everything stays on your local network.</string>
+	<string>When you turn on Use from your laptop, Pocketd answers your other devices over your Wi-Fi. Nothing leaves your local network.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Pocketd listens only while you hold the microphone button, to hear your question. Nothing is recorded or sent anywhere.</string>
+	<string>Pocketd listens only while the microphone is on, to hear your question. Nothing is recorded or sent anywhere.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
-	<string>Pocketd lets the AI assistant running on this iPhone answer questions about your reminders, such as what is overdue, and add or tick off reminders when you ask it to. Your reminders are read and written on this device only, are never uploaded, and are never sent to the other devices this app serves.</string>
+	<string>Pocketd reads your reminders to tell you what's due, and adds or ticks them off when you ask. They stay on this iPhone, and other devices can't read them.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Pocketd turns your voice into text on this iPhone so you can ask by speaking. Audio is processed on the device and never uploaded.</string>
 	<key>NSSupportsLiveActivities</key>

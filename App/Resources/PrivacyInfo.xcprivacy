@@ -177,14 +177,17 @@
 				  (AvailableMemory), and the Data screen reading them back to
 				  show what is stored.
 
-				  Not 1C8F.1: there is no App Group. Nothing anywhere calls
-				  UserDefaults(suiteName:), so no default written here is
-				  readable by another process. Not AC6B.1: neither
-				  com.apple.configuration.managed nor
+				  1C8F.1 — defaults shared with this app's own widget extension
+				  through the App Group, and nothing else: AskLaunchRequest
+				  (App/Shared) leaves the "open Ask" request there for the app to
+				  pick up. Both sides are members of the same group.
+
+				  Not AC6B.1: neither com.apple.configuration.managed nor
 				  com.apple.feedback.managed is touched. Not C56D.1, which only
 				  a third-party SDK may declare.
 				-->
 				<string>CA92.1</string>
+				<string>1C8F.1</string>
 			</array>
 		</dict>
 	</array>
