@@ -188,6 +188,8 @@ final class ScheduleRunner {
                     )
                 case let .prompt(handoff):
                     completion = await runPrompt(handoff, of: task, context: context)
+                case .brief:
+                    completion = await runBrief(of: task, firing: firing, context: context)
                 }
                 if let completion { completions.append(completion) }
             }
@@ -238,6 +240,22 @@ final class ScheduleRunner {
             notifyWhenEmpty: notifyWhenEmpty,
             watched: result
         )
+    }
+
+    // MARK: - Briefs
+
+    /// Files the brief this firing announced.
+    ///
+    /// Nothing is announced from here: a foreground sweep has somebody looking
+    /// at the app, and the banner that said "your brief is ready" went off at
+    /// the firing on its own. What a foreground collection adds is the run
+    /// record — the line on the routine's card — and the brief itself, which
+    /// Today rewrites once it sees a brief routine has fired since it last
+    /// wrote (`AppModel.briefRoutineFired(since:now:)`).
+    private func runBrief(of task: ScheduledTask, firing: Date, context: ExecutionContext) async -> Completion? {
+        let sentence = await BriefNotice.sentence(now: now(), calendar: calendar())
+        let run = BriefNotice.run(sentence: sentence, firing: firing, ranAt: now(), context: context)
+        return await settle(run, of: task, context: context)
     }
 
     // MARK: - Prompts
@@ -349,7 +367,12 @@ final class ScheduleRunner {
             )
         }
 
-        let answer = produced.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A small brain handed an instruction sometimes prints it back as the
+        // answer — the walkthrough found SmolLM2 doing exactly that on Today —
+        // and a stored run is shown on a card for weeks. The echoed sentences
+        // go; an answer that was mostly echo is no answer (spec §5b).
+        let cleaned = PromptEcho.clean(produced.text, against: request.messages)
+        let answer = cleaned.isMostlyEcho ? "" : cleaned.text.trimmingCharacters(in: .whitespacesAndNewlines)
         // A generation that stopped cleanly having said nothing is a failure,
         // not "nothing to report". That outcome means the rule ran and the day
         // was genuinely empty, and a prompt task has no such reading — the

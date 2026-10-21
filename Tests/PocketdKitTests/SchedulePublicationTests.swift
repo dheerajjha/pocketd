@@ -143,6 +143,26 @@ struct SchedulePublicationTests {
         #expect(watcherPublished.next?.needsModel == false)
     }
 
+    @Test("a brief arrives on its own: not 'needs the app open', and never waiting")
+    func briefNeedsNothing() throws {
+        // The morning brief used to be a prompt, and the widget said so —
+        // "Needs the app open" under the one routine most people have. As
+        // Today's brief announced at its hour, it needs nothing, and its
+        // banner sentence is no more allowed on a home screen than any run.
+        var brief = ScheduledTask(
+            title: "Morning brief", body: .brief,
+            recurrence: .daily(at: Self.seven), createdAt: Self.now.addingTimeInterval(-86_400)
+        )
+        brief.runs = [.reported(firing: Self.now, ranAt: Self.now, context: .backgroundRefresh,
+                                output: Untrusted("Your next event is at 1:00 PM."))]
+        let published = SchedulePublication.make(from: [brief], now: Self.now, calendar: Self.calendar)
+        #expect(published.next?.title == "Morning brief")
+        #expect(published.next?.needsModel == false)
+        #expect(published.waitingCount == 0)
+        #expect(published.latest?.standing == .reported)
+        #expect(!(try encoded(published)).contains("1:00 PM"))
+    }
+
     // MARK: - The store
 
     @Test("a publication survives a round trip through the file")

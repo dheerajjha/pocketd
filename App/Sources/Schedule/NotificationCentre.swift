@@ -110,6 +110,49 @@ final class NotificationCentre {
         await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
     }
 
+    // MARK: - After a change
+
+    /// The tail of the queue below.
+    @ObservationIgnored private var bookkeeping: Task<Void, Never>?
+
+    /// Runs notification work after a change to the schedule, one piece at a
+    /// time and never on the caller's clock.
+    ///
+    /// Never awaited by a screen, because every call in here is a round trip
+    /// to the notification daemon and the screen's own work is already done
+    /// by the time this starts: the routine is on disk. A simulator whose
+    /// daemon had stopped answering showed what awaiting costs — "Set it up"
+    /// wrote the first routine, waited forever on a settings read, never added
+    /// the second, and never closed. A save is a save; the arming follows it.
+    ///
+    /// One at a time because the pieces read the schedule when they run, and
+    /// two quick changes re-arming in the wrong order is a notification for a
+    /// routine that was just deleted: an older pass re-adding the request a
+    /// newer pass had removed.
+    func enqueue(_ work: @escaping @MainActor () async -> Void) {
+        let previous = bookkeeping
+        bookkeeping = Task { @MainActor in
+            await previous?.value
+            await work()
+        }
+    }
+
+    /// The bookkeeping every change to the schedule owes: the permission the
+    /// first routine needs, then the armed notifications.
+    ///
+    /// Permission is asked at a save and nowhere else, and only while iOS has
+    /// never been asked — `requestAuthorization` shows nothing once the person
+    /// has answered either way. `tasks` is read when the arming runs, so it
+    /// arms the schedule as it is then rather than as it was when asked.
+    func scheduleChanged(askingPermission: Bool, tasks: @escaping @MainActor () -> [ScheduledTask]) {
+        enqueue { [self] in
+            if askingPermission, await authorizationStatus() == .notDetermined {
+                _ = await requestAuthorization()
+            }
+            await reconcile(tasks())
+        }
+    }
+
     // MARK: - Arming
 
     /// Brings the pending notifications into line with the schedule as it now
@@ -176,13 +219,23 @@ final class NotificationCentre {
     /// missed firing collapses into one owed run.
     private func arm(_ task: ScheduledTask, at firing: Date, calendar: Calendar) async {
         let content = UNMutableNotificationContent()
-        content.title = bannerTitle(for: task)
-        content.body = switch task.body {
+        switch task.body {
         case .watcher:
-            "Due now. Tap to see it."
+            content.title = bannerTitle(for: task)
+            content.body = "Due now. Tap to see it."
         case .prompt:
-            // Says the constraint out loud, in the one place a user meets it.
-            "Due now. Tap to run it — Pocketd can only think while it is open."
+            // Not "Pocketd can only think while it is open", which is what
+            // this said in v2: a sentence about the engine on the lock screen,
+            // read every morning by somebody who cannot do anything about it.
+            // The tap is what writes it, so the tap is what the line offers.
+            content.title = bannerTitle(for: task)
+            content.body = Self.questionBody
+        case .brief:
+            // "Your morning brief is ready." and nothing under it. Armed hours
+            // or days ahead, this trigger cannot know the day it lands on; a
+            // background refresh that reads it replaces the banner with one
+            // that has the day's shape in it — see `announceBrief`.
+            content.title = BriefRoutine.headline(for: task)
         }
         content.sound = .default
         // Groups a task's notifications into one thread, so a daily watcher is
@@ -296,8 +349,31 @@ final class NotificationCentre {
     func announceAwaitingForeground(_ task: ScheduledTask, firing: Date) async {
         let alreadyTold = await armAlreadyFired(for: task, firing: firing)
         guard !alreadyTold else { return }
-        await post("Due now. Tap to run it — Pocketd can only think while it is open.",
-                   of: task, firing: firing, alreadyTold: false)
+        await post(Self.questionBody, of: task, firing: firing, alreadyTold: false)
+    }
+
+    /// The line under a routine that asks Pocketd a question.
+    private static let questionBody = "Tap to read it."
+
+    /// Announces a brief routine whose day a background refresh managed to
+    /// read.
+    ///
+    /// The headline is the armed banner's own ("Your morning brief is ready."),
+    /// so a replacement reads as the same notification having filled in rather
+    /// than as a second one. With no sentence to add and the armed banner
+    /// already delivered, it says nothing: the user has been told everything
+    /// this refresh learned. See `BriefRoutine` for why the sentence carries no
+    /// titles.
+    func announceBrief(_ task: ScheduledTask, firing: Date, sentence: String?) async {
+        let alreadyTold = await armAlreadyFired(for: task, firing: firing)
+        guard sentence != nil || !alreadyTold else { return }
+        await post(
+            sentence ?? "",
+            title: BriefRoutine.headline(for: task),
+            of: task,
+            firing: firing,
+            alreadyTold: alreadyTold
+        )
     }
 
     /// Delivers now, and decides how loudly.
@@ -310,10 +386,16 @@ final class NotificationCentre {
     /// answer instead of the invitation, with no second alert. When there was no
     /// arm — the refresh beat the trigger, or the task was armed after its
     /// firing — this *is* the announcement and it alerts normally.
-    private func post(_ body: String, of task: ScheduledTask, firing: Date, alreadyTold: Bool) async {
+    private func post(
+        _ body: String,
+        title: String? = nil,
+        of task: ScheduledTask,
+        firing: Date,
+        alreadyTold: Bool
+    ) async {
         let centre = UNUserNotificationCenter.current()
         let content = UNMutableNotificationContent()
-        content.title = bannerTitle(for: task)
+        content.title = title ?? bannerTitle(for: task)
         content.body = body
         content.threadIdentifier = task.id.uuidString
         content.userInfo = [Self.taskKey: task.id.uuidString]
@@ -382,6 +464,13 @@ final class NotificationCentre {
     /// Clearing on read rather than on handling is deliberate: a tap that is
     /// picked up twice runs the task twice, and there is no cheap way for the
     /// second reader to know the first one is already working on it.
+    ///
+    /// The shell does not call this directly: `AppModel.takeRoutineTap()`
+    /// does, and answers with where the tap should land — Today for a brief,
+    /// the routine's result page for anything else. The shell watches
+    /// `requestedTask` (it is observable) and asks on appearance, so a tap
+    /// that launched the app from cold and one that arrived while it was open
+    /// both get there.
     func takeRequestedTask() -> UUID? {
         defer { requestedTask = nil }
         return requestedTask

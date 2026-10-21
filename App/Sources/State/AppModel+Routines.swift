@@ -1,75 +1,222 @@
 import Foundation
 import PocketdKit
 
+// MARK: - Where a notification tap lands
+
+/// Where a tap on a routine's notification should take the person.
+///
+/// Decided here rather than in the shell, because the answer depends on what
+/// the routine is and the shell should not have to know: a brief's result *is*
+/// Today's brief, so a brief goes to Today; anything else has a result of its
+/// own, on its own page.
+enum RoutineTapDestination: Equatable, Sendable {
+    /// Pop to Today. The brief is being (re)written there.
+    case today
+    /// Push `RoutineResultView(taskID:)`.
+    case result(UUID)
+    /// The routine was deleted after its notification was delivered. The list
+    /// is the honest place to land: the thing tapped no longer exists.
+    case routines
+}
+
 // MARK: - Routines
 
-/// The three things the Routines tab asks of the app, and nothing else.
+/// What the Routines screen, the shell and onboarding ask of the app about
+/// routines.
 ///
-/// An extension rather than members on `AppModel` because everything here is a
-/// thin arrangement of machinery that already exists — `RoutineTemplate` builds
-/// the task, `saveScheduledTask` persists it and arms its notification,
-/// `sweepSchedule` runs what is owed. Keeping the arrangement out of the
-/// four-thousand-line file is the point; there is no new state here and there
-/// must not be, because a second copy of "what is scheduled" is how a screen
+/// A thin arrangement of machinery that already exists — `RoutineTemplate`
+/// builds a routine, `RoutineDraft` edits one, `AppModel+Schedule` stores, arms
+/// and sweeps — kept out of the views so that the paths a routine takes into
+/// the store are the same from every screen. There is no new copy of "what is
+/// scheduled" here and there must not be, because a second copy is how a screen
 /// and a scheduler come to disagree.
 @MainActor
 extension AppModel {
 
-    /// Creates a routine from one of the offered templates and saves it.
+    // MARK: Adding
+
+    /// The routine a template already has on this phone, if any.
+    func existingRoutine(for template: RoutineTemplate) -> ScheduledTask? {
+        scheduledTasks.first { RoutineTemplate.matching($0) == template }
+    }
+
+    /// Adds a template's routine in one tap, with its own defaults.
     ///
-    /// The one call the templates grid and the onboarding step both make. It
-    /// goes through `saveScheduledTask` rather than to the store, and that is
-    /// load-bearing rather than tidy: that method is what asks for notification
-    /// permission at the first routine and what arms the trigger afterwards. A
-    /// routine written straight to disk is saved correctly, sits in the list
-    /// looking scheduled, and never notifies anybody — which is the exact bug
-    /// `ScheduleDraft(_ starter:)` was written to avoid in v1.
+    /// Through `saveScheduledTask`, which is load-bearing rather than tidy:
+    /// that is what asks for notification permission and arms the trigger. A
+    /// routine written straight to disk sits in the list looking scheduled and
+    /// never notifies anybody.
     ///
-    /// - Parameter time: Overrides the template's own default. The editor and
-    ///   the onboarding time picker pass one; a tap on a template card does
-    ///   not.
-    /// - Returns: The saved task, so a caller that wants to open it — the
-    ///   editor, prefilled — does not have to search the list for what it just
-    ///   made.
+    /// - Returns: The saved routine, or `nil` when it did not reach the disk.
     @discardableResult
-    func createRoutine(
-        from template: RoutineTemplate,
+    func addRoutine(
+        _ template: RoutineTemplate,
         at time: TimeOfDay? = nil,
         weekdaysOnly: Bool = true
-    ) async -> ScheduledTask {
+    ) async -> ScheduledTask? {
         let task = template.task(time: time, weekdaysOnly: weekdaysOnly)
-        await saveScheduledTask(task)
+        guard await saveScheduledTask(task) else { return nil }
         record(.routineCreated(template: template.origin))
         return task
     }
 
-    /// Prompt runs that were promised and have not been written yet.
+    /// The morning brief at this time: made the first time, moved after that.
     ///
-    /// The number on Today's bell and on the results row at the top of
-    /// Routines. `ScheduleSummary.pending` is the single reading — it is
-    /// `ScheduledTask.pendingRun` per task, which is what decides whether an
-    /// uncollected 07:00 is still worth collecting — so this is a count and not
-    /// a second opinion.
-    var pendingResultsCount: Int {
-        ScheduleSummary.pending(in: scheduledTasks).count
+    /// For the intro's morning-brief step and the Routines promo. A replayed
+    /// intro used to leave a second "Morning brief" behind every time it was
+    /// finished; this one finds the first and changes its hour and days
+    /// instead, and switches it back on if it had been paused.
+    @discardableResult
+    func setUpMorningBrief(
+        at time: TimeOfDay = RoutineTemplate.morningBrief.defaultTime,
+        weekdaysOnly: Bool = true
+    ) async -> ScheduledTask? {
+        guard let existing = existingRoutine(for: .morningBrief) else {
+            return await addRoutine(.morningBrief, at: time, weekdaysOnly: weekdaysOnly)
+        }
+        var draft = RoutineDraft(existing)
+        draft.kind = .brief
+        draft.repeats = .weekly
+        draft.days = weekdaysOnly ? Weekday.workdays : Set(Weekday.allCases)
+        draft.time = RoutineDraft.date(from: time)
+        draft.isEnabled = true
+        let edit = draft
+        let now = Date()
+        return await updateScheduledTask(existing.id) { edit.apply(to: &$0, now: now) }
     }
 
-    /// Writes whatever is owed, here, now, with somebody watching.
+    // MARK: Editing
+
+    /// Saves what the editor holds. Returns whether it reached the disk.
     ///
-    /// Deliberately not `runNow(_ task:)`. There is no per-task trigger in this
-    /// app and adding one would be a second scheduler: `ScheduleDispatch.plan`
-    /// decides what a task may do in a context, it is a pure function, and it
-    /// is tested exhaustively so that nothing can quietly disagree with it. A
-    /// "run this one now" button would have to either ignore that function —
-    /// running a routine that is not due, which is not what the row promises —
-    /// or call it and do nothing for every task but the ones a sweep would have
-    /// picked up anyway.
+    /// An edit is applied inside the store's `update` — onto the routine as it
+    /// is on disk at that instant, not as it was when the editor opened — so a
+    /// run a background refresh settled while the editor was open survives the
+    /// save. An edit whose routine has disappeared underneath it (delete
+    /// everything, on the Privacy screen, with the editor open) is written back
+    /// under its original id rather than lost.
+    func saveRoutine(_ draft: RoutineDraft) async -> Bool {
+        let now = Date()
+        if let id = draft.taskID, await updateScheduledTask(id, { draft.apply(to: &$0, now: now) }) != nil {
+            return true
+        }
+        let task = draft.newTask(now: now)
+        guard await saveScheduledTask(task) else { return false }
+        // Recorded here, at the save, because a routine from scratch does not
+        // exist until now. `origin` is nil for Custom, which is what `.custom`
+        // is for.
+        record(.routineCreated(template: draft.origin?.origin ?? .custom))
+        return true
+    }
+
+    /// The card's switch. Resuming skips what was missed while it was off —
+    /// the rule lives on `ScheduledTask.setEnabled`, shared with the editor.
+    func setRoutineEnabled(_ enabled: Bool, id: UUID) async {
+        let now = DemoClock.now
+        await updateScheduledTask(id) { $0.setEnabled(enabled, at: now) }
+    }
+
+    // MARK: Notification taps
+
+    /// Takes the outstanding notification tap and says where it goes.
     ///
-    /// So the results row runs the sweep, in `.foreground`, which is exactly
-    /// what the app already does on the way back from the app switcher. The
-    /// only difference is that the person asked for it.
-    func writePendingResults() {
-        sweepSchedule(in: .foreground)
+    /// For the shell to call when it appears and whenever
+    /// `NotificationCentre.shared.requestedTask` changes. A brief goes to Today
+    /// and has its brief rewritten there — the tap is the person asking for
+    /// it. Anything else goes to its result page, and the sweep runs in the
+    /// context the tap was promised: a question that came due while the app
+    /// was closed is written now, with the person looking at the page it will
+    /// appear on.
+    func takeRoutineTap() async -> RoutineTapDestination? {
+        guard let id = NotificationCentre.shared.takeRequestedTask() else { return nil }
+        // The store rather than the list: on a cold launch from the banner
+        // this can run before `bootstrap` has read the list for the first time.
+        guard let task = await tasks.task(id) else { return .routines }
+        if case .brief = task.body {
+            Task { await self.refreshBrief(force: true) }
+            sweepSchedule(in: .notificationResponse)
+            return .today
+        }
+        sweepSchedule(in: .notificationResponse)
+        return .result(id)
+    }
+
+    // MARK: Today's brief
+
+    /// The latest moment a brief routine came due at or before `now`.
+    ///
+    /// Worked out from the schedule rather than from run records, so it does
+    /// not wait for a sweep to have settled anything: the 21:00 wrap-up has
+    /// fired at 21:00 whether or not anything has been written down about it.
+    func latestBriefFiring(onOrBefore now: Date, calendar: Calendar = .current) -> Date? {
+        scheduledTasks
+            .filter { $0.isEnabled && $0.body == .brief }
+            .compactMap { task -> Date? in
+                guard let last = FireSequence.last(onOrBefore: now, of: task.recurrence, calendar: calendar),
+                      last >= task.createdAt
+                else { return nil }
+                return last
+            }
+            .max()
+    }
+
+    /// Whether a brief routine has fired since a brief was written.
+    ///
+    /// The rule that makes "Evening wrap-up, 21:00" produce an evening brief:
+    /// Today keeps a brain-written brief for the rest of the day unless asked
+    /// again, and a brief routine firing *is* being asked again. For
+    /// `refreshBrief` to treat a brief written before the latest firing as
+    /// stale.
+    func briefRoutineFired(since written: Date, now: Date, calendar: Calendar = .current) -> Bool {
+        guard let last = latestBriefFiring(onOrBefore: now, calendar: calendar) else { return false }
+        return last > written
+    }
+
+    // MARK: Results somebody has not seen
+
+    /// Results routines have written since Routines was last open, newest
+    /// first.
+    ///
+    /// What earns Today's ⏰ its badge, and what a Today card can lead with.
+    /// Briefs are left out — a brief's result is the brief, already on Today —
+    /// and so are "nothing to report" and the promises still being written:
+    /// neither is something to go and read.
+    var unreadRoutineResults: [(task: ScheduledTask, run: TaskRun)] {
+        guard let seen = RoutineInbox.shared.lastSeen else { return [] }
+        return scheduledTasks
+            .filter { $0.body != .brief }
+            .flatMap { task in
+                task.runs
+                    .filter { run in
+                        guard run.ranAt > seen else { return false }
+                        switch run.outcome {
+                        case .reported, .unauthorized, .failed: return true
+                        case .nothingToReport, .awaitingForeground: return false
+                        }
+                    }
+                    .map { (task: task, run: $0) }
+            }
+            .sorted { $0.run.ranAt > $1.run.ranAt }
+    }
+
+    /// Everything routines have said counts as seen from now.
+    func markRoutineResultsSeen() {
+        RoutineInbox.shared.markSeen()
+    }
+
+    // MARK: Writing
+
+    /// Whether a question's answer is owed and is being — or is about to be —
+    /// written.
+    ///
+    /// Owed means the run was promised in the background and not collected,
+    /// or the firing has come and gone with the app open. The Routines screen
+    /// sweeps on appearance, so a card that says "Writing…" is a card whose
+    /// answer is genuinely on its way: written by the brain, or filed as a
+    /// failure that says why not.
+    func isWritingRoutine(_ task: ScheduledTask, now: Date = Date()) -> Bool {
+        guard task.isEnabled, task.body.needsModel else { return false }
+        return task.pendingRun(now: now) != nil || task.dueness(now: now).isDue
     }
 }
 
@@ -93,18 +240,5 @@ extension RoutineTemplate {
         case .overdueWatcher: .overdueWatcher
         case .sleepWatcher: .sleepWatcher
         }
-    }
-
-    /// The template a saved task came from, if any.
-    ///
-    /// Matched on the title, which is the only thing a `ScheduledTask` carries
-    /// that could say. That is a deliberate limit rather than an oversight: a
-    /// stored `template` field would be a second source of truth about a task
-    /// the user is free to rename, retime and rewrite until it has nothing to
-    /// do with the card it started from, and the one thing it is used for here
-    /// — not offering a routine somebody already has — is better served by the
-    /// name they are looking at than by a provenance they cannot see.
-    static func matching(_ task: ScheduledTask) -> RoutineTemplate? {
-        allCases.first { $0.title.caseInsensitiveCompare(task.title) == .orderedSame }
     }
 }

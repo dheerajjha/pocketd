@@ -58,6 +58,14 @@ public struct WidgetBriefStore: Sendable {
             // Atomic, because a widget may read this at any instant and a
             // half-written file decodes as nothing rather than as less.
             try data.write(to: fileURL, options: .atomic)
+            // The brief quotes the day — event times, sleep — so it stays off
+            // iCloud Backup like the app's own copy (`DailyBrief`). Set after
+            // every write: an atomic write replaces the file, and the flag
+            // belongs to the file it was set on.
+            var fileToMark = fileURL
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try? fileToMark.setResourceValues(values)
             return true
         } catch {
             return false

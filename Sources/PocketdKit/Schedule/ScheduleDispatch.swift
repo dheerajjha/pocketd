@@ -7,6 +7,10 @@ public enum TaskWork: Sendable, Equatable {
     /// Feed this to the engine. Only ever produced for a context where
     /// `ExecutionContext.mayRunModel` is true — see `ScheduleDispatch`.
     case prompt(PromptHandoff)
+    /// Say the brief is ready, with whatever the day's rows allow. Possible in
+    /// every context, like a watcher: the sentence is a template over EventKit
+    /// rows and the brain only rewrites it later, on Today.
+    case brief
 }
 
 /// What to do with one task, right now, in this context.
@@ -27,10 +31,10 @@ public enum RunPlan: Sendable, Equatable {
 
 /// Decides what can be done with a task in a given execution context.
 ///
-/// The entire interesting content of this type is four lines long, and they
-/// encode the constraint the feature is built around: a watcher runs anywhere,
-/// a prompt runs anywhere but the background, and the background is where most
-/// firings land because that is where phones spend their time.
+/// The entire interesting content of this type is a few lines long, and they
+/// encode the constraint the feature is built around: a watcher and a brief run
+/// anywhere, a prompt runs anywhere but the background, and the background is
+/// where most firings land because that is where phones spend their time.
 ///
 /// It is a pure function of a task, a context and a clock, with no I/O, so the
 /// behaviour that actually matters — a prompt task never, under any
@@ -66,6 +70,13 @@ public enum ScheduleDispatch {
             // No model, no GPU, no foreground requirement. This is the case
             // that makes scheduled tasks worth shipping on a phone at all.
             return .run(.watcher(rule, notifyWhenEmpty: notifyWhenEmpty), firing: owed, missed: dueness.missed)
+
+        case .brief:
+            // The same in every context, for the watcher's reason: announcing
+            // a brief needs rows and a template, never the GPU. Missed firings
+            // collapse like everyone else's — three mornings in a drawer are
+            // one "your brief is ready", not three.
+            return .run(.brief, firing: owed, missed: dueness.missed)
 
         case .prompt:
             guard context.mayRunModel, let handoff = task.handoff(firing: owed) else {

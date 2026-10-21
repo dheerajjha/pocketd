@@ -112,38 +112,61 @@ struct RoutineTemplateTests {
         #expect(task.handoff(firing: Self.fridayAfternoon) == nil)
     }
 
-    @Test("the three briefs are prompts, and ask for what the brief actually is")
-    func promptsAreWorthReading() {
-        for template in [RoutineTemplate.morningBrief, .eveningWrapUp, .weeklyReview] {
-            guard case let .prompt(text) = template.body else {
-                Issue.record("\(template) should be a prompt")
-                continue
-            }
-            #expect(text.contains("sentences"))
-            #expect(text.contains("No lists"))
-            // The instruction that stops a small model filling a quiet day with
-            // meetings nobody has.
-            #expect(text.contains("Only mention things you actually found"))
-            #expect(template.task(now: Self.fridayAfternoon, calendar: Self.calendar).body.needsModel)
+    @Test("the morning brief and the evening wrap-up are briefs, not prompts")
+    func briefsAreBriefs() {
+        // One concept of brief: the paragraph on Today, announced at the hour
+        // chosen. A prompt here would be the v2 bug again — a second morning
+        // paragraph, on a different screen, that needed a tool-capable brain
+        // and the app open before it could say anything at all.
+        for template in [RoutineTemplate.morningBrief, .eveningWrapUp] {
+            let task = template.task(now: Self.fridayAfternoon, calendar: Self.calendar)
+            #expect(task.body == .brief, "\(template) should be a brief")
+            #expect(task.body.needsModel == false)
+            #expect(task.handoff(firing: Self.fridayAfternoon) == nil)
         }
-        guard case let .prompt(morning) = RoutineTemplate.morningBrief.body else { return }
-        #expect(morning.contains("two or three sentences"))
-        #expect(morning.contains("how I slept"))
+    }
+
+    @Test("the weekly review asks the brain, and asks for something worth reading")
+    func weeklyReviewIsAWorthwhilePrompt() {
+        guard case let .prompt(text) = RoutineTemplate.weeklyReview.body else {
+            Issue.record("the weekly review should be a prompt")
+            return
+        }
+        #expect(text.contains("sentences"))
+        #expect(text.contains("No lists"))
+        // The instruction that stops a small model filling a quiet week with
+        // meetings nobody has.
+        #expect(text.contains("Only mention things you actually found"))
+        #expect(RoutineTemplate.weeklyReview.task(now: Self.fridayAfternoon, calendar: Self.calendar).body.needsModel)
     }
 
     @Test("a card is only offered if it can keep the promise in its own name")
     func sleepWatcherIsNotOffered() {
         // `WatcherRule` has `.events` and `.reminders` and nothing for health,
         // because a watcher is defined by being able to finish in a background
-        // refresh with no GPU. So "sleep watcher" can only be built as a prompt
+        // refresh with no GPU. So a sleep check can only be built as a prompt
         // today, and a prompt arrives when the user next opens the app — which
-        // is not what the word watcher promises.
+        // is not what a nudge promises.
         #expect(RoutineTemplate.sleepWatcher.body.needsModel)
         #expect(!RoutineTemplate.offered.contains(.sleepWatcher))
-        #expect(RoutineTemplate.offered == [.morningBrief, .eveningWrapUp, .weeklyReview, .overdueWatcher])
+        // A day, then a week: the two briefs, the nudge between them, the
+        // Sunday review.
+        #expect(RoutineTemplate.offered == [.morningBrief, .eveningWrapUp, .overdueWatcher, .weeklyReview])
         // Still written and still tested, ready for the day `WatcherRule` grows
         // a health case.
         #expect(RoutineTemplate.allCases.contains(.sleepWatcher))
+    }
+
+    @Test("the overdue template is called a nudge, and its old name still finds it")
+    func overdueIsANudge() {
+        #expect(RoutineTemplate.overdueWatcher.title == "Overdue nudge")
+        var legacy = RoutineTemplate.overdueWatcher.task(now: Self.fridayAfternoon, calendar: Self.calendar)
+        legacy.title = "Overdue watcher"
+        #expect(RoutineTemplate.matching(legacy) == .overdueWatcher)
+        legacy.title = "  overdue NUDGE "
+        #expect(RoutineTemplate.matching(legacy) == .overdueWatcher)
+        legacy.title = "Something of my own"
+        #expect(RoutineTemplate.matching(legacy) == nil)
     }
 
     // MARK: - Copy
@@ -161,8 +184,9 @@ struct RoutineTemplateTests {
     @Test("no card says a word the consumer screens are not allowed to use")
     func copyStaysOutOfTheJargon() {
         // The v2 rule: never model, token, inference, prompt or GGUF on a top
-        // level screen. The templates grid is one.
-        let banned = ["model", "GGUF", "token", "inference", "prompt", "LLM"]
+        // level screen, and (spec §8) never watcher, task, schedule or brain on
+        // Routines. The templates sheet is one.
+        let banned = ["model", "GGUF", "token", "inference", "prompt", "LLM", "watcher", "task", "schedule", "brain"]
         for template in RoutineTemplate.allCases {
             let copy = (template.title + " " + template.blurb).lowercased()
             for word in banned {

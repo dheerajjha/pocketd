@@ -123,7 +123,9 @@ struct ScheduleWatcherTests {
             Issue.record("expected an unreadable result")
             return
         }
-        #expect(authorization.explanation(for: entity).contains("Privacy & Security > Calendars"))
+        // The glossary's spelling of the path (spec §8): "Settings › Privacy &
+        // Security › <X>".
+        #expect(authorization.explanation(for: entity).contains("Privacy & Security › Calendars"))
     }
 
     @Test("write-only calendar access is reported as unreadable, not as granted")

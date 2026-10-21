@@ -74,10 +74,54 @@ struct ScheduleDispatchTests {
                 #expect(context.mayRunModel, "a prompt task was dispatched into \(context.rawValue)")
             case .notify:
                 #expect(context.mayRunModel == false, "\(context.rawValue) can think and was told to notify instead")
-            case .run(.watcher, _, _), .idle:
+            case .run(.watcher, _, _), .run(.brief, _, _), .idle:
                 Issue.record("a due prompt task produced neither a run nor a notification in \(context.rawValue)")
             }
         }
+    }
+
+    // MARK: - Briefs
+
+    private static func brief() -> ScheduledTask {
+        ScheduledTask(title: "Morning brief", body: .brief, recurrence: .daily(at: seven), createdAt: created)
+    }
+
+    @Test("a due brief runs in every context, the background included")
+    func briefRunsEverywhere() {
+        // The point of making the morning brief a brief: its notification is
+        // the run, and a notification needs no GPU. A background refresh
+        // that could only *notify* a brief would be the old prompt routine
+        // again, waiting on somebody to open the app.
+        for context in ExecutionContext.allCases {
+            #expect(
+                plan(Self.brief(), context) == .run(.brief, firing: Self.firstFiring, missed: 0),
+                "a brief was not run in \(context.rawValue)"
+            )
+        }
+    }
+
+    @Test("a brief needs no model, and has no prompt to hand over")
+    func briefNeedsNoModel() {
+        #expect(Self.brief().body.needsModel == false)
+        #expect(Self.brief().handoff(firing: Self.firstFiring) == nil)
+    }
+
+    @Test("a brief that is not due, or is paused, is idle")
+    func briefIdles() {
+        let early = Self.date(2026, 9, 15, 6, 59)
+        #expect(plan(Self.brief(), .backgroundRefresh, now: early) == .idle(next: Self.firstFiring))
+        var paused = Self.brief()
+        paused.isEnabled = false
+        #expect(plan(paused, .foreground) == .idle(next: nil))
+    }
+
+    @Test("three missed mornings are one brief")
+    func missedBriefsCollapse() {
+        let threeDaysLater = Self.date(2026, 9, 17, 7, 5)
+        #expect(
+            plan(Self.brief(), .backgroundRefresh, now: threeDaysLater)
+                == .run(.brief, firing: Self.date(2026, 9, 17, 7, 0), missed: 2)
+        )
     }
 
     @Test("a due prompt task in the background is notified, not run")

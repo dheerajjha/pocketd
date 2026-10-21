@@ -85,11 +85,28 @@ enum BackgroundWake {
         }
     }
 
-    /// Asks iOS to wake the app for the next firing.
+    /// Re-arms every routine's notification and asks iOS to wake the app for
+    /// the next firing. Called each time the app leaves the screen.
+    ///
+    /// The re-arm is the half that matters most and the one that used to be
+    /// left to chance. A routine's trigger is non-repeating, so once this
+    /// morning's brief has fired, tomorrow's exists only after something
+    /// re-arms it — and the foreground sweep that does is cancelled the moment
+    /// the app backgrounds. A person who taps the banner, reads Today for three
+    /// seconds and leaves would otherwise get no brief tomorrow. Arming from
+    /// the store on the way out makes "leaving the app leaves every routine
+    /// armed" true whatever happened while it was open.
     ///
     /// Fire-and-forget, for the call sites that are not `async` — scene phase,
-    /// and the save of a task. The work is small and the result is advisory.
+    /// and the save of a task. Both halves are a handful of calls and finish
+    /// well inside the seconds iOS allows after backgrounding.
     static func scheduleNextRefresh() {
+        // Through the centre's queue, so it cannot overtake a re-arm from a
+        // change made a moment before leaving the app, and reading the store
+        // when it runs rather than when it was asked.
+        Task { @MainActor in
+            NotificationCentre.shared.enqueue { await NotificationCentre.shared.reconcile(await store.all()) }
+        }
         Task { await submitRefresh() }
     }
 
@@ -153,14 +170,20 @@ enum BackgroundWake {
                 continue
 
             case .run(let work, let firing, _):
-                // Only ever `.watcher` here, and that is the type system's
-                // statement rather than this file's: `ScheduleDispatch` will not
-                // produce prompt work for a context whose `mayRunModel` is
-                // false. Restated as a guard because the alternative is a
-                // default branch that silently does nothing if the two ever
-                // disagree.
-                guard case .watcher(let rule, let notifyWhenEmpty) = work else { continue }
-                await settle(rule, of: task, firing: firing, notifyWhenEmpty: notifyWhenEmpty, now: now, calendar: calendar)
+                switch work {
+                case .watcher(let rule, let notifyWhenEmpty):
+                    await settle(rule, of: task, firing: firing, notifyWhenEmpty: notifyWhenEmpty, now: now, calendar: calendar)
+                case .brief:
+                    await settleBrief(task, firing: firing, now: now, calendar: calendar)
+                case .prompt:
+                    // Unreachable, and that is the type system's statement
+                    // rather than this file's: `ScheduleDispatch` will not
+                    // produce prompt work for a context whose `mayRunModel` is
+                    // false. A case that does nothing rather than a trap,
+                    // because the cost of the two ever disagreeing should be
+                    // one firing left owed, not a background launch killed.
+                    continue
+                }
 
             case .notify(let firing, _):
                 // A prompt task came due where it cannot think. The promise is
@@ -231,6 +254,22 @@ enum BackgroundWake {
         await NotificationCentre.shared.announce(
             result, of: task, firing: firing, notifyWhenEmpty: notifyWhenEmpty
         )
+    }
+
+    /// Reads the day for a brief routine and puts one sentence under "your
+    /// brief is ready".
+    ///
+    /// This is the "when it could be computed in the background" half of the
+    /// brief routine: the armed trigger has already said the brief is ready,
+    /// on time, with nothing else in it, and a refresh that lands after it
+    /// quietly turns that banner into one with the day's shape in it. Health is
+    /// not read — see `BriefRoutine.snapshot` — so the sentence is calendar and
+    /// list, which is what a locked phone can actually answer.
+    private static func settleBrief(_ task: ScheduledTask, firing: Date, now: Date, calendar: Calendar) async {
+        let sentence = await BriefNotice.sentence(now: now, calendar: calendar)
+        let run = BriefNotice.run(sentence: sentence, firing: firing, ranAt: now, context: .backgroundRefresh)
+        _ = try? await store.update(task.id) { $0.settle(run, at: now) }
+        await NotificationCentre.shared.announceBrief(task, firing: firing, sentence: sentence)
     }
 
     // MARK: - Asking to be woken

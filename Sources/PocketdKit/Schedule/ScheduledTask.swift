@@ -21,6 +21,15 @@ import Foundation
 /// is no function in this package that turns text into an answer. Nothing in
 /// PocketdKit can accidentally try to think in the background, because the
 /// machinery to think is not here.
+///
+/// The third case, **brief**, is the Today brief arriving at a time the user
+/// chose. It exists because v2 shipped two unrelated things called "brief": the
+/// paragraph on Today, written from a snapshot of the day by whatever brain is
+/// loaded or by the template, and a "Morning brief" routine that was a free-text
+/// prompt needing a tool-capable brain *and* the app open, whose answer landed
+/// on a different screen. Now there is one. A brief routine needs no model to
+/// arrive — its notification is on time and says the brief is ready — and the
+/// writing happens where the brief already lives, on Today.
 public enum TaskBody: Sendable, Codable, Equatable {
 
     /// - Parameter notifyWhenEmpty: Whether "nothing today" is worth a
@@ -39,10 +48,22 @@ public enum TaskBody: Sendable, Codable, Equatable {
     /// owns the phone. Everything a task *reads* is `Untrusted`.
     case prompt(String)
 
+    /// Today's brief, announced at the routine's time.
+    ///
+    /// No payload, deliberately. What the brief says is decided where it is
+    /// written — `BriefPrompt` and the Today screen — and a copy of its
+    /// instructions stored per routine is exactly how v2 ended up with a morning
+    /// paragraph on Routines that disagreed with the one on Today.
+    case brief
+
     /// Whether running this requires the GPU, and therefore the foreground.
+    ///
+    /// False for a brief. Its notification is the run, and the sentence it
+    /// carries is assembled from the day's rows by a template — the brain only
+    /// rewrites it later, on Today, with somebody looking.
     public var needsModel: Bool {
         switch self {
-        case .watcher: false
+        case .watcher, .brief: false
         case .prompt: true
         }
     }
@@ -238,6 +259,23 @@ public struct ScheduledTask: Sendable, Codable, Equatable, Identifiable {
     public var lastCompletedRun: TaskRun? {
         runs.last { !$0.isAwaitingForeground }
     }
+
+    /// Pauses or resumes, the one way both the card's switch and the editor
+    /// do it.
+    ///
+    /// Resuming skips what was missed while it was off. A daily 09:00 routine
+    /// switched off for a week's holiday and back on at 14:00 has seven
+    /// unsettled firings behind it, the most recent being this morning's — so
+    /// without this the reward for coming home is an immediate notification
+    /// about something due five hours ago. `settledThrough` makes the same
+    /// argument for a routine created after its hour; a resume is that moment.
+    public mutating func setEnabled(_ enabled: Bool, at moment: Date = Date()) {
+        if enabled, !isEnabled {
+            settledThrough = max(settledThrough, moment)
+        }
+        isEnabled = enabled
+        updatedAt = moment
+    }
 }
 
 // MARK: - Persistence
@@ -276,6 +314,13 @@ extension ScheduledTask {
         settledThrough = try container.decodeIfPresent(Date.self, forKey: .settledThrough) ?? created
         runs = (try? container.decodeIfPresent([LossyRun].self, forKey: .runs))?
             .compactMap(\.run) ?? []
+        // On every read rather than once, and that is what makes it safe: the
+        // background refresh and the app both read through here, neither can
+        // see the other's progress, and a migration that is idempotent and
+        // runs at decode needs no flag, no version number and no ordering
+        // between processes. The file catches up at its next save or settle.
+        // See `RoutineMigration` for what changes and why.
+        RoutineMigration.apply(to: &self)
     }
 
     public func encode(to encoder: any Encoder) throws {
