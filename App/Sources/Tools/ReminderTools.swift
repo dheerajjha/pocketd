@@ -15,7 +15,9 @@ import PocketdKit
 /// `PersonalDataWrites`, only the EventKit calls are here.
 @Tool("reminders")
 struct RemindersTool {
-    let description = "List the user's reminders, add a new one, or tick one off."
+    // Shorter than the built-in brain's, to pay for the longer `when` — see
+    // `CalendarTool.description` for the arithmetic.
+    let description = "List, add or tick off the user's reminders."
 
     @ToolArguments
     struct Arguments {
@@ -36,40 +38,22 @@ struct RemindersTool {
         @ToolArgument("For create and complete: what the reminder says.")
         var title: String?
 
-        @ToolArgument("For create: when it is due, in the user's own words, like '2am today', 'tomorrow at 3pm' or 'every day at 7am'. Leave out for no due date.")
+        // The wording Apple's model was measured with — see `SystemRemindersTool`.
+        // The old examples, '2am today' and 'tomorrow at 3pm', put a day on
+        // times that had none: "6pm" filed for tomorrow, "at 2am" sent as "2am
+        // today".
+        @ToolArgument("For create: when it is due, in the user's exact words, like '6pm', 'tomorrow at 9', 'in 20 minutes' or 'every day at 7am'. Never add a day they did not say. Leave out for no due date.")
         var when: String?
     }
 
+    /// The body is `ToolBodies.reminders`, shared with the built-in brain's
+    /// wrapper so the two engines cannot answer the same question differently.
     func call(arguments: Arguments) async throws -> ToolOutput {
-        switch arguments.action {
-        case .list:
-            // Defaulted rather than refused. `filter` cannot be required now
-            // that one tool serves three verbs, and a model that omits it on a
-            // list is asking the commonest question there is.
-            return ToolOutput(await PersonalDataTools.reminderPayload(filter: arguments.filter) { window in
-                await EventAccess.shared.reminders(in: window)
-            })
-
-        case .create:
-            return ToolOutput(await PersonalDataWrites.createReminder(
-                title: arguments.title,
-                when: arguments.when,
-                existing: { await EventAccess.shared.reminders(in: DateWindow(start: nil, end: nil)) },
-                write: { await EventAccess.shared.createReminder($0) }
-            ))
-
-        case .complete:
-            return ToolOutput(await PersonalDataWrites.completeReminder(
-                title: arguments.title,
-                existing: { await EventAccess.shared.reminders(in: DateWindow(start: nil, end: nil)) },
-                complete: { row in
-                    // A row with no identifier never came from the store, so
-                    // there is nothing to tick off. Reported as a failure
-                    // rather than silently succeeding on nothing.
-                    guard let identifier = row.identifier else { return .failed }
-                    return await EventAccess.shared.completeReminder(identifier: identifier)
-                }
-            ))
-        }
+        ToolOutput(await ToolBodies.reminders(
+            action: arguments.action,
+            filter: arguments.filter,
+            title: arguments.title,
+            when: arguments.when
+        ))
     }
 }

@@ -13,6 +13,9 @@ import Foundation
 /// So: grouped digits here, ungrouped there; "6h 36m" here, "6 h 36 m" there.
 /// One function each, in one place each, so that neither drifts into the other's
 /// job the next time somebody needs a number formatted.
+///
+/// Superseded on screen by `Format`, the app's one set of formats; kept for
+/// `TodayTiles` until the old tile grid is gone. `count` already defers to it.
 public enum BriefFormat {
 
     /// `6h 36m`, and `7h 05m` — the minutes are padded so a column of these
@@ -29,12 +32,16 @@ public enum BriefFormat {
     /// `4,120`. Grouped, and localised, because this one is read by the person
     /// whose phone it is and not by a model.
     public static func count(_ value: Double, locale: Locale = .current) -> String {
-        guard value.isFinite else { return "—" }
-        return value.rounded().formatted(.number.precision(.fractionLength(0)).locale(locale))
+        Format.count(value, locale: locale)
     }
 }
 
 /// The four numbers on the Today tab, as strings.
+///
+/// The old grid's figures-first tiles. The verdict tiles of the new Today —
+/// a word, then a sentence carrying the number — are `TodayVerdicts`, built on
+/// the same snapshot and the same `Usual`/`Comparison` rules; this stays until
+/// the old grid is replaced.
 ///
 /// The whole of this file is here rather than in the view for one reason: every
 /// one of these tiles has an "off", a "nothing", and a "we have no baseline"

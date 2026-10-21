@@ -113,7 +113,7 @@ struct BriefPromptTests {
         snapshot.health = .off
         snapshot.reminders = .refused
         let text = Self.user(snapshot)
-        #expect(text.contains("EVENTS"))
+        #expect(text.contains("LATER TODAY"))
         #expect(!text.contains("SLEEP"))
         #expect(!text.contains("STEPS"))
         #expect(!text.contains("DUE"))
@@ -132,7 +132,11 @@ struct BriefPromptTests {
             generatedAt: Self.date(8), calendar: .connected, reminders: .connected, health: .connected
         )
         let text = Self.user(snapshot)
-        #expect(text.contains("EVENTS\nnone"))
+        #expect(text.contains("LATER TODAY\nnone"))
+        // Nothing all day and nothing tomorrow: those blocks are not
+        // invented to say so.
+        #expect(!text.contains("ALL DAY TODAY"))
+        #expect(!text.contains("TOMORROW"))
         #expect(text.contains("DUE\nnone"))
         #expect(text.contains("OVERDUE\nnone"))
         #expect(text.contains("SLEEP\nnone"))
@@ -149,7 +153,144 @@ struct BriefPromptTests {
     @Test("tomorrow's events say so")
     func tomorrowIsLabelled() {
         let text = Self.user(Self.full())
-        #expect(text.contains("tomorrow"))
+        #expect(text.contains("TOMORROW\ntomorrow 8:00 Flight"))
+        #expect(text.contains("LATER TODAY\n9:30 Standup\n14:00 Dentist"))
+    }
+
+    // MARK: - Past, under way, ahead
+
+    /// Lunch at The Arches from 13:00, the dentist at 16:30, and the clock at
+    /// 14:00 — the shape of the brief Apple's brain got wrong on Today.
+    static func afternoon(lunchEnds: (hour: Int, minute: Int)) -> TodaySnapshot {
+        TodaySnapshot(
+            generatedAt: date(14),
+            calendar: .connected,
+            events: [
+                BriefEvent(title: "Lunch at The Arches", start: date(13), end: date(lunchEnds.hour, lunchEnds.minute)),
+                BriefEvent(title: "Dentist", start: date(16, 30), end: date(17, 15)),
+            ],
+            eventsCoverWholeDay: true
+        )
+    }
+
+    @Test("at 2 PM a lunch that has begun is not sent as anything still to come")
+    func eventUnderWayIsNotSent() {
+        let text = Self.user(Self.afternoon(lunchEnds: (14, 30)), now: Self.date(14))
+        #expect(text.contains("LATER TODAY\n16:30 Dentist"))
+        // Neither its start nor the lunch itself: "13:00 Lunch" is exactly
+        // the line a brain reads as a lunch still to come, and a labelled
+        // "already started" row was still written up as one, measured.
+        #expect(!text.contains("Lunch"))
+        #expect(!text.contains("13:00"))
+    }
+
+    @Test("the prompt states neither the date nor the time, which a brain repeats as facts")
+    func noDateOrClock() {
+        let text = Self.user(Self.afternoon(lunchEnds: (14, 30)), now: Self.date(14, 5))
+        #expect(text.hasPrefix("LATER TODAY\n"))
+        #expect(!text.contains("14:05"))
+        #expect(!text.contains("September"))
+        #expect(!text.contains("Thursday"))
+    }
+
+    @Test("at 2 PM a lunch from 1 to 2 is over and not sent at all")
+    func finishedEventIsNotSent() {
+        let text = Self.user(Self.afternoon(lunchEnds: (14, 0)), now: Self.date(14))
+        #expect(!text.contains("Lunch"))
+        #expect(text.contains("LATER TODAY\n16:30 Dentist"))
+    }
+
+    @Test("the template at 2 PM never calls the 1 PM lunch next")
+    func templateSkipsWhatHasBegun() {
+        func brief(lunchEnds: (Int, Int), at now: Date) -> String {
+            BriefPrompt.fallback(
+                snapshot: Self.afternoon(lunchEnds: lunchEnds), name: "Sam", now: now,
+                calendar: Self.calendar, locale: Self.locale
+            )
+        }
+        // Over: not mentioned at all.
+        #expect(brief(lunchEnds: (14, 0), at: Self.date(14)) == "Good afternoon, Sam. Dentist at 16:30 is next.")
+        // Under way: said to be under way, with when it ends, and the dentist
+        // is what is next.
+        let running = brief(lunchEnds: (14, 30), at: Self.date(14))
+        #expect(running == "Good afternoon, Sam. Lunch at The Arches runs until 14:30, then Dentist at 16:30.")
+        #expect(!running.contains("13:00"))
+        // At noon it is still next.
+        #expect(brief(lunchEnds: (14, 0), at: Self.date(12)) == "Good afternoon, Sam. Lunch at The Arches at 13:00 is next.")
+    }
+
+    @Test("the last thing of the day under way is not 'nothing else'")
+    func templateWithTheLastThingUnderWay() {
+        let snapshot = Self.afternoon(lunchEnds: (14, 0))
+        let text = BriefPrompt.fallback(
+            snapshot: snapshot, name: nil, now: Self.date(16, 45), calendar: Self.calendar, locale: Self.locale
+        )
+        #expect(text == "Good afternoon. Dentist runs until 17:15, and nothing else is on today.")
+
+        var withTomorrow = snapshot
+        withTomorrow.events.append(Self.event("Design review", 10, day: 18))
+        #expect(BriefPrompt.fallback(
+            snapshot: withTomorrow, name: nil, now: Self.date(16, 45), calendar: Self.calendar, locale: Self.locale
+        ) == "Good afternoon. Dentist runs until 17:15, then nothing until Design review tomorrow at 10:00.")
+    }
+
+    @Test("an all-day event is said to be all day, today and tomorrow")
+    func allDayEventsAreLabelled() {
+        var snapshot = Self.afternoon(lunchEnds: (14, 0))
+        snapshot.events.append(BriefEvent(title: "Mum's birthday", start: Self.date(0), end: Self.date(0, day: 18), isAllDay: true))
+        snapshot.events.append(BriefEvent(title: "Bank holiday", start: Self.date(0, day: 18), end: Self.date(0, day: 19), isAllDay: true))
+        let text = Self.user(snapshot, now: Self.date(14))
+        #expect(text.contains("ALL DAY TODAY\nMum's birthday"))
+        #expect(text.contains("TOMORROW\ntomorrow, all day: Bank holiday"))
+    }
+
+    @Test("rows a block cannot fit are counted in that block")
+    func hiddenRowsStayInTheirBlock() {
+        var snapshot = Self.afternoon(lunchEnds: (14, 0))
+        snapshot.events += (0..<3).map { Self.event("Thing \($0)", 9 + $0, day: 18) }
+        let blocks = BriefPrompt.eventBlocks(snapshot, now: Self.date(14), calendar: Self.calendar, locale: Self.locale, limit: 1)
+        #expect(blocks == ["LATER TODAY\n16:30 Dentist", "TOMORROW\n3 events"])
+    }
+
+    // MARK: - When a brief goes out of date
+
+    @Test("a brief is out of date once something it described has begun or ended")
+    func briefGoesOutOfDate() {
+        let snapshot = Self.afternoon(lunchEnds: (14, 0))
+        // Written at noon, about a lunch still to come: false by 13:30.
+        #expect(BriefPrompt.isOutdated(writtenAt: Self.date(12, 30), snapshot: snapshot, now: Self.date(13, 30), calendar: Self.calendar))
+        // Written during lunch: false once lunch is over.
+        #expect(BriefPrompt.isOutdated(writtenAt: Self.date(13, 30), snapshot: snapshot, now: Self.date(14, 5), calendar: Self.calendar))
+        // Nothing turned in between: still true.
+        #expect(!BriefPrompt.isOutdated(writtenAt: Self.date(14, 5), snapshot: snapshot, now: Self.date(15), calendar: Self.calendar))
+        // Written the minute lunch began, knowing it had.
+        #expect(!BriefPrompt.isOutdated(writtenAt: Self.date(13), snapshot: snapshot, now: Self.date(13, 20), calendar: Self.calendar))
+        // "Good morning" at ten past twelve is out of date with nothing on.
+        let empty = TodaySnapshot(generatedAt: Self.date(11), calendar: .connected)
+        #expect(BriefPrompt.isOutdated(writtenAt: Self.date(11, 50), snapshot: empty, now: Self.date(12, 10), calendar: Self.calendar))
+    }
+
+    @Test("a timed reminder falling due turns the day; a dated one does not")
+    func remindersTurnTheDay() {
+        var snapshot = TodaySnapshot(generatedAt: Self.date(13), reminders: .connected)
+        snapshot.dueToday = [
+            BriefReminder(title: "Pay rent", due: Self.date(17), dueHasTime: true),
+            BriefReminder(title: "Water the plants", due: Self.date(0)),
+        ]
+        #expect(snapshot.hasTurned(between: Self.date(16), and: Self.date(17, 5)))
+        #expect(!snapshot.hasTurned(between: Self.date(13), and: Self.date(16)))
+        #expect(snapshot.nextTurningPoint(after: Self.date(13)) == Self.date(17))
+    }
+
+    @Test("the next rewrite is the next turning point or change of greeting")
+    func nextRewrite() {
+        let snapshot = Self.afternoon(lunchEnds: (14, 30))
+        #expect(BriefPrompt.nextRewrite(after: Self.date(12), snapshot: snapshot, calendar: Self.calendar) == Self.date(13))
+        #expect(BriefPrompt.nextRewrite(after: Self.date(14, 40), snapshot: snapshot, calendar: Self.calendar) == Self.date(16, 30))
+        // After the dentist, the evening's greeting is next.
+        #expect(BriefPrompt.nextRewrite(after: Self.date(17, 20), snapshot: snapshot, calendar: Self.calendar) == Self.date(18))
+        // Late in the evening it is tomorrow morning's.
+        #expect(BriefPrompt.nextRewrite(after: Self.date(22), snapshot: snapshot, calendar: Self.calendar) == Self.date(5, day: 18))
     }
 
     @Test("the resting heart rate never reaches the model")
@@ -227,19 +368,38 @@ struct BriefPromptTests {
 
     // MARK: - The fallback
 
-    @Test("everything present reads as one greeting and one sentence")
+    @Test("everything present reads as a greeting and at most two more sentences")
     func fallbackWithEverything() {
         let text = BriefPrompt.fallback(
             snapshot: Self.full(), name: "Dheeraj", now: Self.date(8),
             calendar: Self.calendar, locale: Self.locale
         )
-        #expect(text.hasPrefix("Good morning, Dheeraj. "))
-        #expect(text.contains("Standup at 09:30 is next"))
-        #expect(text.contains("two reminders are due today"))
-        #expect(text.contains("one is overdue"))
-        #expect(text.contains("you slept 6h 36m"))
-        #expect(text.contains("a little under your usual"))
-        #expect(text.hasSuffix("."))
+        #expect(text == "Good morning, Dheeraj. Standup at 9:30 is next. You have 2 reminders due today and 1 overdue, and you slept 6h 36m, 1h 24m under your usual.")
+        #expect(BriefPrompt.sentences(in: text).count <= BriefPrompt.maximumSentences)
+    }
+
+    @Test("a reminder whose time has passed is counted as overdue, as the Due tile counts it")
+    func fallbackCountsByTheClock() {
+        // "Pay rent" is due at 17:00. At 18:00 it has slipped, whatever pile
+        // the reader filed it in at breakfast.
+        let text = BriefPrompt.fallback(
+            snapshot: {
+                var snapshot = Self.full()
+                snapshot.dueToday = [BriefReminder(title: "Pay rent", due: Self.date(17), dueHasTime: true)]
+                return snapshot
+            }(),
+            name: nil, now: Self.date(18), calendar: Self.calendar, locale: Self.locale
+        )
+        #expect(text.contains("You have 2 overdue reminders"))
+    }
+
+    @Test("an evening with nothing left names tomorrow's first thing")
+    func fallbackLooksAtTomorrow() {
+        let text = BriefPrompt.fallback(
+            snapshot: Self.full(), name: nil, now: Self.date(20),
+            calendar: Self.calendar, locale: Self.locale
+        )
+        #expect(text.contains("Nothing else is on today, and tomorrow starts with Flight at 8:00."))
     }
 
     @Test("each source on its own still produces a brief")
@@ -257,15 +417,13 @@ struct BriefPromptTests {
         }
 
         let calendarOnly = only { $0.calendar = .connected }
-        #expect(calendarOnly.contains("Standup at 09:30 is next"))
-        #expect(!calendarOnly.contains("reminder"))
-        #expect(!calendarOnly.contains("slept"))
+        #expect(calendarOnly == "Good morning. Standup at 9:30 is next.")
 
         let remindersOnly = only { $0.reminders = .connected }
-        #expect(remindersOnly.contains("Two reminders are due today"))
+        #expect(remindersOnly == "Good morning. You have 2 reminders due today and 1 overdue.")
 
         let healthOnly = only { $0.health = .connected }
-        #expect(healthOnly.contains("You slept 6h 36m"))
+        #expect(healthOnly == "Good morning. You slept 6h 36m, 1h 24m under your usual.")
     }
 
     @Test("an empty but connected day says so rather than saying nothing")
@@ -277,13 +435,32 @@ struct BriefPromptTests {
             snapshot: snapshot, name: "Dheeraj", now: Self.date(15),
             calendar: Self.calendar, locale: Self.locale
         )
-        #expect(text.hasPrefix("Good afternoon, Dheeraj."))
-        // The first clause is capitalised, because it starts the sentence.
-        #expect(text.contains("Nothing more is on your calendar today"))
-        #expect(text.contains("nothing is due today"))
+        // A reader that started at `now` cannot see the morning, so it may
+        // only say "nothing else".
+        #expect(text == "Good afternoon, Dheeraj. Nothing else is on your calendar today. Nothing is due today.")
         // Health is connected and has no reading, so it contributes no clause
         // rather than a clause about zero.
         #expect(!text.contains("slept"))
+    }
+
+    @Test("a day that never had anything on it says so")
+    func fallbackWithAnEmptyDay() {
+        // The walkthrough's complaint: "Nothing more is on your calendar today"
+        // on a day with nothing at all. A reader that started at midnight knows.
+        let snapshot = TodaySnapshot(
+            generatedAt: Self.date(15), calendar: .connected, eventsCoverWholeDay: true
+        )
+        let text = BriefPrompt.fallback(
+            snapshot: snapshot, name: nil, now: Self.date(15), calendar: Self.calendar, locale: Self.locale
+        )
+        #expect(text == "Good afternoon. Nothing on your calendar today.")
+
+        // The same reader, with a standup that finished this morning.
+        var morning = snapshot
+        morning.events = [Self.event("Standup", 9, minute: 30)]
+        #expect(BriefPrompt.fallback(
+            snapshot: morning, name: nil, now: Self.date(15), calendar: Self.calendar, locale: Self.locale
+        ) == "Good afternoon. Nothing else is on your calendar today.")
     }
 
     @Test("with nothing connected it says what connecting would give")
@@ -292,9 +469,7 @@ struct BriefPromptTests {
             snapshot: TodaySnapshot(generatedAt: Self.date(20)), name: "Dheeraj", now: Self.date(20),
             calendar: Self.calendar, locale: Self.locale
         )
-        #expect(text.hasPrefix("Good evening, Dheeraj."))
-        #expect(text.contains("Connect your calendar, your reminders and Health"))
-        #expect(!text.isEmpty)
+        #expect(text == "Good evening, Dheeraj. Connect your calendar, reminders and Health to see your day here.")
     }
 
     @Test("the fallback is never an empty string, whatever it is handed")
@@ -313,6 +488,7 @@ struct BriefPromptTests {
                     )
                     #expect(!text.trimmingCharacters(in: .whitespaces).isEmpty)
                     #expect(text.hasSuffix("."))
+                    #expect(BriefPrompt.sentences(in: text).count <= BriefPrompt.maximumSentences)
                     seen.insert(text)
                 }
             }
@@ -330,9 +506,10 @@ struct BriefPromptTests {
         #expect(TimeOfDayKind.from(now: Self.date(18), calendar: Self.calendar) == .evening)
     }
 
-    @Test("counts up to ten are spelled out")
-    func numbersAreWords() {
-        // "2 reminders are due" is a line of a report. This one is read aloud.
+    @Test("counts are digits on screen, never words")
+    func numbersAreDigits() {
+        // The rule for the whole app: the screen shows digits, and the speech
+        // engine reads "1 reminder" aloud as words without being asked.
         var snapshot = Self.full()
         snapshot.dueToday = [BriefReminder(title: "One thing")]
         snapshot.overdue = []
@@ -340,8 +517,110 @@ struct BriefPromptTests {
             snapshot: snapshot, name: nil, now: Self.date(8),
             calendar: Self.calendar, locale: Self.locale
         )
-        #expect(text.contains("one reminder is due today"))
-        #expect(!text.contains("1 reminder"))
+        #expect(text.contains("You have 1 reminder due today"))
+        #expect(!text.contains("one reminder"))
+    }
+
+    @Test("times in the brief follow the phone's clock")
+    func briefTimesFollowTheLocale() {
+        let text = BriefPrompt.fallback(
+            snapshot: Self.full(), name: nil, now: Self.date(8),
+            calendar: Self.calendar, locale: Locale(identifier: "en_US")
+        )
+        #expect(text.replacingOccurrences(of: "\u{202F}", with: " ").contains("Standup at 9:30 AM is next."))
+    }
+
+    // MARK: - The first sentence
+
+    @Test("the first sentence skips the greeting")
+    func firstSentence() {
+        let line = BriefPrompt.firstSentence(
+            snapshot: Self.full(), now: Self.date(8), calendar: Self.calendar, locale: Self.locale
+        )
+        #expect(line == "Standup at 9:30 is next.")
+
+        var noCalendar = Self.full()
+        noCalendar.calendar = .off
+        #expect(BriefPrompt.firstSentence(
+            snapshot: noCalendar, now: Self.date(8), calendar: Self.calendar, locale: Self.locale
+        ) == "You have 2 reminders due today and 1 overdue, and you slept 6h 36m, 1h 24m under your usual.")
+
+        #expect(BriefPrompt.firstSentence(
+            snapshot: TodaySnapshot(generatedAt: Self.date(8)), now: Self.date(8), calendar: Self.calendar, locale: Self.locale
+        ) == "Connect your calendar, reminders and Health to see your day here.")
+    }
+
+    @Test("the first fact of any brief, template or model, is the one after the greeting")
+    func firstFactOfAnyBrief() {
+        #expect(BriefPrompt.firstFactSentence(of: "Good morning, Sam. Lunch at 1:00 PM is next. Then the dentist.") == "Lunch at 1:00 PM is next.")
+        #expect(BriefPrompt.firstFactSentence(of: "Lunch at 1:00 PM is next. Then the dentist.") == "Lunch at 1:00 PM is next.")
+        #expect(BriefPrompt.firstFactSentence(of: "Good morning, Sam.") == nil)
+        #expect(BriefPrompt.firstFactSentence(of: "You walked 4.2 km today. Nice.") == "You walked 4.2 km today.")
+    }
+
+    @Test("the lock-screen sentence carries counts and times, never a title")
+    func notificationSentence() {
+        let line = BriefPrompt.notificationSentence(
+            snapshot: Self.full(), now: Self.date(8), calendar: Self.calendar, locale: Self.locale
+        )
+        #expect(line == "Your next event is at 9:30, you have 2 reminders due today and 1 overdue, and you slept 6h 36m.")
+        for title in ["Standup", "Dentist", "Pay rent", "Call Mum", "Renew passport"] {
+            #expect(line?.contains(title) == false)
+        }
+        // Nothing connected is not a brief, and gets no banner line.
+        #expect(BriefPrompt.notificationSentence(
+            snapshot: TodaySnapshot(generatedAt: Self.date(8)), now: Self.date(8), calendar: Self.calendar
+        ) == nil)
+    }
+
+    // MARK: - Screening a model's brief
+
+    @Test("a brief that is the system prompt read back is refused")
+    func screenRefusesEcho() {
+        // Word for word what SmolLM2 put on the home tab in the walkthrough.
+        let echo = "Warm and plain, and easy to read aloud. No lists, no markdown, no headings, no emoji. Open by greeting them for the afternoon, by name: Sam. Never mention yourself, a model, or how this was written."
+        #expect(BriefPrompt.screened(echo) == nil)
+    }
+
+    @Test("one echoed sentence in a good brief is dropped and the rest kept")
+    func screenDropsAnEchoedSentence() {
+        let text = "Good morning, Sam. Lunch at The Arches at 1:00 PM is next. Never mention yourself, a model, or how this was written. You slept 6h 36m."
+        #expect(BriefPrompt.screened(text) == "Good morning, Sam. Lunch at The Arches at 1:00 PM is next. You slept 6h 36m.")
+    }
+
+    @Test("a time spelled out in words is refused")
+    func screenRefusesSpelledTimes() {
+        #expect(BriefPrompt.screened("Good morning. Today is Wednesday, October twenty first, at eleven fifty seven AM.") == nil)
+        #expect(BriefPrompt.screened("Good morning, Sam. Standup is at nine thirty, then lunch.") == nil)
+        #expect(BriefPrompt.screened("Good morning, Sam. You slept seven hours and ten minutes last night.") == nil)
+        #expect(BriefPrompt.screened("Good morning, Sam. The dentist is at half past four today.") == nil)
+    }
+
+    @Test("a count in words is put into digits")
+    func screenDigitisesCounts() {
+        #expect(BriefPrompt.screened("Good morning, Sam. Two reminders are due today and one is overdue.")
+            == "Good morning, Sam. 2 reminders are due today and one is overdue.")
+    }
+
+    @Test("a brief that recites its input blocks is refused")
+    func screenRefusesDataDump() {
+        #expect(BriefPrompt.screened("EVENTS 13:00 Lunch at The Arches DUE Call the plumber OVERDUE none") == nil)
+    }
+
+    @Test("a good brief is kept, and cut to three sentences")
+    func screenKeepsAGoodBrief() {
+        let good = "Good morning, Sam. Lunch at The Arches at 1:00 PM is next. You have 1 reminder due today."
+        #expect(BriefPrompt.screened(good) == good)
+        let long = good + " The dentist is at 4:30 PM. Then nothing else."
+        #expect(BriefPrompt.screened(long) == good)
+        #expect(BriefPrompt.screened("<think>planning</think>Hi.") == nil)
+    }
+
+    @Test("the system turn asks for digits and no longer asks to be read aloud")
+    func systemTurnAsksForDigits() {
+        let system = Self.messages(Self.full())[0].content
+        #expect(system.contains("digits"))
+        #expect(!system.contains("read aloud"))
     }
 
     // MARK: - Cleaning up after the model

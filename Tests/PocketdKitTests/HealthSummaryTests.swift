@@ -219,10 +219,10 @@ struct HealthSummaryAmbiguityTests {
         #expect(text?.contains("was not allowed to read it") == true)
         // "Permission problem" on its own sends people to the app's own page in
         // Settings, which does not have this switch.
-        #expect(text?.contains("Settings > Privacy & Security > Health > Pocketd") == true)
+        #expect(text?.contains("Settings › Privacy & Security › Health › Pocketd") == true)
     }
 
-    @Test("one missing metric does not suppress the ones that came back")
+    @Test("one missing metric does not suppress the ones that came back, and is not mentioned when nobody asked")
     func partialDataStillAnswers() async {
         let readout = HealthReadout(samples: [
             .steps: Health.samples(count: 20, unit: .count) { _ in 9_000 }
@@ -232,9 +232,21 @@ struct HealthSummaryAmbiguityTests {
         let readings = payload["readings"] as? [String]
         #expect(readings?.count == 1)
         #expect(readings?.first?.hasPrefix("Steps") == true)
-        // Named, so the model does not answer "you burned no energy".
-        #expect((payload["no_data"] as? String)?.contains("Active energy") == true)
-        #expect((payload["note"] as? String)?.contains("iOS deliberately does not tell an app which") == true)
+        // Energy, exercise and the rest were not asked about: no list of
+        // them and no paragraph about iOS (QA S2-new).
+        #expect(payload["no_data"] == nil)
+        #expect(payload["note"] == nil)
+    }
+
+    @Test("the asked-for metric coming back empty is one plain sentence, without the Settings path")
+    func askedMetricMissing() async {
+        let readout = HealthReadout(samples: [
+            .respiratory_rate: Health.samples(count: 20, unit: .breathsPerMinute) { _ in 14 }
+        ])
+        let payload = await Health.payload(.sleep, readout: readout)
+        #expect(payload["note"] as? String == "Pocketd found no sleep data for last night.")
+        #expect(payload["no_data"] == nil)
+        #expect(!ToolResult.encode(payload).contains("Settings"))
     }
 
     @Test("the ambiguity note is written once, and only when something is missing")
@@ -257,6 +269,26 @@ struct HealthSummaryAmbiguityTests {
     func unavailableIsItsOwnSentence() async {
         let payload = await Health.payload(.sleep, readout: HealthReadout(availability: .noHealthData))
         #expect(payload["text"] as? String == "Health data is not available on this device, so there is nothing to read.")
+    }
+
+    @Test("a Health source nobody has connected says so, and reads nothing")
+    func notConnectedIsOneSentence() async {
+        let payload = await Health.payload(.sleep, readout: HealthReadout(availability: .available, notConnected: true))
+        #expect(payload["text"] as? String == HealthSummary.notConnected)
+        #expect(payload["readings"] == nil)
+    }
+
+    @Test("a request that could not be put is one plain sentence, never HealthKit's own text")
+    func requestFailureIsPlain() async {
+        for failure in HealthRequestFailure.allCases {
+            let payload = await Health.payload(.sleep, readout: HealthReadout(availability: .requestFailed(failure.reason)))
+            let text = try? #require(payload["text"] as? String)
+            #expect(text?.contains(failure.reason) == true)
+            for raw in ["com.apple", "entitlement", "HealthKit", "HKError", "Error Domain"] {
+                #expect(text?.contains(raw) == false, "\(raw)")
+            }
+            #expect(failure.reason.split(separator: " ").count <= 25)
+        }
     }
 
     @Test("a failed authorization request reports its reason rather than throwing")
@@ -349,6 +381,71 @@ struct HealthSummaryPayloadTests {
         }
     }
 
+    // MARK: - The same verdict as the Sleep tile
+
+    /// A fortnight of nights (oldest first, in minutes) and last night,
+    /// as `HealthReadout.sleep` intervals ending at each morning.
+    static func sleepReadout(earlier: [Int], lastNight: Int) -> HealthReadout {
+        let today = Health.calendar.startOfDay(for: Health.now)
+        var intervals: [SleepInterval] = []
+        for (index, minutes) in (earlier + [lastNight]).enumerated() {
+            let back = earlier.count - index
+            let morning = Health.calendar.date(byAdding: .day, value: -back, to: today)!
+            intervals.append(SleepInterval(start: morning.addingTimeInterval(-Double(minutes) * 60), end: morning, asleep: true))
+        }
+        return HealthReadout(sleep: intervals)
+    }
+
+    static func tileVerdict(earlier: [Int], lastNight: Int) -> TileVerdict {
+        TodayVerdicts.sleep(TodaySnapshot(
+            generatedAt: Health.now,
+            health: .connected,
+            sleepLastNight: Double(lastNight) * 60,
+            sleepUsual: Usual.typicalSleep(earlier.map { Double($0) * 60 })
+        ))
+    }
+
+    /// The demo fortnight: a median of 7h 5m.
+    static let fortnight = [412, 431, 398, 425, 447, 405, 425, 460, 389, 436, 425, 418, 452, 425]
+
+    @Test("How did I sleep? is judged by the tile's rule and said in the tile's words")
+    func sleepVerdictAgreesWithTheTile() async {
+        // QA S2-new: the card said "7% below your 28-day average of 7 h 5 m,
+        // below your usual range" under a tile that said Rested.
+        let payload = await Health.payload(.sleep, readout: Self.sleepReadout(earlier: Self.fortnight, lastNight: 396))
+        let line = (payload["readings"] as? [String])?.first { $0.hasPrefix("Sleep") } ?? ""
+        let tile = Self.tileVerdict(earlier: Self.fortnight, lastNight: 396)
+
+        #expect(tile.status == "Rested")
+        #expect(tile.sentence == "6h 36m — 29 min under your usual.")
+        #expect(line.hasPrefix("Sleep 6h 36m on "))
+        #expect(line.hasSuffix("— Rested, 29 min under your usual of 7h 5m."))
+        #expect(!line.contains("average"))
+        #expect(!line.contains("usual range"))
+        #expect(!line.contains(" h "))
+    }
+
+    @Test("a short night is a short night on the card and on the tile")
+    func shortNightAgrees() async {
+        let payload = await Health.payload(.sleep, readout: Self.sleepReadout(earlier: Self.fortnight, lastNight: 330))
+        let line = (payload["readings"] as? [String])?.first { $0.hasPrefix("Sleep") } ?? ""
+        let tile = Self.tileVerdict(earlier: Self.fortnight, lastNight: 330)
+
+        #expect(tile.status == "Short night")
+        #expect(line.contains("— \(tile.status), \(TodayVerdicts.deltaPhrase(Double(330 - 425) * 60)) your usual of 7h 5m."))
+        #expect(line.contains("Short night, 1h 35m under your usual"))
+    }
+
+    @Test("a long night is a long night, and a night within the band is rested, on both")
+    func bandAgrees() async {
+        for (lastNight, word) in [(540, "Long night"), (440, "Rested"), (390, "Rested")] {
+            let payload = await Health.payload(.sleep, readout: Self.sleepReadout(earlier: Self.fortnight, lastNight: lastNight))
+            let line = (payload["readings"] as? [String])?.first { $0.hasPrefix("Sleep") } ?? ""
+            #expect(Self.tileVerdict(earlier: Self.fortnight, lastNight: lastNight).status == word)
+            #expect(line.contains("— \(word),"), "\(lastNight): \(line)")
+        }
+    }
+
     @Test("sleep is reported in hours and minutes, never as a decimal count of hours")
     func sleepReadsLikeAPersonSaysIt() async {
         // "7.75 hours" is a number nobody says out loud, and a model handed one
@@ -360,7 +457,7 @@ struct HealthSummaryPayloadTests {
             return SleepInterval(start: morning.addingTimeInterval(-hours * 3600), end: morning, asleep: true)
         }
         let line = ((await Health.payload(.sleep, readout: HealthReadout(sleep: intervals)))["readings"] as? [String])?.first ?? ""
-        #expect(line.contains("7 h 45 m"))
+        #expect(line.contains("7h 45m"))
         #expect(!line.contains("7.75"))
     }
 
@@ -652,8 +749,8 @@ struct HealthSummaryRecencyTests {
         let payload = await Health.payload(.sleep, readout: HealthReadout(sleep: intervals))
         let sleepLine = (payload["readings"] as? [String])?.first { $0.hasPrefix("Sleep") } ?? ""
 
-        #expect(sleepLine.contains("Sleep 8 h on Thu, Sep 11"))
-        #expect(!sleepLine.contains("13 h"))
+        #expect(sleepLine.contains("Sleep 8h on Thu, Sep 11"))
+        #expect(!sleepLine.contains("13h"))
         // Nowhere in the payload, not merely absent from the headline: a
         // superlative or a percentage built on the same night is the same lie
         // one clause further down.
@@ -844,7 +941,7 @@ struct HealthAddedMetricPayloadTests {
             (.stand_hours, .activity, 10, 1, 12, "12", "10", "20% above"),
             (.heart_rate, .heart, 70, 3, 84, "84 bpm", "70 bpm", "20% above"),
             (.blood_oxygen, .heart, 0.96, 0.005, 0.98, "98.0%", "96.0%", "2% above"),
-            (.mindful_minutes, .sleep, 600, 60, 900, "15 m", "10 m", "50% above"),
+            (.mindful_minutes, .sleep, 600, 60, 900, "15 min", "10 min", "50% above"),
             (.body_mass, .body, 72, 0.5, 75.6, "75.6 kg", "72.0 kg", "5% above"),
             (.vo2_max, .body, 40, 1, 44, "44.0 mL/kg·min", "40.0 mL/kg·min", "10% above")
         ]
@@ -981,14 +1078,37 @@ struct HealthPermissionSheetTests {
 
     @Test("nothing is asked for write access, because nothing writes")
     func theShareSetIsEmpty() throws {
-        // Both authorization calls, counted rather than eyeballed. A non-empty
-        // share set puts a second sheet in front of the user, listing types this
-        // app would be allowed to change — for a capability it does not have.
+        // The authorization call and the status check, counted rather than
+        // eyeballed. A non-empty share set puts a second sheet in front of the
+        // user, listing types this app would be allowed to change — for a
+        // capability it does not have.
         let source = try String(contentsOf: healthAccessSource(), encoding: .utf8)
         let shared = matches(of: #"requestAuthorization\(toShare: (\[[^\]]*\]), read:"#, in: source)
+        let status = matches(of: #"getRequestStatusForAuthorization\(toShare: (\[[^\]]*\]), read:"#, in: source)
 
-        #expect(shared == ["[]", "[]"])
+        #expect(shared == ["[]"])
+        #expect(status == ["[]"])
         #expect(source.components(separatedBy: "requestAuthorization(").count - 1 == shared.count)
+    }
+
+    @Test("the only Health request is the connect door's; reads never ask")
+    func readsNeverAsk() throws {
+        // The sheet used to come up at the first question about sleep, over a
+        // generation that had stopped to wait for it. The one remaining
+        // request must sit inside `requestAllReadAccess`, which only a tap
+        // reaches.
+        let source = try String(contentsOf: healthAccessSource(), encoding: .utf8)
+        let door = try #require(source.range(of: "func requestAllReadAccess()"))
+        let call = try #require(source.range(of: "requestAuthorization("))
+        let nextFunction = source.range(of: "\n    func ", range: door.upperBound..<source.endIndex)
+        #expect(call.lowerBound > door.upperBound)
+        #expect(call.lowerBound < (nextFunction?.lowerBound ?? source.endIndex))
+        // And HealthKit's own words never reach a person.
+        #expect(!source.contains("localizedDescription)"))
+        // The status check a read makes is raced against a deadline, so a
+        // daemon busy with a sheet nobody can see cannot hold an answer up.
+        #expect(source.contains("statusDeadline: Duration = .seconds(3)"))
+        #expect(source.contains("within: Self.statusDeadline"))
     }
 
     @Test("no sentence anywhere in the read path claims the user refused anything")

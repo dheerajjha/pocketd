@@ -110,6 +110,10 @@ actor EventAccess {
     /// Asks for read access if it has never been asked, and reports where
     /// things stand either way.
     ///
+    /// The one call in the app that may put iOS's sheet up, and it belongs to
+    /// the connect door alone — a tap somebody made on purpose. Nothing that
+    /// reads or writes calls it any more; see `standing(_:)`.
+    ///
     /// Uses the iOS 17 API — `requestFullAccessToEvents()` /
     /// `requestFullAccessToReminders()`. The deprecated `requestAccess(to:)`
     /// is not a naming change: on iOS 17 it resolves to *write-only* for
@@ -165,11 +169,42 @@ actor EventAccess {
         return settled
     }
 
+    /// Where an entity stands right now, without ever asking.
+    ///
+    /// Every read and write in this file goes through this and not through
+    /// `requestReadAccess`, and that is the whole fix for a sheet appearing in
+    /// the middle of an answer. The first tool call used to be the moment iOS
+    /// put its Calendar prompt up: the engine holding its gate, the stream open
+    /// and silent, and a modal about the user's calendar with no visible
+    /// connection to the sentence they typed. Whatever anybody taps under those
+    /// conditions is not a decision. Now a source that has never been asked is
+    /// simply not connected — the tool says so in a sentence — and the sheet is
+    /// raised only by the one connect door, a tap the person made on purpose.
+    ///
+    /// A grant that arrived since the last look resets the store first. An
+    /// `EKEventStore` that existed before access was given can go on returning
+    /// nothing until it is reset, and the grant may have come through iOS
+    /// Settings rather than through this instance.
+    private func standing(_ entity: PersonalDataEntity) -> PersonalDataAuthorization {
+        let current = Self.authorization(for: entity)
+        if let previous = lastStanding[entity], previous != .granted, current == .granted {
+            store.reset()
+        }
+        lastStanding[entity] = current
+        return current
+    }
+
+    private var lastStanding: [PersonalDataEntity: PersonalDataAuthorization] = [:]
+
     // MARK: - Reads
 
     /// Events overlapping `interval`, oldest first, capped.
+    ///
+    /// Never asks iOS: an entity that has not been asked comes back as
+    /// `.unauthorized(.notDetermined)`, which the tools turn into a sentence.
+    /// See `standing(_:)`.
     func events(in interval: DateInterval, limit: Int = EventAccess.rowLimit) async -> PersonalDataLookup<CalendarEventRow> {
-        let authorization = await requestReadAccess(to: .calendar)
+        let authorization = standing(.calendar)
         guard authorization.canRead else { return .unauthorized(authorization) }
 
         let predicate = store.predicateForEvents(
@@ -207,7 +242,7 @@ actor EventAccess {
     /// `window` with both ends `nil` is the only shape that also returns
     /// reminders with no due date — which for most people is most of them.
     func reminders(in window: DateWindow, limit: Int = EventAccess.rowLimit) async -> PersonalDataLookup<ReminderRow> {
-        let authorization = await requestReadAccess(to: .reminders)
+        let authorization = standing(.reminders)
         guard authorization.canRead else { return .unauthorized(authorization) }
 
         let predicate = store.predicateForIncompleteReminders(
@@ -229,6 +264,64 @@ actor EventAccess {
             }
 
         return .rows(Array(matches.prefix(limit)), truncated: matches.count > limit)
+    }
+
+    // MARK: - Reads for the detail pages
+
+    /// Events overlapping `interval` for the Your day page, with the handles
+    /// its links need.
+    ///
+    /// A second read rather than a field added to `CalendarEventRow`, because
+    /// that row is what the model reads and an opaque identifier there is
+    /// prompt tokens spent on nothing it can use. The page wants the identifier
+    /// and the place; the model wants neither.
+    func dayEvents(in interval: DateInterval, limit: Int = 60) async -> PersonalDataLookup<DayEvent> {
+        let authorization = standing(.calendar)
+        guard authorization.canRead else { return .unauthorized(authorization) }
+
+        let predicate = store.predicateForEvents(withStart: interval.start, end: interval.end, calendars: nil)
+        let matches = store.events(matching: predicate)
+            .compactMap { event -> DayEvent? in
+                guard let start = event.startDate, start < interval.end else { return nil }
+                let location = event.location?.trimmingCharacters(in: .whitespacesAndNewlines)
+                return DayEvent(
+                    eventIdentifier: event.eventIdentifier,
+                    calendarItemIdentifier: event.calendarItemIdentifier,
+                    title: Self.displayTitle(event.title),
+                    location: (location?.isEmpty ?? true) ? nil : location,
+                    start: start,
+                    end: event.endDate ?? start,
+                    isAllDay: event.isAllDay
+                )
+            }
+            .sorted { ($0.start, $0.title) < ($1.start, $1.title) }
+        return .rows(Array(matches.prefix(limit)), truncated: matches.count > limit)
+    }
+
+    /// Every open reminder, dated or not, for the Reminders page.
+    ///
+    /// Through the same fetch the tools use, so the page and an answer card can
+    /// never list two different sets; only the row type differs, carrying the
+    /// identifier the tick circle completes.
+    func dayReminders(limit: Int = 100) async -> PersonalDataLookup<DayReminder> {
+        let authorization = standing(.reminders)
+        guard authorization.canRead else { return .unauthorized(authorization) }
+
+        let predicate = store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: nil)
+        let rows = await fetchRows(matching: predicate)
+            .compactMap { row -> DayReminder? in
+                // A row with no identifier never came from the store and
+                // cannot be ticked off; the page has no use for it.
+                guard let identifier = row.identifier else { return nil }
+                return DayReminder(
+                    id: identifier,
+                    title: row.title.attackerControlledValue(),
+                    due: row.due,
+                    dueHasTime: row.dueHasTime,
+                    priority: row.priority
+                )
+            }
+        return .rows(Array(rows.prefix(limit)), truncated: rows.count > limit)
     }
 
     /// Bridges EventKit's one remaining callback-only fetch.
@@ -335,7 +428,7 @@ actor EventAccess {
     /// a write-only grant would produce a duplicate check that silently saw
     /// nothing and a list that slowly filled with copies.
     func createReminder(_ new: NewReminder) async -> WriteResult {
-        let authorization = await requestReadAccess(to: .reminders)
+        let authorization = standing(.reminders)
         guard authorization.canRead else { return .unauthorised(authorization) }
 
         guard let list = store.defaultCalendarForNewReminders() else {
@@ -390,18 +483,35 @@ actor EventAccess {
     /// instead — rare, and the kind of wrong nobody discovers until they need
     /// the thing they thought was still outstanding.
     func completeReminder(identifier: String) async -> WriteResult {
-        let authorization = await requestReadAccess(to: .reminders)
+        await setCompleted(true, identifier: identifier)
+    }
+
+    /// Un-ticks one, by identifier: the Undo on the Reminders page.
+    ///
+    /// Deliberately not `undo(_:)`. That one *removes* an item this app
+    /// created; a completed reminder is the user's own, and the only honest
+    /// reversal of a tick is to un-tick it. Routing it through the write
+    /// ledger would delete the reminder the person just asked to keep.
+    func uncompleteReminder(identifier: String) async -> WriteResult {
+        await setCompleted(false, identifier: identifier)
+    }
+
+    private func setCompleted(_ completed: Bool, identifier: String) async -> WriteResult {
+        let authorization = standing(.reminders)
         guard authorization.canRead else { return .unauthorised(authorization) }
 
         guard let item = store.calendarItem(withIdentifier: identifier) as? EKReminder else {
             return .failed
         }
-        item.isCompleted = true
+        item.isCompleted = completed
         do {
             try store.save(item, commit: true)
             return .written
         } catch {
-            DiagnosticLog.record(.failure(area: .eventKit, code: "reminder_complete_failed"))
+            DiagnosticLog.record(.failure(
+                area: .eventKit,
+                code: completed ? "reminder_complete_failed" : "reminder_uncomplete_failed"
+            ))
             return .failed
         }
     }
@@ -412,7 +522,7 @@ actor EventAccess {
     /// the iOS 17 write-only grant and refusing it would turn a permission the
     /// user deliberately gave into a dead feature.
     func createEvent(_ new: NewEvent) async -> WriteResult {
-        let authorization = await requestReadAccess(to: .calendar)
+        let authorization = standing(.calendar)
         guard authorization.canWrite else { return .unauthorised(authorization) }
 
         guard let calendar = store.defaultCalendarForNewEvents else {
@@ -472,7 +582,7 @@ actor EventAccess {
 
         switch write.kind {
         case .reminder:
-            let authorization = await requestReadAccess(to: .reminders)
+            let authorization = standing(.reminders)
             guard authorization.canRead else { return .unauthorised(authorization) }
             guard let item = store.calendarItem(withIdentifier: write.identifier) as? EKReminder else {
                 // Already gone — deleted in the Reminders app, or undone twice.
@@ -490,7 +600,7 @@ actor EventAccess {
             }
 
         case .event:
-            let authorization = await requestReadAccess(to: .calendar)
+            let authorization = standing(.calendar)
             // Full access rather than `canWrite`: EventKit will not hand back an
             // event by identifier under a write-only grant, so a removal there
             // would fail at the lookup with nothing useful to say.

@@ -26,6 +26,8 @@ enum DiagnosticEnvironment {
         return identifier.isEmpty ? "unknown" : identifier
     }
 
+    /// Main actor because `UIDevice` is; the one caller is a view.
+    @MainActor
     static func current(modelID: String?, contextTokens: Int?) -> DiagnosticLog.Environment {
         let info = Bundle.main.infoDictionary
         return DiagnosticLog.Environment(

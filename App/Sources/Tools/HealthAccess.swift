@@ -1,5 +1,6 @@
 import Foundation
 import HealthKit
+import os
 import PocketdKit
 
 // The value types this file hands out — `HealthSample`, `SleepInterval`,
@@ -120,33 +121,105 @@ actor HealthAccess {
         return types
     }
 
-    /// Asks for the types this focus needs, if they have not been asked for yet.
+    /// Where a focus stands, without ever putting the sheet up.
     ///
-    /// The `Bool` HealthKit would give back is deliberately not consulted, and
-    /// there is nothing else to consult either: an app cannot tell a granted read
-    /// from a refused one. `authorizationStatus(for:)` answers about *writing*
-    /// and is useless here, and a refused read returns exactly what a type
-    /// nobody has ever recorded returns. So this reports only whether the
-    /// question could be put at all, and the summary phrases the empty case to
-    /// be true either way.
-    func requestReadAccess(for focus: HealthFocus) async -> HealthAvailability {
+    /// What every read asks, in place of the request it used to make. The
+    /// first question about sleep was the moment iOS showed its Health sheet —
+    /// over a generation holding the engine's gate, with nothing on screen
+    /// connecting sixteen switches to the sentence the person typed. Whatever
+    /// they tapped there was not a decision. Now an unasked focus is reported
+    /// as not connected and read no further; the sheet comes only from
+    /// `requestAllReadAccess`, the connect door.
+    ///
+    /// The request status says only whether a request *would show UI*, never
+    /// what was answered — an app cannot tell a granted read from a refused
+    /// one, and this does not pretend to. `.unknown` reads on: a read never
+    /// prompts, and an empty answer is phrased to be true either way.
+    func standing(for focus: HealthFocus) async -> HealthStanding {
         guard Self.isAvailable else { return .noHealthData }
-        guard !requested.contains(focus) else { return .available }
-
+        guard !requested.contains(focus) else { return .asked }
         let types = Self.readTypes(for: focus)
-        guard !types.isEmpty else { return .available }
-
-        do {
-            // An empty share set: these tools read and never write. A throw here
-            // means the question could not be put to the user at all — no sheet,
-            // no decision — which is a different thing from a decision we do not
-            // like, and the only one of the two we are able to detect.
-            try await store.requestAuthorization(toShare: [], read: types)
+        guard !types.isEmpty else { return .asked }
+        switch await Self.requestStatus(of: store, reading: types, within: Self.statusDeadline) {
+        case .shouldRequest:
+            return .notAsked
+        case .unnecessary:
             requested.insert(focus)
-            return .available
-        } catch {
-            return .requestFailed(error.localizedDescription)
+            return .asked
+        case .unknown:
+            return .asked
+        case let .failed(reason):
+            return .failed(reason)
         }
+    }
+
+    /// How long a read waits to be told whether Health has been asked.
+    ///
+    /// A phone answers in milliseconds. But the question goes to the Health
+    /// daemon, and the daemon answers in order: behind a permission request
+    /// that is still waiting for its sheet — on an unsigned build, one that
+    /// never comes — a status check was measured waiting 85 seconds, with an
+    /// answer about last night's sleep waiting behind it. Three seconds, then
+    /// the read says Health did not answer, and the conversation moves on.
+    static let statusDeadline: Duration = .seconds(3)
+
+    enum RequestStatus: Sendable, Equatable {
+        case shouldRequest
+        case unnecessary
+        case unknown
+        case failed(String)
+    }
+
+    /// `getRequestStatusForAuthorization`, no longer waited for after `limit`.
+    ///
+    /// The callback form rather than the `async` one, because HealthKit's call
+    /// cannot be cancelled: a race between it and a timer is the only way to
+    /// stop *waiting* for it. Whichever answers first resumes the caller; the
+    /// other finds the continuation already spent.
+    private nonisolated static func requestStatus(
+        of store: HKHealthStore,
+        reading types: Set<HKObjectType>,
+        within limit: Duration
+    ) async -> RequestStatus {
+        await withCheckedContinuation { continuation in
+            let answer = FirstAnswer(continuation)
+            store.getRequestStatusForAuthorization(toShare: [], read: types) { status, error in
+                if let error {
+                    answer.give(.failed(plainReason(for: error)))
+                    return
+                }
+                switch status {
+                case .shouldRequest: answer.give(.shouldRequest)
+                case .unnecessary: answer.give(.unnecessary)
+                default: answer.give(.unknown)
+                }
+            }
+            Task {
+                try? await Task.sleep(for: limit)
+                answer.give(.failed(HealthRequestFailure.noAnswer.reason))
+            }
+        }
+    }
+
+    /// What `standing(for:)` can tell a read.
+    enum HealthStanding: Sendable, Equatable {
+        case asked
+        case notAsked
+        case noHealthData
+        case failed(String)
+    }
+
+    /// HealthKit's error, as one of the plain sentences a person may see.
+    ///
+    /// Never `localizedDescription`: on an unsigned build that is "Missing
+    /// com.apple.developer.healthkit entitlement.", and it reached the intro's
+    /// Health step word for word. The code decides which sentence; the text is
+    /// `HealthRequestFailure`'s, where it is tested for exactly that.
+    nonisolated static func plainReason(for error: any Error) -> String {
+        if let health = error as? HKError, health.code == .errorHealthDataRestricted {
+            return HealthRequestFailure.restricted.reason
+        }
+        return HealthRequestFailure.other.reason
     }
 
     /// Asks for everything the tool can ever read, at a moment the user chose.
@@ -159,9 +232,9 @@ actor HealthAccess {
     /// sentence they typed. Whatever they tap under those conditions is not
     /// really a decision.
     ///
-    /// The per-focus path stays for the case this cannot cover: HealthKit allows
-    /// several requests with different type sets, so a focus that has somehow
-    /// never been asked for still asks rather than silently reading nothing.
+    /// The only request left in this file. Reads used to ask per focus at
+    /// first use; they now report a focus nobody asked about as not connected
+    /// (`standing(for:)`), so this — reached from a tap — is the one door.
     func requestAllReadAccess() async -> HealthAvailability {
         guard Self.isAvailable else { return .noHealthData }
 
@@ -175,7 +248,10 @@ actor HealthAccess {
             requested.formUnion(HealthFocus.allCases)
             return .available
         } catch {
-            return .requestFailed(error.localizedDescription)
+            if let health = error as? HKError, health.code == .errorHealthDataUnavailable {
+                return .noHealthData
+            }
+            return .requestFailed(Self.plainReason(for: error))
         }
     }
 
@@ -189,8 +265,12 @@ actor HealthAccess {
     /// reads exactly like a metric with nothing in it, which is also the only
     /// honest thing to say about it.
     func readout(for focus: HealthFocus, in window: DateInterval) async -> HealthReadout {
-        let availability = await requestReadAccess(for: focus)
-        guard availability == .available else { return HealthReadout(availability: availability) }
+        switch await standing(for: focus) {
+        case .noHealthData: return HealthReadout(availability: .noHealthData)
+        case let .failed(reason): return HealthReadout(availability: .requestFailed(reason))
+        case .notAsked: return HealthReadout(availability: .available, notConnected: true)
+        case .asked: break
+        }
 
         var samples: [HealthMetric: [HealthSample]] = [:]
         for metric in focus.metrics {
@@ -223,6 +303,29 @@ actor HealthAccess {
         )
     }
 
+    // MARK: - Reads for the Today pages
+
+    /// Nightly sleep, for the Sleep page and the Today tile: raw intervals,
+    /// bucketed by `HealthArithmetic.nightlyTotals` on the far side of the
+    /// seam. Nil when the focus has never been connected or cannot be read.
+    func sleepIntervals(for window: DateInterval) async -> [SleepInterval]? {
+        guard await standing(for: .sleep) == .asked else { return nil }
+        return await sleepIntervals(in: window)
+    }
+
+    /// Steps in buckets of one hour or one day.
+    ///
+    /// Hourly is what lets the Activity tile say "you're usually at 6,100 by
+    /// now" instead of setting a morning against a whole day. HealthKit
+    /// aggregates in the daemon either way, so a fortnight of hours is a few
+    /// hundred doubles across the boundary. Nil when Health was never
+    /// connected or cannot be read; an empty array is a connected store with
+    /// nothing in it.
+    func stepBuckets(in window: DateInterval, hourly: Bool) async -> [HealthSample]? {
+        guard await standing(for: .activity) == .asked else { return nil }
+        return await buckets(of: .steps, in: window, every: hourly ? DateComponents(hour: 1) : DateComponents(day: 1))
+    }
+
     /// One value per calendar day, computed by HealthKit rather than by us.
     ///
     /// `HKStatisticsCollectionQueryDescriptor` aggregates inside the daemon and
@@ -236,6 +339,13 @@ actor HealthAccess {
     /// bucket off the user's day boundary, and the error is invisible: the
     /// numbers still look like step counts.
     private func dailyBuckets(of metric: HealthMetric, in window: DateInterval) async -> [HealthSample] {
+        await buckets(of: metric, in: window, every: DateComponents(day: 1))
+    }
+
+    /// The same, at any interval. Hours are anchored on the window's start
+    /// too, which is a local midnight for every caller, so each bucket starts
+    /// on the hour.
+    private func buckets(of metric: HealthMetric, in window: DateInterval, every interval: DateComponents) async -> [HealthSample] {
         guard let type = Self.quantityType(for: metric), let unit = Self.unit(for: metric) else { return [] }
         // The tag on every sample below is worked out from the unit the value is
         // about to be read with, never copied from `metric.unit`. Copying is
@@ -261,7 +371,7 @@ actor HealthAccess {
             ),
             options: options,
             anchorDate: window.start,
-            intervalComponents: DateComponents(day: 1)
+            intervalComponents: interval
         )
 
         guard let collection = try? await descriptor.result(for: store) else { return [] }
@@ -514,5 +624,23 @@ actor HealthAccess {
         case .cooldown: "Cooldown"
         default: "Workout"
         }
+    }
+}
+
+/// Resumes a continuation exactly once, whichever of two racers gets there
+/// first. The second `give` finds nothing to resume and does nothing.
+private final class FirstAnswer<Value: Sendable>: Sendable {
+    private let waiting: OSAllocatedUnfairLock<CheckedContinuation<Value, Never>?>
+
+    init(_ continuation: CheckedContinuation<Value, Never>) {
+        waiting = OSAllocatedUnfairLock(initialState: continuation)
+    }
+
+    func give(_ value: Value) {
+        let continuation = waiting.withLock { current -> CheckedContinuation<Value, Never>? in
+            defer { current = nil }
+            return current
+        }
+        continuation?.resume(returning: value)
     }
 }

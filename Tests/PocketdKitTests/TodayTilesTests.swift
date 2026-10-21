@@ -240,14 +240,14 @@ struct TodayTilesTests {
 
     // MARK: - Formatting
 
-    @Test("the display formatter is not the one the model reads")
+    @Test("the model and the screen spell a length one way")
     func formatsDifferFromHealthFormat() {
-        // Deliberately two spellings. `HealthFormat` strips digit grouping and
-        // spaces out its units because a 1.7B model reads "12.000" as twelve;
-        // a 44-point tile is read by a person, and the space is measured in
-        // characters.
+        // One spelling now (QA S2-new): the conversation's card said "6 h 36 m"
+        // beside a Sleep tile saying "6h 36m". `HealthFormat` still strips digit
+        // grouping for the model; lengths go through `Format.duration`.
         #expect(BriefFormat.duration(6 * 3600 + 36 * 60) == "6h 36m")
-        #expect(HealthFormat.duration(6 * 3600 + 36 * 60) == "6 h 36 m")
+        #expect(HealthFormat.duration(6 * 3600 + 36 * 60) == "6h 36m")
+        #expect(HealthFormat.duration(6 * 3600 + 36 * 60) == Format.duration(6 * 3600 + 36 * 60))
         #expect(BriefFormat.duration(7 * 3600 + 5 * 60) == "7h 05m")
         #expect(BriefFormat.duration(45 * 60) == "45m")
         #expect(BriefFormat.duration(0) == "0m")

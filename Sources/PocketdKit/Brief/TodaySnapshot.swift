@@ -56,14 +56,36 @@ public struct BriefReminder: Sendable, Codable, Equatable {
     /// reminder lands in — `dueToday` or `overdue` — is decided by whoever read
     /// EventKit against the clock, not here.
     public var due: Date?
+    /// Whether `due` carries a time of day, or only a date.
+    ///
+    /// Carried because the two go overdue at different moments, and the Due
+    /// tile has to agree with the clock rather than with the pile the reader
+    /// put a reminder in at breakfast: "Call the plumber" due at 17:00 is
+    /// overdue at 18:00, while "Water the plants" due today is not overdue
+    /// until tomorrow. `DueSplit` makes that call; this is what it needs.
+    public var dueHasTime: Bool
 
-    public init(title: String, due: Date? = nil) {
+    public init(title: String, due: Date? = nil, dueHasTime: Bool = false) {
         self.title = title
         self.due = due
+        self.dueHasTime = dueHasTime
     }
 
     public init(_ row: ReminderRow) {
-        self.init(title: row.title.sanitisedForPrompt(), due: row.due)
+        self.init(title: row.title.sanitisedForPrompt(), due: row.due, dueHasTime: row.dueHasTime)
+    }
+
+    private enum CodingKeys: String, CodingKey { case title, due, dueHasTime }
+
+    /// By hand for the reason `TodaySnapshot`'s decoder gives: a brief on disk
+    /// from a build that did not write `dueHasTime` must still decode, and a
+    /// missing flag reads as date-only — the reading that never declares
+    /// anything overdue early.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        title = try container.decode(String.self, forKey: .title)
+        due = try container.decodeIfPresent(Date.self, forKey: .due)
+        dueHasTime = (try? container.decodeIfPresent(Bool.self, forKey: .dueHasTime)) ?? false
     }
 }
 
@@ -158,6 +180,30 @@ public struct TodaySnapshot: Sendable, Codable, Equatable {
     public var restingHeartRate: Double?
     public var restingHeartRateUsual: Double?
 
+    /// Where a usual day has got to by `generatedAt`, in steps.
+    ///
+    /// The fair comparison for a day in progress. `stepsUsual` is a whole
+    /// day, and setting 4,120 steps at ten in the morning against it reads as
+    /// "behind" every single morning; set against what this person has
+    /// usually walked by ten, it says something. Measured at `generatedAt`
+    /// rather than at the moment the tile is drawn, because that is when
+    /// `stepsToday` was read — comparing a morning's count with an afternoon's
+    /// pace would be the same mistake the other way round.
+    ///
+    /// Nil when there is no hour-by-hour history to take it from, and the
+    /// Activity tile then falls back to the daily figure, saying so.
+    public var stepsUsualByNow: Double?
+
+    /// Whether `events` starts at this morning's midnight rather than at
+    /// `generatedAt`.
+    ///
+    /// The difference between "nothing **else** is on today" and "nothing is
+    /// on today", which a reader started at `now` cannot tell apart: the
+    /// standup that ended at 09:45 is simply absent. False for every snapshot
+    /// written before the flag existed, which keeps those on the cautious
+    /// wording.
+    public var eventsCoverWholeDay: Bool
+
     public init(
         generatedAt: Date,
         calendar: Availability = .off,
@@ -171,7 +217,9 @@ public struct TodaySnapshot: Sendable, Codable, Equatable {
         stepsToday: Double? = nil,
         stepsUsual: Double? = nil,
         restingHeartRate: Double? = nil,
-        restingHeartRateUsual: Double? = nil
+        restingHeartRateUsual: Double? = nil,
+        stepsUsualByNow: Double? = nil,
+        eventsCoverWholeDay: Bool = false
     ) {
         self.generatedAt = generatedAt
         self.calendar = calendar
@@ -186,6 +234,8 @@ public struct TodaySnapshot: Sendable, Codable, Equatable {
         self.stepsUsual = stepsUsual
         self.restingHeartRate = restingHeartRate
         self.restingHeartRateUsual = restingHeartRateUsual
+        self.stepsUsualByNow = stepsUsualByNow
+        self.eventsCoverWholeDay = eventsCoverWholeDay
     }
 
     /// Nothing connected and nothing known.
@@ -219,6 +269,18 @@ public struct TodaySnapshot: Sendable, Codable, Equatable {
             .min { $0.start == $1.start ? $0.title < $1.title : $0.start < $1.start }
     }
 
+    /// The timed event under way at `now`, if any — the one ending soonest
+    /// when two overlap, because that is the one somebody has to leave.
+    ///
+    /// What "Free" and "Nothing else today" must not be said over: at 4:35 in
+    /// the middle of a 4:30 dentist appointment nothing is *next*, and the day
+    /// is still not free.
+    public func currentEvent(now: Date) -> BriefEvent? {
+        events
+            .filter { !$0.isAllDay && $0.start <= now && now < $0.end }
+            .min { $0.end == $1.end ? $0.title < $1.title : $0.end < $1.end }
+    }
+
     /// Whether any source can be read at all. The Today tab uses it to choose
     /// between writing a brief and inviting the user to connect something.
     public var hasAnythingConnected: Bool {
@@ -233,6 +295,7 @@ extension TodaySnapshot {
         case generatedAt, calendar, reminders, health, events, dueToday, overdue
         case sleepLastNight, sleepUsual, stepsToday, stepsUsual
         case restingHeartRate, restingHeartRateUsual
+        case stepsUsualByNow, eventsCoverWholeDay
     }
 
     /// Written by hand for one reason: a field added in a later release must not
@@ -266,5 +329,53 @@ extension TodaySnapshot {
         stepsUsual = try container.decodeIfPresent(Double.self, forKey: .stepsUsual)
         restingHeartRate = try container.decodeIfPresent(Double.self, forKey: .restingHeartRate)
         restingHeartRateUsual = try container.decodeIfPresent(Double.self, forKey: .restingHeartRateUsual)
+        stepsUsualByNow = try container.decodeIfPresent(Double.self, forKey: .stepsUsualByNow)
+        eventsCoverWholeDay = (try? container.decodeIfPresent(Bool.self, forKey: .eventsCoverWholeDay)) ?? false
+    }
+}
+
+// MARK: - When the day moves on by itself
+
+extension TodaySnapshot {
+
+    /// Every moment at which a fact in this reading changes without anything
+    /// being edited: an event starting, an event ending, a timed reminder
+    /// falling due.
+    ///
+    /// The reason a paragraph about the day can go false while the calendar
+    /// stays exactly as it was. "Lunch at The Arches at 1:00 PM is next" is
+    /// true at noon, and at a quarter to two it is a lunch already under way —
+    /// which is what a brief written by Apple's brain went on saying on Today.
+    ///
+    /// All-day events are left out: they begin and end at midnight, which is a
+    /// new day and a new reading anyway. So are reminders with only a date,
+    /// which fall overdue at midnight for the same reason.
+    public var turningPoints: [Date] {
+        var moments: [Date] = []
+        for event in events where !event.isAllDay {
+            moments.append(event.start)
+            moments.append(event.end)
+        }
+        for reminder in dueToday + overdue where reminder.dueHasTime {
+            if let due = reminder.due { moments.append(due) }
+        }
+        return moments
+    }
+
+    /// The first moment after `now` at which a fact here changes by itself,
+    /// or nil when nothing in this reading is still to turn.
+    public func nextTurningPoint(after now: Date) -> Date? {
+        turningPoints.filter { $0 > now }.min()
+    }
+
+    /// Whether anything here turned between two moments: something that was
+    /// ahead has started, something under way has finished, something due has
+    /// fallen overdue.
+    ///
+    /// Half-open, `(earlier, later]`: a brief written at the very minute a
+    /// meeting began was already written knowing it had begun.
+    public func hasTurned(between earlier: Date, and later: Date) -> Bool {
+        guard later > earlier else { return false }
+        return turningPoints.contains { $0 > earlier && $0 <= later }
     }
 }

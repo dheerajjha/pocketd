@@ -126,8 +126,46 @@ public enum HealthAvailability: Sendable, Equatable {
     /// in some managed configurations.
     case noHealthData
     /// The authorization request itself could not be put to the user. Carries
-    /// the reason so the sentence is not "something went wrong".
+    /// the reason so the sentence is not "something went wrong" — and the
+    /// reason is always one of `HealthRequestFailure`'s plain sentences, never
+    /// HealthKit's own text, which names entitlements and frameworks.
     case requestFailed(String)
+}
+
+/// Why iOS could not be asked about Health, in words a person can act on.
+///
+/// The only strings that may travel in `HealthAvailability.requestFailed`.
+/// HealthKit's own `localizedDescription` used to: the walkthrough photographed
+/// "Missing com.apple.developer.healthkit entitlement." on the intro's Health
+/// step, which is true, useless and frightening in equal parts. Each case reads
+/// on its own, as one sentence.
+public enum HealthRequestFailure: String, Sendable, Equatable, CaseIterable {
+    /// Screen Time or a management profile.
+    case restricted
+    /// The Health daemon did not answer in time — it answers in order, and a
+    /// request still waiting for its sheet holds up everything behind it.
+    case noAnswer
+    /// Anything else: no entitlement on this build, iOS declining to show the
+    /// sheet, an error with no name. One sentence for all of them, because
+    /// there is one remedy.
+    case other
+
+    public var reason: String {
+        switch self {
+        case .restricted: "Screen Time or a profile has turned Health off on this iPhone."
+        case .noAnswer, .other: Self.couldNotReach
+        }
+    }
+
+    /// The one sentence for Health that could not be asked, wherever it is
+    /// said — the intro's Health row, a Today toast, the conversation.
+    ///
+    /// There used to be three for the one failure: "iOS didn't show the
+    /// question. Try again later." beside a Try again button, "Pocketd
+    /// couldn't ask iOS for Health. Try again.", and a chat card stacking two
+    /// of them. A daemon that did not answer and a sheet iOS declined to show
+    /// have one remedy, so they have one sentence.
+    public static let couldNotReach = "Pocketd couldn't reach Health. Try again."
 }
 
 /// Everything one read of the store produced. Never an error.
@@ -146,19 +184,31 @@ public struct HealthReadout: Sendable {
     public var workouts: [WorkoutRow]
     /// Set when a query hit its own cap and there were more rows behind it.
     public var truncated: Bool
+    /// iOS has never been asked for these types, so nothing was read.
+    ///
+    /// The one state a read can know about Health's permission: whether the
+    /// question has been put, not how it was answered. A read path that found
+    /// it unasked used to ask — mid-answer, with the sheet over a stream that
+    /// had stopped — and now reports this instead, so the sheet only ever comes
+    /// from the connect door. A flag beside `.available` rather than a new
+    /// `HealthAvailability` case, so every screen that switches over that enum
+    /// keeps compiling.
+    public var notConnected: Bool
 
     public init(
         availability: HealthAvailability = .available,
         samples: [HealthMetric: [HealthSample]] = [:],
         sleep: [SleepInterval] = [],
         workouts: [WorkoutRow] = [],
-        truncated: Bool = false
+        truncated: Bool = false,
+        notConnected: Bool = false
     ) {
         self.availability = availability
         self.samples = samples
         self.sleep = sleep
         self.workouts = workouts
         self.truncated = truncated
+        self.notConnected = notConnected
     }
 }
 
@@ -216,9 +266,15 @@ public enum HealthSummary {
         case .noHealthData:
             return ["text": "Health data is not available on this device, so there is nothing to read."]
         case .requestFailed(let reason):
-            return ["text": "Pocketd could not ask iOS for access to Health: \(reason)"]
+            // The sentence alone: it already says what happened and what to
+            // do, and a prefix before it was the second of two stacked
+            // explanations on the conversation's card.
+            return ["text": reason]
         case .available:
             break
+        }
+        guard !readout.notConnected else {
+            return ["text": notConnected]
         }
 
         switch focus {
@@ -258,7 +314,12 @@ public enum HealthSummary {
     ) -> [String: any Sendable] {
         var readings: [String] = []
         var notable: [String] = []
-        var missing: [String] = []
+        // Only the metric that was asked about is reported missing. Listing the
+        // rest — "Nothing came back for Respiratory rate, Mindful minutes" —
+        // answered "How did I sleep?" with a paragraph about two things nobody
+        // mentioned.
+        let asked = focus.metrics.first
+        var askedIsMissing = false
 
         for metric in focus.metrics {
             let days = metric == .sleep
@@ -269,8 +330,8 @@ public enum HealthSummary {
                 in: days, metric: metric, now: now, calendar: calendar
             ) else {
                 if days.isEmpty {
-                    missing.append(metric.label)
-                } else {
+                    if metric == asked { askedIsMissing = true }
+                } else if metric == asked {
                     // A third state again, and a real one: someone on their
                     // first day with the app has steps, but only today's, and
                     // today is still going up. Filing that under "no data" would
@@ -289,10 +350,12 @@ public enum HealthSummary {
             // all in real use — they are only ever compared against 9am.
             let history = days.filter { $0.day <= latest.day }
 
-            readings.append(reading(
-                metric: metric, latest: latest, days: history, now: now,
-                calendar: calendar, locale: locale, timeZone: timeZone
-            ))
+            readings.append(metric == .sleep
+                ? sleepReading(latest: latest, days: history, now: now, calendar: calendar, locale: locale, timeZone: timeZone)
+                : reading(
+                    metric: metric, latest: latest, days: history, now: now,
+                    calendar: calendar, locale: locale, timeZone: timeZone
+                ))
             notable.append(contentsOf: longMemory(
                 metric: metric, days: history, now: now,
                 calendar: calendar, locale: locale, timeZone: timeZone
@@ -313,14 +376,57 @@ public enum HealthSummary {
         if !notable.isEmpty {
             data["notable"] = Array(notable.prefix(notableLimit))
         }
-        if !missing.isEmpty {
-            data["no_data"] = missing.joined(separator: ", ")
-            // Once, at the top, not on every missing metric — the same economy
-            // as the reminder tool's priority scale. It is three sentences and
-            // it would otherwise be repeated per metric.
-            data["note"] = ambiguityNote
+        if askedIsMissing, let asked {
+            // One plain sentence. The Settings path is only for the case above,
+            // where nothing at all came back; here something did, so Health is
+            // plainly readable and the path would be a wrong turn.
+            data["note"] = noData(for: asked)
         }
         return data
+    }
+
+    /// Sleep, judged exactly as the Sleep tile and the Sleep page judge it.
+    ///
+    /// The same usual (`Usual.typicalSleep`: the median of the last fortnight
+    /// of real nights, last night left out), the same ±10 % band and the same
+    /// words (`TodayVerdicts`). The general reading below compares against a
+    /// 28-day mean with its own range, and it answered "How did I sleep?" with
+    /// "7% below your 28-day average of 7 h 5 m, below your usual range" under
+    /// a tile that said Rested.
+    ///
+    /// Written in the general reading's shape — label, figure, " on ", date —
+    /// because the answer card lifts the figure out by exactly that shape.
+    static func sleepReading(
+        latest: DailyValue,
+        days: [DailyValue],
+        now: Date,
+        calendar: Calendar,
+        locale: Locale,
+        timeZone: TimeZone
+    ) -> String {
+        let age = HealthArithmetic.dayGap(from: latest.day, to: now, calendar: calendar)
+        let stale = age > HealthArithmetic.currentWithinDays
+        let on = HealthFormat.day(latest.day, includingYear: stale, locale: locale, timeZone: timeZone, calendar: calendar)
+        let earlier = days.filter { $0.day < latest.day }.sorted { $0.day < $1.day }.map(\.value)
+        let usual = Usual.typicalSleep(earlier)
+        let band = TodayVerdicts.sleepBand(latest.value, usual: usual)
+
+        var line = "\(HealthMetric.sleep.label) \(Format.duration(latest.value)) on \(on) — \(band.word)"
+        if let usual, usual > 0 {
+            line += ", \(TodayVerdicts.deltaPhrase(latest.value - usual)) your usual of \(Format.duration(usual))."
+        } else {
+            line += ". There is no usual to compare it with yet."
+        }
+        guard stale else { return line }
+        return "\(line) That reading is \(age) days old — it is the newest whole day of sleep data on this iPhone, and it does not describe today."
+    }
+
+    /// "Pocketd found no sleep data for last night." — what the asked-for
+    /// metric says when it alone came back empty.
+    static func noData(for metric: HealthMetric) -> String {
+        metric == .sleep
+            ? "Pocketd found no sleep data for last night."
+            : "Pocketd found no \(metric.noun) data."
     }
 
     /// One metric, one line, arithmetic already done.
@@ -505,11 +611,18 @@ public enum HealthSummary {
     /// recorded. Claiming a denial sends a user who simply has no watch to a
     /// settings screen where nothing is wrong, and claiming "no data" to a user
     /// who refused hides the switch that would fix it.
+    /// What the tool says when Health has never been connected: one sentence
+    /// and the one remedy. The model repeats it; the sheet is not raised.
+    public static let notConnected = "Health isn't connected yet. Connect it in Pocketd, then ask again."
+
+    /// Nothing at all came back: the one case that carries the Settings path,
+    /// because iOS answers a refused read and an empty one identically and
+    /// only that screen can tell them apart.
     static func ambiguity(for focus: HealthFocus) -> String {
         "No \(focus.noun) data came back from Health. \(ambiguityNote)"
     }
 
-    static let ambiguityNote = "That can mean nothing has been recorded, or that Pocketd was not allowed to read it — iOS deliberately does not tell an app which, so neither can be ruled out. Health permissions are under Settings > Privacy & Security > Health > Pocketd."
+    static let ambiguityNote = "That can mean nothing has been recorded, or that Pocketd was not allowed to read it — iOS deliberately does not tell an app which, so neither can be ruled out. Health permissions are under Settings › Privacy & Security › Health › Pocketd."
 }
 
 // MARK: - Numbers on their way to the model
@@ -563,14 +676,12 @@ public enum HealthFormat {
     /// Hours and minutes, never a decimal count of hours. "7.75 hours" is a
     /// number nobody says out loud, and a model handed one will convert it in
     /// the answer and get 7 hours 45 minutes wrong about as often as right.
+    ///
+    /// The app's one spelling of a length (`Format.duration`): "6h 36m",
+    /// "45 min". This used to write "6 h 36 m", so the conversation's card and
+    /// the Sleep tile beside it spelled last night two ways.
     public static func duration(_ seconds: TimeInterval) -> String {
-        guard seconds.isFinite, seconds > 0 else { return "0 m" }
-        let minutes = Int((seconds / 60).rounded())
-        let hours = minutes / 60
-        let remainder = minutes % 60
-        if hours == 0 { return "\(remainder) m" }
-        if remainder == 0 { return "\(hours) h" }
-        return "\(hours) h \(remainder) m"
+        Format.duration(seconds)
     }
 
     public static func percent(_ value: Double, locale: Locale = .current) -> String {

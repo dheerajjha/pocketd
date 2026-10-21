@@ -12,7 +12,14 @@ import PocketdKit
 /// undone.
 @Tool("calendar")
 struct CalendarTool {
-    let description = "List events from the user's calendar, or add a new one."
+    // Shorter than the built-in brain's description, to pay for the longer
+    // `start`. With the measured wording in `start` and `when`, the three
+    // schemas came to 1,361 guard tokens on a tool-native template against a
+    // 1,344 ceiling at the default 4,096 window — and the budget's answer to
+    // that is to drop the health tool. The cuts here, in `duration_minutes`
+    // and in the reminders tool's description bring it to 1,331, and change
+    // nothing a model needs: the action enum already says list or create.
+    let description = "List or add events in the user's calendar."
 
     @ToolArguments
     struct Arguments {
@@ -27,27 +34,27 @@ struct CalendarTool {
         @ToolArgument("For create: what the event is called.")
         var title: String?
 
-        @ToolArgument("For create: when it starts, in the user's own words, like 'tomorrow at 3pm'.")
+        // The wording Apple's model was measured with — see `SystemCalendarTool`.
+        // The old example put a day on "add dinner with Priya at 8pm".
+        @ToolArgument("For create: when it starts, in the user's exact words, like '3pm', 'Friday at 1pm' or 'tomorrow at 9'. Never add a day they did not say.")
         var start: String?
 
-        @ToolArgument("For create: how many minutes it lasts. Defaults to 60.")
+        // Believed only when the user's own words say how long, and an hour
+        // otherwise, whatever the model writes here: `EventLength`. So the
+        // default is the body's to apply, and not worth a schema token.
+        @ToolArgument("For create: how many minutes it lasts.")
         var duration_minutes: Int?
     }
 
+    /// The body is `ToolBodies.calendar`, shared with the built-in brain's
+    /// wrapper so the two engines cannot answer the same question differently.
     func call(arguments: Arguments) async throws -> ToolOutput {
-        switch arguments.action {
-        case .list:
-            return ToolOutput(await PersonalDataTools.calendarPayload(range: arguments.range) { window in
-                await EventAccess.shared.events(in: window)
-            })
-
-        case .create:
-            return ToolOutput(await PersonalDataWrites.createEvent(
-                title: arguments.title,
-                start: arguments.start,
-                durationMinutes: arguments.duration_minutes,
-                write: { await EventAccess.shared.createEvent($0) }
-            ))
-        }
+        ToolOutput(await ToolBodies.calendar(
+            action: arguments.action,
+            range: arguments.range,
+            title: arguments.title,
+            start: arguments.start,
+            durationMinutes: arguments.duration_minutes
+        ))
     }
 }

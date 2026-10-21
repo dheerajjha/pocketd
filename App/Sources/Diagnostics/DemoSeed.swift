@@ -83,6 +83,9 @@ enum DemoSeed {
 
     @MainActor
     static func runIfRequested() async {
+        // Before the guard: a dump of the day is useful on any launch, seeded
+        // or not, and it reads after a delay so the seed below has landed.
+        DayDump.scheduleIfRequested()
         guard isRequested || isUnseedRequested else { return }
 
         // Ahead of anything else, and unconditionally: a launch carrying both
@@ -105,7 +108,7 @@ enum DemoSeed {
 
     // MARK: - Events
 
-    private struct DemoEvent: Sendable {
+    struct DemoEvent: Sendable {
         let title: String
         let start: Date
         let end: Date
@@ -115,11 +118,32 @@ enum DemoSeed {
     private static func seedEvents() async {
         let calendar = Calendar.current
         let now = Date()
+        let dayAfter = calendar.date(byAdding: .day, value: 2, to: now) ?? now.addingTimeInterval(2 * 86_400)
+        let events = Self.events(now: now, calendar: calendar)
+
+        // The whole span every candidate above falls in, read once inside
+        // `DemoStore` rather than once per title — the first launch after
+        // install is exactly when the calendar daemon is slowest to answer,
+        // and six reads of the same three days would only make that wait
+        // longer.
+        let windowStart = calendar.startOfDay(for: now)
+        let windowEnd = calendar.date(byAdding: .day, value: 3, to: windowStart) ?? dayAfter.addingTimeInterval(86_400)
+        await DemoStore.shared.seedEvents(events, windowStart: windowStart, windowEnd: windowEnd)
+    }
+
+    /// The demo calendar, relative to the day of `now`.
+    ///
+    /// A function rather than a list inside `seedEvents`, so `DemoDay` can
+    /// write the demo routine results from the very rows this stages — the
+    /// walkthrough found a routine card saying "Two reminders are due" beside
+    /// a Today tile saying "1 due", because the card's sentence was typed by
+    /// hand and the tile's was read from this.
+    static func events(now: Date, calendar: Calendar) -> [DemoEvent] {
         let tomorrow = calendar.date(byAdding: .day, value: 1, to: now) ?? now.addingTimeInterval(86_400)
         let dayAfter = calendar.date(byAdding: .day, value: 2, to: now) ?? now.addingTimeInterval(2 * 86_400)
 
         let flightStart = at(12, 0, on: dayAfter, calendar: calendar)
-        let events = [
+        return [
             DemoEvent(title: "Standup",
                       start: at(9, 30, on: now, calendar: calendar), end: at(9, 45, on: now, calendar: calendar),
                       location: nil),
@@ -143,33 +167,27 @@ enum DemoSeed {
                       end: calendar.date(byAdding: .minute, value: PersonalDataWrites.defaultEventMinutes, to: flightStart) ?? flightStart,
                       location: "Terminal 2")
         ]
-
-        // The whole span every candidate above falls in, read once inside
-        // `DemoStore` rather than once per title — the first launch after
-        // install is exactly when the calendar daemon is slowest to answer,
-        // and six reads of the same three days would only make that wait
-        // longer.
-        let windowStart = calendar.startOfDay(for: now)
-        let windowEnd = calendar.date(byAdding: .day, value: 3, to: windowStart) ?? dayAfter.addingTimeInterval(86_400)
-        await DemoStore.shared.seedEvents(events, windowStart: windowStart, windowEnd: windowEnd)
     }
 
     // MARK: - Reminders
 
-    private struct DemoReminder: Sendable {
+    struct DemoReminder: Sendable {
         let title: String
         let due: Date?
         let dueHasTime: Bool
     }
 
     private static func seedReminders() async {
-        let calendar = Calendar.current
-        let now = Date()
+        await DemoStore.shared.seedReminders(reminders(now: Date(), calendar: Calendar.current))
+    }
+
+    /// The demo reminders list, relative to the day of `now`. See `events`.
+    static func reminders(now: Date, calendar: Calendar) -> [DemoReminder] {
         let tomorrow = calendar.date(byAdding: .day, value: 1, to: now) ?? now.addingTimeInterval(86_400)
         let yesterday = calendar.date(byAdding: .day, value: -1, to: now) ?? now.addingTimeInterval(-86_400)
         let inThreeDays = calendar.date(byAdding: .day, value: 3, to: now) ?? now.addingTimeInterval(3 * 86_400)
 
-        let reminders = [
+        return [
             DemoReminder(title: "Renew passport", due: at(9, 0, on: tomorrow, calendar: calendar), dueHasTime: true),
             DemoReminder(title: "Call the plumber", due: at(17, 0, on: now, calendar: calendar), dueHasTime: true),
             DemoReminder(title: "Buy oat milk", due: nil, dueHasTime: false),
@@ -184,16 +202,18 @@ enum DemoSeed {
             // date with no clock time: "no guessed hour, ever".
             DemoReminder(title: "Water the plants", due: inThreeDays, dueHasTime: false)
         ]
-
-        await DemoStore.shared.seedReminders(reminders)
     }
 
     // MARK: - Profile
 
+    /// The name the seed gives the profile, and the one `DemoDay`'s routine
+    /// results greet.
+    static let seededName = "Sam"
+
     /// No `Profile` type exists yet — see `Keys.profileName`. Once one does,
     /// this line keeps working unchanged: it writes the value, not the type.
     private static func seedProfileName() {
-        UserDefaults.standard.set("Sam", forKey: Keys.profileName)
+        UserDefaults.standard.set(seededName, forKey: Keys.profileName)
         // The two abilities the seeded data is for, switched on so the Today
         // tiles and the Ask cards have something to read. `AppModel.bootstrap`
         // re-reads both after the seed runs; iOS's own grant comes from
@@ -204,7 +224,7 @@ enum DemoSeed {
 
     // MARK: - Shared
 
-    private static func at(_ hour: Int, _ minute: Int, on day: Date, calendar: Calendar) -> Date {
+    static func at(_ hour: Int, _ minute: Int, on day: Date, calendar: Calendar) -> Date {
         calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day) ?? day
     }
 

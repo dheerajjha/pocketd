@@ -166,6 +166,43 @@ struct TodaySnapshotTests {
         #expect(snapshot.sleepLastNight == nil)
     }
 
+    @Test("a brief from before the day-detail fields still decodes, on the cautious side")
+    func dayDetailFieldsDecodeWhenAbsent() throws {
+        // Written by the build before `dueHasTime`, `stepsUsualByNow` and
+        // `eventsCoverWholeDay`. A missing flag must read as the reading that
+        // never overstates: date-only, no pace, and "nothing else today"
+        // rather than "nothing today".
+        let json = #"""
+        {"generatedAt":"2026-09-17T07:30:00Z","calendar":"connected","reminders":"connected","health":"connected",
+         "dueToday":[{"title":"Pay rent","due":"2026-09-17T17:00:00Z"}],"stepsToday":4120,"stepsUsual":6100}
+        """#
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let snapshot = try decoder.decode(TodaySnapshot.self, from: Data(json.utf8))
+        #expect(snapshot.dueToday.first?.dueHasTime == false)
+        #expect(snapshot.stepsUsualByNow == nil)
+        #expect(snapshot.eventsCoverWholeDay == false)
+    }
+
+    @Test("the day-detail fields survive a round trip")
+    func dayDetailFieldsRoundTrip() throws {
+        let original = TodaySnapshot(
+            generatedAt: Self.date(9),
+            reminders: .connected,
+            dueToday: [BriefReminder(title: "Call the plumber", due: Self.date(17), dueHasTime: true)],
+            stepsToday: 4_120,
+            stepsUsualByNow: 2_685,
+            eventsCoverWholeDay: true
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(TodaySnapshot.self, from: encoder.encode(original))
+        #expect(decoded == original)
+        #expect(decoded.dueToday.first?.dueHasTime == true)
+    }
+
     @Test("an availability this build has never heard of reads as off")
     func unknownAvailabilityFailsClosed() throws {
         // Failing to `.off` shows nothing. Guessing `.connected` would have the

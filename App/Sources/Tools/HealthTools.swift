@@ -53,8 +53,7 @@ struct HealthSummaryTool {
         // `origin` is left to its default, which reads `ToolContext.origin` at
         // this call. The origin arrives by task local because tools are frozen
         // into the client at construction and cannot be swapped per request.
-        ToolOutput(await HealthSummary.payload(focus: arguments.focus) { focus, window in
-            await HealthAccess.shared.readout(for: focus, in: window)
-        })
+        // The body is `ToolBodies.health`, shared with the built-in brain.
+        ToolOutput(await ToolBodies.health(focus: arguments.focus))
     }
 }

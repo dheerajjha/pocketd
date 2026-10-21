@@ -1264,8 +1264,8 @@ struct HealthAddedMetricTests {
 
         let days = HealthArithmetic.daily(samples, metric: .mindful_minutes, calendar: calendar)
         #expect(days == [DailyValue(day: Fixture.date(2025, 9, 10, 0, 0), value: 1_500)])
-        #expect(HealthFormat.value(1_500, metric: .mindful_minutes, locale: Fixture.posix) == "25 m")
-        #expect(HealthFormat.value(4_500, metric: .mindful_minutes, locale: Fixture.posix) == "1 h 15 m")
+        #expect(HealthFormat.value(1_500, metric: .mindful_minutes, locale: Fixture.posix) == "25 min")
+        #expect(HealthFormat.value(4_500, metric: .mindful_minutes, locale: Fixture.posix) == "1h 15m")
     }
 
     @Test("blood oxygen stays the fraction HealthKit stores and becomes a percentage once")
