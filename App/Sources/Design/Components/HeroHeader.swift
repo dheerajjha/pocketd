@@ -1,15 +1,20 @@
 import SwiftUI
 
-/// The top of a screen, instead of a navigation bar.
+/// The top of the home screen, instead of a navigation bar.
 ///
-/// "Thursday" at 30pt with "17 SEP" in mono under it, and the screen's one or
-/// two circular controls floating on the right. There is no navigation bar
-/// behind this: a system bar would spend 96pt saying the word "Today" over a
-/// screen whose first line already says what day it is.
+/// "Thursday" in `.largeTitle` bold with "17 SEP" in mono under it, and the
+/// screen's header controls — a `HeaderCapsule` — floating on the right.
+/// There is no navigation bar behind this on the home screen: a system bar
+/// would spend 96pt saying the word "Today" over a screen whose first line
+/// already says what day it is.
 ///
 /// The wash is the other half of the effect. A cool gradient over the top
 /// ~240pt, fading into the canvas before the first card, which is what stops a
 /// flat near-white page reading as a form.
+///
+/// At the accessibility text sizes the day name alone fills the width, so the
+/// controls move onto their own line above it rather than squeezing it into
+/// "Wednes-day".
 struct HeroHeader<Trailing: View>: View {
     let dayName: String
     /// Already formatted, uppercased here. "17 SEP".
@@ -18,21 +23,44 @@ struct HeroHeader<Trailing: View>: View {
     var wash: Bool = true
     @ViewBuilder var trailing: Trailing
 
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    private var titleBlock: some View {
+        VStack(alignment: .leading, spacing: PDSpacing.xxs) {
+            Text(dayName)
+                .pdTitle()
+                .foregroundStyle(Color.pd.ink)
+                // One word, never broken: it shrinks a little before it would
+                // wrap inside itself.
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .accessibilityAddTraits(.isHeader)
+            Text(date.uppercased())
+                .font(Font.pd.label)
+                .tracking(1.4)
+                .foregroundStyle(Color.pd.inkSecondary)
+                .accessibilityLabel(date)
+        }
+    }
+
     var body: some View {
-        HStack(alignment: .top, spacing: PDSpacing.m) {
-            VStack(alignment: .leading, spacing: PDSpacing.xxs) {
-                Text(dayName)
-                    .pdTitle()
-                    .foregroundStyle(Color.pd.ink)
-                Text(date.uppercased())
-                    .font(Font.pd.label)
-                    .tracking(1.4)
-                    .foregroundStyle(Color.pd.inkSecondary)
-                    .accessibilityLabel(date)
-            }
-            Spacer(minLength: 0)
-            HStack(spacing: PDSpacing.xs) {
-                trailing
+        Group {
+            if typeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: PDSpacing.s) {
+                    HStack(spacing: PDSpacing.xs) {
+                        Spacer(minLength: 0)
+                        trailing
+                    }
+                    titleBlock
+                }
+            } else {
+                HStack(alignment: .top, spacing: PDSpacing.m) {
+                    titleBlock
+                    Spacer(minLength: 0)
+                    HStack(spacing: PDSpacing.xs) {
+                        trailing
+                    }
+                }
             }
         }
         .padding(.horizontal, PDSpacing.gutter)
@@ -105,19 +133,13 @@ private struct HeroHeaderPreview: View {
     var body: some View {
         VStack(spacing: 0) {
             HeroHeader(date: Date()) {
-                CircleIconButton(symbol: "bell", label: "Routines", badge: 2) {}
-                AvatarButton(initial: "D") {}
+                HeaderCapsule(initial: "D", showsBadge: true, onRoutines: {}, onYou: {})
             }
             ScrollView {
                 VStack(spacing: PDSpacing.cardGap) {
-                    PDCard {
-                        VStack(alignment: .leading, spacing: PDSpacing.s) {
-                            SectionLabel("Today's brief")
-                            Text("Your brief will appear here.")
-                                .font(Font.pd.lead)
-                                .foregroundStyle(Color.pd.ink)
-                        }
-                    }
+                    Text("Your brief will appear here, on the canvas.")
+                        .pdLead()
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(.horizontal, PDSpacing.gutter)
                 .padding(.top, PDSpacing.m)

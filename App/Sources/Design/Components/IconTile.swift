@@ -23,6 +23,8 @@ struct IconTile: View {
 
     var body: some View {
         Image(systemName: symbol)
+            // A glyph in a fixed tile: sized by the tile, not the text
+            // setting. The tile is decoration beside a title that does scale.
             .font(.system(size: size * 0.42, weight: .regular))
             .foregroundStyle(tint)
             .frame(width: size, height: size)

@@ -24,11 +24,12 @@ struct SecondaryLink: View {
             Text(title)
                 .font(Font.pd.body.weight(.medium))
                 .foregroundStyle(Color.pd.inkSecondary)
+                .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
-                // 44pt, which is the tap target Apple asks for and which this
-                // control is usually the one to miss.
-                .frame(height: 44)
-                .contentShape(Rectangle())
+                // 44pt at least, which is the tap target Apple asks for and
+                // which this control is usually the one to miss. A minimum,
+                // so a larger text size grows it rather than clipping it.
+                .pdHitTarget()
         }
         .buttonStyle(PDPressStyle())
     }

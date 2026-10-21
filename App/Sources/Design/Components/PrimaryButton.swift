@@ -8,7 +8,9 @@ import SwiftUI
 /// of this component.
 ///
 /// Full width and 54pt tall because it is usually pinned to the bottom of a
-/// page and a thumb should not have to aim.
+/// page and a thumb should not have to aim. At the accessibility text sizes
+/// the label may take two lines and the button grows to hold them; 54 is the
+/// floor, not the height.
 struct PrimaryButton: View {
     let title: String
     /// The trailing `arrow.right`. On by default: this button almost always
@@ -33,9 +35,10 @@ struct PrimaryButton: View {
                 // reads as a mis-tap.
                 HStack(spacing: PDSpacing.xs) {
                     Text(title)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
                     if arrow {
                         Image(systemName: "arrow.right")
-                            .font(.system(size: 16, weight: .semibold))
                     }
                 }
                 .opacity(isLoading ? 0 : 1)
@@ -47,10 +50,17 @@ struct PrimaryButton: View {
             }
             .font(Font.pd.buttonLabel)
             .foregroundStyle(Color.pd.onPrimary)
+            .padding(.horizontal, PDSpacing.l)
+            .padding(.vertical, PDSpacing.s)
             .frame(maxWidth: .infinity)
-            .frame(height: PDMetric.primaryButtonHeight)
-            .background(Color.pd.primaryButton, in: Capsule(style: .continuous))
-            .contentShape(Capsule(style: .continuous))
+            .frame(minHeight: PDMetric.primaryButtonHeight)
+            // A capsule at 54pt; a rounded rectangle with the same radius once
+            // a second line makes it taller, rather than a lozenge.
+            .background(
+                Color.pd.primaryButton,
+                in: RoundedRectangle(cornerRadius: PDMetric.primaryButtonHeight / 2, style: .continuous)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: PDMetric.primaryButtonHeight / 2, style: .continuous))
         }
         .buttonStyle(PDPressStyle())
         .disabled(isLoading || !isEnabled)

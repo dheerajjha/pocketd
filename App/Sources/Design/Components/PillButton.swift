@@ -2,13 +2,16 @@ import SwiftUI
 
 /// A small action that belongs to the card it sits in.
 ///
-/// "Read aloud", "Refresh", "Setup guide". Capsule, 37pt tall, symbol leading —
+/// "Read aloud", "Use this", "Try again". Capsule, 37pt tall, symbol leading —
 /// leading because the symbol is what the eye finds in a row of two or three of
 /// these, and a trailing one makes the labels start at different places.
 ///
 /// The exception is a pill that leaves the app, which takes `arrow.up.right`.
 /// That symbol goes at the end, because there it is a consequence rather than a
 /// category.
+///
+/// The capsule is drawn at 37pt and grows with its label at large text sizes;
+/// the button around it is at least 44pt tall either way.
 struct PillButton: View {
     let title: String
     var symbol: String = "arrow.up.right"
@@ -32,7 +35,8 @@ struct PillButton: View {
             }
             .foregroundStyle(isOn ? Color.pd.onPrimary : tint)
             .padding(.horizontal, PDSpacing.m)
-            .frame(height: PDMetric.pillHeight)
+            .padding(.vertical, PDSpacing.xxs)
+            .frame(minHeight: PDMetric.pillHeight)
             .background(
                 isOn ? Color.pd.primaryButton : Color.pd.chip,
                 in: Capsule(style: .continuous)
@@ -41,19 +45,23 @@ struct PillButton: View {
                 Capsule(style: .continuous)
                     .strokeBorder(Color.pd.cardStroke, lineWidth: isOn ? 0 : 1)
             )
-            .contentShape(Capsule(style: .continuous))
+            .pdHitTarget()
         }
         .buttonStyle(PDPressStyle())
         .accessibilityLabel(title)
     }
 
     private var glyph: some View {
+        // The label's own text style, so the symbol grows with the word.
         Image(systemName: symbol)
-            .font(.system(size: 14, weight: .regular))
+            .font(Font.pd.secondary)
     }
 }
 
 /// The same pill at link size — 24pt tall, used inline under a sentence.
+///
+/// Drawn at 24pt; tappable at 44. The extra 20pt is transparent frame, so a
+/// row holding one of these is 44pt tall whatever the pill looks like.
 struct LinkPill: View {
     let title: String
     var symbol: String = "arrow.up.right"
@@ -66,15 +74,16 @@ struct LinkPill: View {
         } label: {
             HStack(spacing: PDSpacing.xxs) {
                 Text(title)
-                    .font(Font.pd.caption.weight(.medium))
+                    .font(Font.pd.secondary.weight(.medium))
                 Image(systemName: symbol)
-                    .font(.system(size: 11, weight: .regular))
+                    .font(Font.pd.tick.weight(.regular))
             }
             .foregroundStyle(Color.pd.accent)
             .padding(.horizontal, PDSpacing.s)
-            .frame(height: PDMetric.linkPillHeight)
+            .padding(.vertical, 2)
+            .frame(minHeight: PDMetric.linkPillHeight)
             .background(Color.pd.accentSoft, in: Capsule(style: .continuous))
-            .contentShape(Capsule(style: .continuous))
+            .pdHitTarget()
         }
         .buttonStyle(PDPressStyle())
         .accessibilityLabel(title)

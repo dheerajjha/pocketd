@@ -10,7 +10,12 @@ import SwiftUI
 /// change — "Next, tap Allow Full Access." — because iOS's own sheet is the
 /// screen people actually decline on, and it uses words nobody has been
 /// prepared for. It appears only in `.connect`; once a thing is connected,
-/// instructions for connecting it are clutter.
+/// instructions for connecting it are clutter. It is a `Primer`, so the button
+/// name can be bolded with `**…**`.
+///
+/// The simpler app replaces this card with a `SourceRow` (a small Connect pill
+/// instead of a second full-width button under the screen's own Continue). It
+/// stays for the screens that have not moved yet.
 struct ConnectCard: View {
     enum State: Equatable {
         case connect
@@ -43,28 +48,31 @@ struct ConnectCard: View {
                 HStack(alignment: .top, spacing: PDSpacing.m) {
                     IconTile(symbol: symbol, fill: tileFill, tint: tileTint)
                     VStack(alignment: .leading, spacing: PDSpacing.xxs) {
-                        HStack(spacing: PDSpacing.xs) {
-                            Text(title)
-                                .font(Font.pd.headline)
-                                .foregroundStyle(Color.pd.ink)
-                            if state != .connect {
+                        // Title and pill share a line only while the title
+                        // fits on it whole — "Remind / ers" broke inside the
+                        // word beside the pill in v2.
+                        if state != .connect {
+                            AccessoryRowLayout(spacing: PDSpacing.xs) {
+                                titleText
                                 StatusPill(
                                     state == .connected ? .positive : .caution,
                                     state == .connected ? "Connected" : "Needs attention"
                                 )
                             }
+                        } else {
+                            titleText
                         }
                         Text(detail)
                             .font(Font.pd.secondary)
                             .foregroundStyle(Color.pd.inkSecondary)
-                            .lineSpacing(3)
+                            .modifier(PDLineSpacing(3, relativeTo: .subheadline))
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 0)
                 }
 
                 if state == .connect, let primer {
-                    Callout(symbol: "hand.tap", text: primer)
+                    Primer(primer)
                 }
 
                 if state != .connected {
@@ -75,8 +83,10 @@ struct ConnectCard: View {
                         Text(resolvedActionTitle)
                             .font(Font.pd.secondary.weight(.semibold))
                             .foregroundStyle(Color.pd.ink)
+                            .multilineTextAlignment(.center)
+                            .padding(.vertical, PDSpacing.xs)
                             .frame(maxWidth: .infinity)
-                            .frame(height: PDMetric.pillHeight)
+                            .frame(minHeight: PDMetric.minHitTarget)
                             .background(Color.pd.fillPill, in: Capsule(style: .continuous))
                             .overlay(
                                 Capsule(style: .continuous)
@@ -89,6 +99,12 @@ struct ConnectCard: View {
                 }
             }
         }
+    }
+
+    private var titleText: some View {
+        Text(title)
+            .font(Font.pd.headline)
+            .foregroundStyle(Color.pd.ink)
     }
 
     private var tileFill: Color {
@@ -125,7 +141,7 @@ private struct ConnectCardPreview: View {
                     symbol: "calendar",
                     detail: "Ask what's on tomorrow, or have it add an event for you.",
                     state: .connect,
-                    primer: "Next, tap Allow Full Access."
+                    primer: "Next, tap **Allow Full Access** so Pocketd can read your calendar."
                 ) {}
                 ConnectCard(
                     title: "Reminders",

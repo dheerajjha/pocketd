@@ -51,19 +51,24 @@ struct StatusPill: View {
         HStack(spacing: PDSpacing.xxs) {
             if let symbol = kind.symbol {
                 Image(systemName: symbol)
-                    .font(.system(size: 10, weight: .bold))
+                    .font(Font.pd.tick.weight(.bold))
             }
             Text(text)
-                .font(Font.pd.caption.weight(.medium))
-                // One word or two, never "Needs atte…". This pill shares a row
-                // with a title that can be any length, and a flexible label
-                // beside a flexible title is the one that loses.
-                .fixedSize(horizontal: true, vertical: false)
+                .font(Font.pd.secondary.weight(.medium))
+                // One word or two, never "Needs atte…" and never "Rea / dy":
+                // one line that shrinks a little before it would truncate or
+                // break inside a word. Where the pill goes is the row's call —
+                // `AccessoryRowLayout` moves it under the title when the two
+                // do not fit side by side — so it is only squeezed when there
+                // is truly no room.
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
         }
         .foregroundStyle(kind.ink)
         .layoutPriority(1)
         .padding(.horizontal, PDSpacing.s)
-        .frame(height: PDMetric.linkPillHeight + 4)
+        .padding(.vertical, 3)
+        .frame(minHeight: PDMetric.linkPillHeight + 4)
         .background(kind.fill, in: Capsule(style: .continuous))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(text)

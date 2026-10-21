@@ -20,11 +20,21 @@ struct TimelineItem: Identifiable, Hashable {
 /// Times are monospaced and right-aligned in a fixed column so the rail is
 /// straight — proportional digits put "9:30" and "11:00" at different distances
 /// from the dots and the whole thing wobbles.
+///
+/// At the accessibility text sizes a time column wide enough for "10:30 PM"
+/// would leave the titles a few letters a line, so each time moves above its
+/// title instead and the rail runs beside both.
 struct TimelineList: View {
     let items: [TimelineItem]
-    /// The width of the time column. Fixed rather than intrinsic for the reason
-    /// above.
+    /// The width of the time column at the default text size. Fixed rather
+    /// than intrinsic for the reason above; it is scaled with the time's own
+    /// text style, so a caller measuring in default-size characters stays
+    /// right at every size.
     var timeWidth: CGFloat = 54
+
+    @Environment(\.dynamicTypeSize) private var typeSize
+    /// How much the time's text style has grown from its default size.
+    @ScaledMetric(relativeTo: .callout) private var timeScale: CGFloat = 1
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,10 +47,12 @@ struct TimelineList: View {
 
     private func row(_ item: TimelineItem, isFirst: Bool, isLast: Bool) -> some View {
         HStack(alignment: .top, spacing: PDSpacing.s) {
-            Text(item.time)
-                .font(Font.pd.monoValue)
-                .foregroundStyle(Color.pd.inkSecondary)
-                .frame(width: timeWidth, alignment: .trailing)
+            if !typeSize.isAccessibilitySize {
+                Text(item.time)
+                    .font(Font.pd.monoValue)
+                    .foregroundStyle(Color.pd.inkSecondary)
+                    .frame(width: timeWidth * timeScale, alignment: .trailing)
+            }
 
             // The rail. Drawn per row rather than as one line behind
             // everything, so a row of any height still joins up with its
@@ -61,6 +73,11 @@ struct TimelineList: View {
             .padding(.top, 2)
 
             VStack(alignment: .leading, spacing: 2) {
+                if typeSize.isAccessibilitySize {
+                    Text(item.time)
+                        .font(Font.pd.monoValue)
+                        .foregroundStyle(Color.pd.inkSecondary)
+                }
                 Text(item.title)
                     .font(Font.pd.rowTitle)
                     .foregroundStyle(Color.pd.ink)

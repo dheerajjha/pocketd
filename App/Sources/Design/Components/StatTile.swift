@@ -1,16 +1,15 @@
 import SwiftUI
 
-/// One reading from the day: UP NEXT, DUE, SLEEP, STEPS.
+/// One reading: a number with a label, nested inside a card.
 ///
-/// The value is 27pt monospaced regular rather than bold, and that is
-/// deliberate: four bold numbers in a 2×2 grid all shout, and the brief above
-/// them is the thing worth reading. Mono also means "6h 36m" and "6h 02m" line
-/// up with each other when the grid redraws.
+/// Today's tiles are `VerdictTile`s now — a verdict word before the number.
+/// This is the reading itself, for the places a number *is* the answer: the
+/// health grid inside an answer card. It sits on `fillTile`, which is only
+/// right nested inside a white card; on the bare canvas use a `VerdictTile`.
 ///
-/// Mono is for figures only. A tile whose value is words — an event title, or
-/// "Free" — sets `isText`, because a typewriter face is what the reference
-/// uses for numbers and a letter-spaced "Design review" reads as a bug rather
-/// than as a heading.
+/// The value is `statValue` — proportional, regular rather than bold: four bold
+/// numbers in a grid all shout. A tile whose value is words — an event title,
+/// or "Free" — sets `isText` for the semibold word face.
 ///
 /// The footnote is where the comparison goes — "usual 6,100" — because a number
 /// without a baseline is trivia.
@@ -45,7 +44,7 @@ struct StatTile: View {
             HStack(spacing: PDSpacing.xxs) {
                 if let symbol {
                     Image(systemName: symbol)
-                        .font(.system(size: 11, weight: .regular))
+                        .font(Font.pd.miniLabel)
                         .foregroundStyle(Color.pd.inkSecondary)
                 }
                 MiniLabel(label)
@@ -57,24 +56,28 @@ struct StatTile: View {
                 Text(value)
                     .font(isText ? Font.pd.statText : Font.pd.statValue)
                     .foregroundStyle(isBaseline ? Color.pd.inkSecondary : tint)
-                    .lineLimit(1)
+                    // Words may take two lines; a figure stays on one and
+                    // shrinks a little before it would break "6h 36m" apart.
+                    .lineLimit(isText ? 2 : 1)
                     .minimumScaleFactor(0.6)
                 if let unit {
                     Text(unit)
                         .font(Font.pd.secondary)
                         .foregroundStyle(Color.pd.inkSecondary)
+                        // A unit is one word: it may not fit, but it may not
+                        // break ("bp / m"). The figure beside it shrinks first.
+                        .fixedSize()
                 }
             }
 
             if let footnote {
                 Text(footnote)
-                    .font(Font.pd.caption)
+                    .font(Font.pd.secondary)
                     .foregroundStyle(Color.pd.inkSecondary)
-                    .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(PDSpacing.m)
         .background(Color.pd.fillTile, in: RoundedRectangle(cornerRadius: PDRadius.tile, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: PDRadius.tile, style: .continuous))
