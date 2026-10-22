@@ -47,6 +47,9 @@ struct DayDetailView: View {
         // moves — a meeting moved in Calendar, the app back from the
         // background — so a page left open does not go on listing the old day.
         .task(id: model.briefing.snapshot) { await read() }
+        // Read and left: one useful answer for the review gate, when the page
+        // showed something of the person's own. See `ReviewMoment`.
+        .onDisappear { if agenda?.reportsSomething == true { model.noteUsefulAnswer() } }
     }
 
     private func read() async {

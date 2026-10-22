@@ -41,6 +41,9 @@ struct SleepDetailView: View {
         }
         .refreshable { await read() }
         .task(id: model.briefing.snapshot) { await read() }
+        // Read and left: one useful answer for the review gate, when the page
+        // showed something of the person's own. See `ReviewMoment`.
+        .onDisappear { if detail?.reportsSomething == true { model.noteUsefulAnswer() } }
     }
 
     private func read() async {

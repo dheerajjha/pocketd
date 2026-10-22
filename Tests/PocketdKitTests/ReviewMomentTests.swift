@@ -92,4 +92,69 @@ struct ReviewMomentTests {
         let after = british.date(from: DateComponents(year: 2026, month: 3, day: 30, hour: 12))!
         #expect(ReviewMoment.days(from: before, to: after, calendar: british) == 2)
     }
+
+    // MARK: - Pages that count
+
+    private var noon: Date { date(10) }
+
+    private func sleep(_ availability: TodaySnapshot.Availability, lastNight: TimeInterval?, nights: [TimeInterval?]) -> SleepDetail {
+        SleepDetail(
+            availability: availability,
+            lastNight: lastNight,
+            usual: nil,
+            nights: nights.enumerated().map { SleepDetail.Night(morning: date(10 - $0.offset), duration: $0.element) },
+            verdict: TileVerdict(tile: .sleep, status: "", sentence: "", tone: .neutral, action: .openDetail),
+            summary: ""
+        )
+    }
+
+    private func activity(_ availability: TodaySnapshot.Availability, today: Double?, days: [Double?]) -> ActivityDetail {
+        ActivityDetail(
+            availability: availability,
+            today: today,
+            usualByNow: nil,
+            usualDaily: nil,
+            days: days.enumerated().map { ActivityDetail.Day(day: date(10 - $0.offset), steps: $0.element, isToday: $0.offset == 0) },
+            verdict: TileVerdict(tile: .activity, status: "", sentence: "", tone: .neutral, action: .openDetail),
+            summary: ""
+        )
+    }
+
+    @Test("a day page counts only when the calendar is connected and has something on it")
+    func dayPage() {
+        let event = DayEvent(eventIdentifier: "e1", title: "Design review", start: noon, end: noon.addingTimeInterval(3600))
+        let full = DayAgenda(availability: .connected, sections: [.init(group: .laterToday, events: [event])], summary: "", suggestion: "")
+        #expect(full.reportsSomething)
+        #expect(!DayAgenda(availability: .connected, sections: [], summary: "", suggestion: "").reportsSomething)
+        for closed in [TodaySnapshot.Availability.off, .refused, .unavailable] {
+            #expect(!DayAgenda(availability: closed, sections: full.sections, summary: "", suggestion: "").reportsSomething)
+        }
+    }
+
+    @Test("a reminders page counts only when reminders are connected and there are some")
+    func remindersPage() {
+        let row = DayReminder(id: "r1", title: "Submit expenses", due: noon)
+        let full = ReminderAgenda(availability: .connected, sections: [.init(group: .overdue, reminders: [row])], summary: "")
+        #expect(full.reportsSomething)
+        #expect(!ReminderAgenda(availability: .connected, sections: [], summary: "").reportsSomething)
+        #expect(!ReminderAgenda(availability: .off, sections: full.sections, summary: "").reportsSomething)
+    }
+
+    @Test("a sleep page of seven empty rows is not an answer")
+    func sleepPage() {
+        #expect(sleep(.connected, lastNight: 23_760, nights: [23_760, nil, nil, nil, nil, nil, nil]).reportsSomething)
+        // Last night missing, an earlier night known: still the person's own sleep.
+        #expect(sleep(.connected, lastNight: nil, nights: [nil, 25_200, nil, nil, nil, nil, nil]).reportsSomething)
+        // Connected, seven rows, every one a dash.
+        #expect(!sleep(.connected, lastNight: nil, nights: Array(repeating: nil, count: 7)).reportsSomething)
+        #expect(!sleep(.refused, lastNight: 23_760, nights: [23_760]).reportsSomething)
+    }
+
+    @Test("an activity page counts when there are steps from somewhere in the week")
+    func activityPage() {
+        #expect(activity(.connected, today: 4_120, days: [4_120, nil]).reportsSomething)
+        #expect(activity(.connected, today: nil, days: [nil, 8_300]).reportsSomething)
+        #expect(!activity(.connected, today: nil, days: Array(repeating: nil, count: 7)).reportsSomething)
+        #expect(!activity(.off, today: 4_120, days: [4_120]).reportsSomething)
+    }
 }

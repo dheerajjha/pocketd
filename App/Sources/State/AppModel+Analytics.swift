@@ -52,11 +52,16 @@ extension AppModel {
         reviewState = state
     }
 
-    /// Counts one answer that a tool actually supplied.
+    /// Counts one answer that came from the person's own data: a tool-backed
+    /// reply in the conversation, or a tile's page that showed something.
     ///
     /// Called once per generation, not once per card: a question that reads the
-    /// calendar and the reminders is one useful answer, not two.
-    func noteToolBackedAnswer(now: Date = Date()) {
+    /// calendar and the reminders is one useful answer, not two. A page counts
+    /// when the reader leaves it, so the question, if this is the moment, comes
+    /// up over Today after they have read the page and not on top of it.
+    /// (The stored counter keeps its old name, `toolBackedAnswers`, so that
+    /// installs already counting keep their count.)
+    func noteUsefulAnswer(now: Date = Date()) {
         var state = reviewState
         state.toolBackedAnswers += 1
         reviewState = state

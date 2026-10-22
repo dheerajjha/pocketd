@@ -220,7 +220,7 @@ extension AppModel {
                             // one-star.
                             guard !notedUsefulAnswer, card.reportsSomething else { return }
                             notedUsefulAnswer = true
-                            self.noteToolBackedAnswer()
+                            self.noteUsefulAnswer()
                         }
                     case .toolCallStarted(let name):
                         await MainActor.run {

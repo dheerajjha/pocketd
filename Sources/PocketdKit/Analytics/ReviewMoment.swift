@@ -18,12 +18,19 @@ import Foundation
 /// than once, and not on the first day.
 public struct ReviewMoment: Sendable, Equatable {
 
-    /// Successful tool-backed answers before asking.
+    /// Successful answers from the person's own data before asking.
     ///
-    /// Tool-backed specifically, not messages. A model answering a general
-    /// question is what every app in the category does; an answer that read the
-    /// user's own calendar and got it right is this app working, and it is the
-    /// only moment where "was that useful?" has an obviously good answer.
+    /// Two kinds count, and only these: a tool-backed answer in the
+    /// conversation, and a tile's page that showed something from Calendar,
+    /// Reminders or Health (see `reportsSomething` below). Not messages: a
+    /// model answering a general question is what every app in the category
+    /// does; an answer that read the user's own calendar and got it right is
+    /// this app working, and it is the only moment where "was that useful?"
+    /// has an obviously good answer.
+    ///
+    /// The pages count because Today, not the conversation, is the home since
+    /// 1.1, and they need no brain. Counting only the conversation left the
+    /// question unreachable for everybody who reads their day and never asks.
     ///
     /// Three rather than one. One could be luck, and the first is often the
     /// user testing whether it works at all rather than getting value from it.
@@ -87,5 +94,35 @@ public struct ReviewMoment: Sendable, Equatable {
     static func days(from start: Date, to end: Date, calendar: Calendar) -> Int {
         guard end > start else { return 0 }
         return max(0, calendar.dateComponents([.day], from: start, to: end).day ?? 0)
+    }
+}
+
+// MARK: - Pages that count
+
+// A tile's page counts as an answer when it showed the person something of
+// their own: the source is connected and there was something in it. A "Turn on"
+// link is a permission problem and an empty day is an absence, by the same rule
+// as `AnswerCard.reportsSomething` — asking for a rating straight after either
+// is how an app earns a one-star.
+
+public extension DayAgenda {
+    var reportsSomething: Bool { availability.isReadable && !isEmpty }
+}
+
+public extension ReminderAgenda {
+    var reportsSomething: Bool { availability.isReadable && !isEmpty }
+}
+
+public extension SleepDetail {
+    /// Seven rows are listed whenever Health is connected, nights or not, so
+    /// the rows alone say nothing; a night with a length does.
+    var reportsSomething: Bool {
+        availability.isReadable && (lastNight != nil || nights.contains { $0.duration != nil })
+    }
+}
+
+public extension ActivityDetail {
+    var reportsSomething: Bool {
+        availability.isReadable && (today != nil || days.contains { $0.steps != nil })
     }
 }
