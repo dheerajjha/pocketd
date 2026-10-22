@@ -93,6 +93,15 @@ final class ProStore {
                 await self?.receive(update)
             }
         }
+        // Pocketd Pro is listed on the App Store's page for Pocketd, and a tap
+        // there arrives here. Listened for from launch, beside the transaction
+        // listener and not in the sheet: when the tap is what opened the app,
+        // the intent arrives before any view exists.
+        Task { [weak self] in
+            for await intent in PurchaseIntent.intents {
+                await self?.receive(intent)
+            }
+        }
         Task { [weak self] in await self?.refresh() }
     }
 
@@ -192,6 +201,25 @@ final class ProStore {
         await refresh()
     }
 
+    /// A purchase somebody started on the App Store's page for Pocketd.
+    ///
+    /// The same `buy()` the sheet's button runs, with the product the App Store
+    /// handed over; the entitlement it produces is decided by `decide()` like
+    /// any other purchase. The App Store's records are read first, and waited
+    /// for rather than given `settle()`'s two seconds: on a cold start they are
+    /// still loading, and deciding without them would charge an early
+    /// supporter, or somebody who bought Pro on another phone, for what they
+    /// already have.
+    private func receive(_ intent: PurchaseIntent) async {
+        await refresh()
+        let response = ProAccess.response(toStoreIntentFor: intent.product.id, entitlement: entitlement)
+        Self.log("purchase intent \(intent.product.id): \(response.rawValue)")
+        guard response == .purchase else { return }
+        product = intent.product
+        offer = .ready(displayPrice: intent.product.displayPrice)
+        await buy(offer: intent.offer)
+    }
+
     // MARK: - The price
 
     /// Asks the App Store for the product and its price here. A price already
@@ -230,8 +258,12 @@ final class ProStore {
     // MARK: - Buying
 
     /// Buys Pro. True once it is on.
+    ///
+    /// `offer` is the one an App Store purchase intent carried. Pro is a
+    /// one-time purchase and has none today; a win-back offer is the only kind
+    /// an intent can carry, and it is passed on rather than dropped.
     @discardableResult
-    func buy() async -> Bool {
+    func buy(offer intentOffer: Product.SubscriptionOffer? = nil) async -> Bool {
         guard purchase != .purchasing else { return false }
         #if DEBUG
         if ProStage.offer != nil { return await stagedBuy() }
@@ -240,9 +272,13 @@ final class ProStore {
             purchase = .failed(.unavailable)
             return false
         }
+        var options: Set<Product.PurchaseOption> = []
+        if let intentOffer, intentOffer.type == .winBack {
+            options.insert(.winBackOffer(intentOffer))
+        }
         purchase = .purchasing
         do {
-            switch try await product.purchase() {
+            switch try await product.purchase(options: options) {
             case let .success(.verified(transaction)):
                 await transaction.finish()
                 ownsPurchase = true

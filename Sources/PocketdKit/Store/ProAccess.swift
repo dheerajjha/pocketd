@@ -100,6 +100,29 @@ public enum ProAccess {
     }
 }
 
+// MARK: - Bought on the App Store's page
+
+public extension ProAccess {
+    /// What to do with a purchase somebody started on the App Store's page for
+    /// Pocketd, where Pocketd Pro is listed as a promoted in-app purchase.
+    enum StoreIntentResponse: String, Sendable, Equatable, CaseIterable {
+        /// Run the same purchase the sheet's button runs.
+        case purchase
+        /// Pro is already on, bought or early. Asking for money again would be
+        /// charging somebody for what they have.
+        case alreadyOn
+        /// Not a product Pocketd sells.
+        case ignore
+    }
+
+    /// Decided from the same entitlement every gate reads, so the App Store's
+    /// button cannot sell Pro to somebody the app already treats as having it.
+    static func response(toStoreIntentFor productID: String, entitlement: ProEntitlement) -> StoreIntentResponse {
+        guard productID == Self.productID else { return .ignore }
+        return entitlement.isPro ? .alreadyOn : .purchase
+    }
+}
+
 /// Whether Pocketd Pro is on, and why.
 public enum ProEntitlement: String, Sendable, Equatable, CaseIterable {
     /// Not bought, and installed after Pro existed.

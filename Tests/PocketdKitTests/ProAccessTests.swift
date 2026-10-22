@@ -223,6 +223,25 @@ struct ProAccessTests {
         #expect(ProFailure.unavailable.sentence == "Pocketd Pro isn't available right now. Try again later.")
     }
 
+    // MARK: - Bought on the App Store's page
+
+    @Test("a purchase started on the App Store's page runs only for somebody without Pro")
+    func storeIntentForPro() {
+        #expect(ProAccess.response(toStoreIntentFor: ProAccess.productID, entitlement: .locked) == .purchase)
+        #expect(ProAccess.response(toStoreIntentFor: ProAccess.productID, entitlement: .purchased) == .alreadyOn)
+        // An early supporter has Pro free: the App Store's button must not
+        // charge them for it.
+        #expect(ProAccess.response(toStoreIntentFor: ProAccess.productID, entitlement: .earlySupporter) == .alreadyOn)
+    }
+
+    @Test("a product Pocketd does not sell is never bought", arguments: ProEntitlement.allCases)
+    func storeIntentForSomethingElse(entitlement: ProEntitlement) {
+        #expect(ProAccess.response(toStoreIntentFor: "dev.pocketd.app.tip", entitlement: entitlement) == .ignore)
+        #expect(ProAccess.response(toStoreIntentFor: "", entitlement: entitlement) == .ignore)
+        // The id is compared whole, not by prefix.
+        #expect(ProAccess.response(toStoreIntentFor: ProAccess.productID + ".lifetime", entitlement: entitlement) == .ignore)
+    }
+
     // MARK: - The StoreKit configuration
 
     @Test("the Xcode StoreKit configuration sells this product, once")
