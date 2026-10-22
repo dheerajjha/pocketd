@@ -351,6 +351,10 @@ private struct WaitingIndicator: View {
                 Text("\(elapsed)s")
                     .font(Font.pd.miniLabel)
                     .monospacedDigit()
+                    // Words, so the text grey: the dots' inkTertiary is for
+                    // decoration and reads 3.4:1 on the light canvas, under
+                    // the 4.5:1 text needs.
+                    .foregroundStyle(Color.pd.inkSecondary)
                     .transition(.opacity)
             }
         }
