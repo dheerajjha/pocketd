@@ -4,7 +4,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.0] - Unreleased
+## [1.1.1] - Unreleased
+
+### Added
+
+- Pocketd Pro can be bought from Pocketd's page on the App Store. A purchase
+  started there opens Pocketd and runs the same purchase as the Pro sheet; it
+  is skipped for anyone who already has Pro, bought or early.
+
+### Changed
+
+- The App Store rating question now counts a tile's page that showed
+  something from your own calendar, reminders or health, as well as answers in
+  the conversation. Same limits as before: three such answers, never in the
+  first two days, and at most once every 120 days.
+
+## [1.1.0] - 2026-10-21
 
 ### Added
 
