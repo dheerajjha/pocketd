@@ -123,7 +123,10 @@ private struct Shell: View {
             model.reviewPromptShown()
         }
         #if DEBUG
-        .task { await ArrivalStage.stageIfRequested(model) }
+        .task {
+            await ArrivalStage.stageIfRequested(model)
+            await TourStage.runIfRequested(model: model, navigator: navigator) // -pocketd.tour: Diagnostics/TourStage.swift
+        }
         #endif
     }
 

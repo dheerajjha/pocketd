@@ -60,7 +60,7 @@ enum AskPreviewChat {
             role: .assistant,
             // Digits, as the brief and the tiles write them: a time spelled
             // out on screen ("at half past six") is one the reader re-reads.
-            content: "Two things tomorrow: the design review at \(Format.time(tomorrowAt(10, 0))), then yoga at \(Format.time(tomorrowAt(18, 30))).",
+            content: calendarSentence,
             cards: [calendarCard()].compactMap { $0 }
         ))
         messages.append(.user("Anything overdue?"))
@@ -87,12 +87,17 @@ enum AskPreviewChat {
 
     // MARK: - The three read shapes
 
+    /// The narration above the calendar card. Also `TourStage`'s.
+    static var calendarSentence: String {
+        "Two things tomorrow: the design review at \(Format.time(tomorrowAt(10, 0))), then yoga at \(Format.time(tomorrowAt(18, 30)))."
+    }
+
     private static func tomorrowAt(_ hour: Int, _ minute: Int) -> Date {
         let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: DemoClock.now) ?? DemoClock.now
         return Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: tomorrow) ?? tomorrow
     }
 
-    private static func calendarCard() -> AnswerCard? {
+    static func calendarCard() -> AnswerCard? {
         func at(_ hour: Int, _ minute: Int) -> Date { tomorrowAt(hour, minute) }
         // The same two events `DemoSeed` puts in tomorrow, so that a capture of
         // this card and a capture of the Today tiles describe one calendar.
@@ -124,7 +129,7 @@ enum AskPreviewChat {
     /// Overdue means overdue: only the reminder that slipped yesterday, the
     /// one the Due tile counts. The card used to list today's and tomorrow's
     /// under an OVERDUE heading as well.
-    private static func remindersCard() -> AnswerCard? {
+    static func remindersCard() -> AnswerCard? {
         let rows: [[String: any Sendable]] = [
             ["title": "Submit expenses", "due": due(dayOffset: -1, hour: 18)],
         ]
@@ -144,7 +149,7 @@ enum AskPreviewChat {
 
     /// The demo health figures (`DemoDay`: 6h 36m last night against a usual
     /// 7h 5m), in the clause shape `HealthSummary.reading` writes.
-    private static func healthCard() -> AnswerCard? {
+    static func healthCard() -> AnswerCard? {
         let night = Calendar.current.date(byAdding: .day, value: -1, to: DemoClock.now) ?? DemoClock.now
         let when = PersonalDataFormat.day(night)
         let readings: [String] = [
@@ -174,11 +179,15 @@ enum AskPreviewChat {
     /// relaunch that refusal would produce a card saying "already on the list"
     /// with nothing to undo, which is not the state this seed is for.
     @MainActor
-    private static func writeARealReminder(clearingWith model: AppModel) async -> AnswerCard? {
-        _ = await model.completeReminder(named: "Call the dentist")
+    static func writeARealReminder(
+        _ title: String = "Call the dentist",
+        when: String = "4pm today",
+        clearingWith model: AppModel
+    ) async -> AnswerCard? {
+        _ = await model.completeReminder(named: title)
         let payload = await PersonalDataWrites.createReminder(
-            title: "Call the dentist",
-            when: "4pm today",
+            title: title,
+            when: when,
             origin: .onDeviceChat,
             existing: { await EventAccess.shared.reminders(in: DateWindow(start: nil, end: nil)) },
             write: { await EventAccess.shared.createReminder($0) }
