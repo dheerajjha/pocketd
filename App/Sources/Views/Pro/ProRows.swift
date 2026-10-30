@@ -164,7 +164,7 @@ private struct ProRowsPreview: View {
             .padding(PDSpacing.gutter)
         }
         .pdCanvas()
-        .environment(ProStore())
+        .environment(ProStore(recordAnalytics: { _ in }))
         .environment(ToastCenter())
     }
 }

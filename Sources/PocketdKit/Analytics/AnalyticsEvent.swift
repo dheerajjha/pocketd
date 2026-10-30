@@ -174,6 +174,15 @@ public enum TodayTile: String, Sendable, CaseIterable {
     case steps
 }
 
+/// Where a Pocketd Pro purchase began.
+///
+/// Only the surface is sent. StoreKit keeps the product, price, transaction
+/// and Apple Account details between the person and Apple.
+public enum PurchaseEntry: String, Sendable, CaseIterable {
+    case inApp = "in_app"
+    case appStore = "app_store"
+}
+
 // MARK: - The events
 
 /// Everything this app may report about itself.
@@ -296,6 +305,17 @@ public enum AnalyticsEvent: Sendable, Equatable {
     /// One of Today's four tiles was tapped.
     case todayTileTapped(tile: TodayTile)
 
+    /// A Pocketd Pro purchase flow began inside Pocketd or on its App Store page.
+    case purchaseStarted(entry: PurchaseEntry)
+    /// StoreKit verified a Pocketd Pro purchase.
+    case purchaseCompleted(entry: PurchaseEntry)
+    /// The person declined the StoreKit purchase sheet.
+    case purchaseCancelled(entry: PurchaseEntry)
+    /// StoreKit deferred a Pocketd Pro purchase for approval.
+    case purchasePending(entry: PurchaseEntry)
+    /// A Pocketd Pro purchase could not be verified or completed.
+    case purchaseFailed(entry: PurchaseEntry)
+
     public var name: String {
         switch self {
         case .appOpened: "app_opened"
@@ -326,6 +346,11 @@ public enum AnalyticsEvent: Sendable, Equatable {
         case .answerFeedback: "answer_feedback"
         case .routineCreated: "routine_created"
         case .todayTileTapped: "today_tile_tapped"
+        case .purchaseStarted: "purchase_started"
+        case .purchaseCompleted: "purchase_completed"
+        case .purchaseCancelled: "purchase_cancelled"
+        case .purchasePending: "purchase_pending"
+        case .purchaseFailed: "purchase_failed"
         }
     }
 
@@ -387,6 +412,12 @@ public enum AnalyticsEvent: Sendable, Equatable {
             ["template": .string(template.rawValue)]
         case let .todayTileTapped(tile):
             ["tile": .string(tile.rawValue)]
+        case let .purchaseStarted(entry),
+             let .purchaseCompleted(entry),
+             let .purchaseCancelled(entry),
+             let .purchasePending(entry),
+             let .purchaseFailed(entry):
+            ["purchase_entry": .string(entry.rawValue)]
         }
     }
 }
@@ -430,7 +461,12 @@ public enum AnalyticsSchema {
         "voice_ask_used": [],
         "answer_feedback": ["positive"],
         "routine_created": ["template"],
-        "today_tile_tapped": ["tile"]
+        "today_tile_tapped": ["tile"],
+        "purchase_started": ["purchase_entry"],
+        "purchase_completed": ["purchase_entry"],
+        "purchase_cancelled": ["purchase_entry"],
+        "purchase_pending": ["purchase_entry"],
+        "purchase_failed": ["purchase_entry"]
     ]
 
     /// Property names that must never appear, whatever anyone adds later.

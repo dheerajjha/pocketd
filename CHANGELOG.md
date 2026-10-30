@@ -4,7 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.1] - Unreleased
+## [1.1.2] - Unreleased
+
+### Added
+
+- Optional Pocketd Pro purchase-flow counts: started, completed, cancelled,
+  pending or failed, with whether the flow began in Pocketd or on its App Store
+  page. They contain no price, product identifier, transaction or Apple Account.
+
+### Changed
+
+- The privacy policy, app privacy manifest and App Store privacy label now
+  disclose the purchase-flow counts and the existing analytics switch.
+
+## [1.1.1] - 2026-10-22
 
 ### Added
 

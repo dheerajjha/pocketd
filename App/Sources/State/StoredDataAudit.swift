@@ -192,7 +192,7 @@ final class StoredDataAudit {
         ),
         Destination(
             host: "Mixpanel, for usage counts",
-            sends: "Counts of \(StoredDataAudit.analyticsEventCount) kinds of event, such as the app opening, a brain loading or a question being asked. Never what you ask, what Pocketd answers, or anything from Health, Calendar or Reminders.",
+            sends: "Counts of \(StoredDataAudit.analyticsEventCount) kinds of event, including whether a Pocketd Pro purchase started, completed, was cancelled, is pending or failed, and whether it began in Pocketd or on its App Store page. No price, product identifier, transaction, Apple Account, question, answer, or data from Health, Calendar or Reminders.",
             when: "While you use Pocketd, unless you turn off Share anonymous usage counts. It is on at first.",
             carriesUsageCounts: true
         ),
@@ -203,7 +203,7 @@ final class StoredDataAudit {
     /// Narrow on purpose: Pocketd's code lists every field a count may carry,
     /// and a test fails the build if one is ever named after a prompt, a
     /// message or an answer (`AnalyticsSchema`). This is that list in words.
-    let usageCountFields = "Each count can carry a brain's name, a size or a time, a reason something failed, and a random number for this install. Never your name or anything you typed."
+    let usageCountFields = "Each count can carry a brain's name, a size or a time, a reason something failed, and a random number for this install. Pro purchase counts carry only the outcome and whether it began in Pocketd or on its App Store page, never the price, product, transaction or Apple Account. Never your name or anything you typed."
 
     /// The awkward corners, which belong on a page like this more than the
     /// reassurances do. Trimmed to the ones a person can act on or would

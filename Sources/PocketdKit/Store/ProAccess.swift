@@ -15,9 +15,9 @@ import Foundation
 /// and Control Center, the Morning brief and the Overdue nudge, privacy, and
 /// every brain already on the phone. Pro is the three `ProFeature`s.
 ///
-/// Nothing here records analytics, and nothing should: purchases are counted
-/// by App Store Connect, and an event about them would change the App Privacy
-/// label for no information Apple does not already report.
+/// This entitlement logic records no analytics. The app's separate ProStore
+/// reports a small, optional purchase funnel: outcome and entry only, without
+/// the product, price, transaction or Apple Account.
 public enum ProAccess {
 
     /// The App Store product. Non-consumable, and created in App Store Connect

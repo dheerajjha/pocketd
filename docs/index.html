@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Privacy Policy · Pocketd</title>
-<meta name="description" content="Your conversations never leave your phone. Hugging Face is contacted for models, Mixpanel for a fixed list of usage events you can turn off, and Apple's App Store for Pocketd Pro. No purchase data is collected.">
+<meta name="description" content="Your conversations stay on your phone. Optional Mixpanel counts include Pocketd Pro purchase outcomes and entry only; no price, product or Apple Account. The App Store handles payment.">
 <style>
   :root {
     color-scheme: light dark;
@@ -88,7 +88,7 @@ parts that are less tidy than the sentences are.</p>
 
 <h2>What Pocketd collects about you</h2>
 
-<p>Usage events, and nothing besides. There are twenty-eight of them and the complete
+<p>Usage events, and nothing besides. There are thirty-three of them and the complete
 list is one readable file, <a href="https://github.com/dheerajjha/pocketd/blob/main/Sources/PocketdKit/Analytics/AnalyticsEvent.swift"><code>AnalyticsEvent.swift</code></a>: the app was opened;
 the intro showed a step or was finished; a model download started, finished,
 was cancelled or failed; a model loaded or failed to load; a message was sent;
@@ -98,7 +98,8 @@ Health was switched on or off, or offered in a conversation; a routine was
 created, ran, or came due when it could not run; the server started or
 stopped; a client on your Wi-Fi, or the chat page on the phone itself, was
 answered; a request was refused because the phone was too hot, too low on
-battery, or already busy.</p>
+battery, or already busy; or a Pocketd Pro purchase flow started, completed,
+was cancelled, remained pending or failed.</p>
 
 <p>An event may carry whether this is the first launch, a model's id, a file
 size in bytes, how far a download got, how long something took, a rounded
@@ -106,8 +107,11 @@ memory class for the phone (<code>3gb</code> up to <code>16gb_plus</code>), a
 reason drawn from a fixed list, which of the two APIs a client spoke, which of
 Calendar, Reminders or Health was switched on and from where, which step of the
 intro, which kind of routine ran and from which template it was made, whether
-a brief was written on its own or on request, a thumbs up or down, and which
-Today tile was tapped. Apple's built-in model is reported by the id
+a brief was written on its own or on request, a thumbs up or down, which Today
+tile was tapped, and on Pro purchase events, whether the flow began in Pocketd
+or on its App Store page. Purchase events carry no price, product identifier,
+transaction or Apple Account; their event name gives the outcome. Apple's
+built-in model is reported by the id
 <code>system:apple-intelligence</code>. Alongside those, the analytics SDK
 attaches the same facts to every event: an identifier for this installation of
 the app, the app's version and build number, the iOS version, the device model
@@ -141,11 +145,11 @@ reading:</p>
   <li>Nothing you type, and nothing the model replies, is transmitted to anyone.
     Inference happens on the phone, whether the model is Apple's built-in one or
     one you downloaded.</li>
-  <li>No purchase data. Pocketd Pro is bought through Apple's App Store. Pocketd
-    learns whether this Apple Account owns it and, to recognise someone who
-    installed Pocketd before Pro existed, which build was first installed. It
-    stores neither, reads nothing about the payment, and no usage event mentions
-    a purchase.</li>
+  <li>Optional usage counts include Pocketd Pro purchase-flow outcomes and
+    whether a flow began in Pocketd or on its App Store page. They contain no
+    price, product identifier, transaction or Apple Account. You can turn these
+    counts off with the same switch as the other usage events. The payment and
+    Apple Account stay with Apple; StoreKit tells Pocketd whether Pro is unlocked.</li>
   <li>No crash reporting.</li>
   <li>No advertising and no ad identifier. Pocketd does not link an advertising
     framework and never asks for permission to track. Usage events are not
@@ -159,8 +163,8 @@ reading:</p>
 </ul>
 
 <p>The app's <code>PrivacyInfo.xcprivacy</code> says the same thing to Apple: tracking off,
-tracking domains empty, and two collected data types — Product Interaction and
-Device ID — both declared not linked to your identity, not used for tracking, and
+tracking domains empty, and three collected data types — Product Interaction,
+Device ID and Purchase History — all declared not linked to your identity, not used for tracking, and
 collected for analytics.</p>
 
 <h2>What leaves your phone</h2>
@@ -179,7 +183,7 @@ for Pocketd Pro. Only these things cause a request:</p>
     <tr><td>You search for a model</td><td>The text you typed, as a search term, and your phone's IP address</td></tr>
     <tr><td>You open a repository to see its files</td><td>The repository's name, and your phone's IP address</td></tr>
     <tr><td>You download a model</td><td>Which repository and file you are fetching, and your phone's IP address</td></tr>
-    <tr><td>You use the app, with usage counts on</td><td>One of the twenty-eight usage events, the identifier for this installation, the device facts above, and your phone's IP address</td></tr>
+    <tr><td>You use the app, with usage counts on</td><td>One of the thirty-three usage events, the identifier for this installation, the device facts above, and your phone's IP address</td></tr>
     <tr><td>Pocketd checks for Pocketd Pro, or you open, buy or restore it</td><td>What StoreKit sends Apple for any app's in-app purchase: the product, and the purchase or restore you asked for. The payment itself is between you and Apple</td></tr>
   </tbody>
 </table>
@@ -193,7 +197,7 @@ neither to attach. The App Store's requests carry your Apple Account, as every
 purchase on an iPhone does, under Apple's privacy policy rather than this one.
 The identifier in the usage-events row is one the analytics SDK generates for
 the installation; it is not the advertising identifier and it is attached to
-nothing but those twenty-eight events. Every download address is assembled as
+nothing but those thirty-three events. Every download address is assembled as
 <code>huggingface.co</code>, then a repository and a filename; the search API accepts a
 repository and a filename and never a host. The stored record for a model
 carries a field that could name a different address, and nothing in the app or

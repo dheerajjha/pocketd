@@ -209,12 +209,12 @@ struct ProSheet: View {
 #Preview("Pro sheet light") {
     Color.pd.canvas
         .sheet(isPresented: .constant(true)) { ProSheet() }
-        .environment(ProStore())
+        .environment(ProStore(recordAnalytics: { _ in }))
 }
 
 #Preview("Pro sheet dark") {
     Color.pd.canvas
         .sheet(isPresented: .constant(true)) { ProSheet() }
-        .environment(ProStore())
+        .environment(ProStore(recordAnalytics: { _ in }))
         .preferredColorScheme(.dark)
 }

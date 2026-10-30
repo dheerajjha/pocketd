@@ -30,14 +30,14 @@
 	<array/>
 
 	<!--
-	  Two types, both produced by the analytics events in
+	  Three types, produced by the analytics events in
 	  Sources/PocketdKit/Analytics/AnalyticsEvent.swift. This array was empty
 	  and true until those shipped, and it is the most expensive thing in the
 	  file to leave stale: Apple compares the manifest against the answers given
 	  in App Store Connect, so an app transmitting usage events while this array
 	  sits empty is caught at review rather than at build.
 
-	  Product Interaction covers the whole taxonomy. Every event is something
+	  Product Interaction covers the non-purchase taxonomy. Every event is something
 	  the app did — opened, downloaded a model, loaded one, started the
 	  server, answered a client on the Wi-Fi — and every property one may
 	  carry is named in AnalyticsSchema.allowedProperties: a model id, a byte
@@ -52,9 +52,15 @@
 	  stopAndForget is required to discard rather than merely stop adding to.
 	  It is not the advertising identifier; the app links no ATT framework.
 
-	  Both are declared not linked to identity, which is a fact about this app
+	  Purchase History covers the five Pro purchase-flow events. Their event name
+	  gives the outcome (started, completed, cancelled, pending or failed); the only
+	  property is purchase_entry (in_app or app_store). No price, product identifier,
+	  transaction or Apple Account is sent. The event is joined only to the random
+	  installation identifier described below.
+
+	  All three are declared not linked to identity, which is a fact about this app
 	  rather than a preference: there is no account, no sign-in and no user id,
-	  so there is nothing for an event to be linked to. Both are declared not
+	  so there is nothing for an event to be linked to. All three are declared not
 	  used for tracking, which has to agree with NSPrivacyTracking above — a
 	  true here against a false there is itself a rejection.
 
@@ -84,6 +90,18 @@
 		<dict>
 			<key>NSPrivacyCollectedDataType</key>
 			<string>NSPrivacyCollectedDataTypeDeviceID</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypePurchaseHistory</string>
 			<key>NSPrivacyCollectedDataTypeLinked</key>
 			<false/>
 			<key>NSPrivacyCollectedDataTypeTracking</key>

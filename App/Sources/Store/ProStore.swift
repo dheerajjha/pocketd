@@ -26,7 +26,8 @@ import os
 /// request carries nothing about the person, but a phone that never opens the
 /// sheet has no reason to make it.
 ///
-/// Nothing here is counted for analytics. See `ProAccess`.
+/// Purchase events carry only their outcome and `purchase_entry`. They never
+/// include the price, product identifier, transaction or Apple Account.
 @Observable
 @MainActor
 final class ProStore {
@@ -75,6 +76,9 @@ final class ProStore {
     @ObservationIgnored private var ownsPurchase = false
     @ObservationIgnored private var app: AppFacts?
     @ObservationIgnored private var product: Product?
+    @ObservationIgnored private let recordAnalytics: @MainActor (AnalyticsEvent) -> Void
+    /// Kept only while an Ask to Buy decision is pending in this process.
+    @ObservationIgnored private var pendingPurchaseEntry: PurchaseEntry?
 
     /// The app transaction, reduced to what the early-supporter rule reads.
     private struct AppFacts {
@@ -85,7 +89,8 @@ final class ProStore {
     /// How long the sheet waits for a price before it says Pro isn't available.
     private static let offerTimeout: Duration = .seconds(12)
 
-    init() {
+    init(recordAnalytics: @escaping @MainActor (AnalyticsEvent) -> Void) {
+        self.recordAnalytics = recordAnalytics
         // The store lives as long as the app does, so the listener is never
         // cancelled; `weak` only keeps a preview's throwaway store collectable.
         Task { [weak self] in
@@ -197,7 +202,13 @@ final class ProStore {
         guard case let .verified(transaction) = update else { return }
         await transaction.finish()
         guard transaction.productID == ProAccess.productID else { return }
-        if purchase == .pending { purchase = .idle }
+        if purchase == .pending {
+            if let entry = pendingPurchaseEntry {
+                recordAnalytics(.purchaseCompleted(entry: entry))
+            }
+            pendingPurchaseEntry = nil
+            purchase = .idle
+        }
         await refresh()
     }
 
@@ -217,7 +228,7 @@ final class ProStore {
         guard response == .purchase else { return }
         product = intent.product
         offer = .ready(displayPrice: intent.product.displayPrice)
-        await buy(offer: intent.offer)
+        await buy(offer: intent.offer, entry: .appStore)
     }
 
     // MARK: - The price
@@ -263,7 +274,8 @@ final class ProStore {
     /// one-time purchase and has none today; a win-back offer is the only kind
     /// an intent can carry, and it is passed on rather than dropped.
     @discardableResult
-    func buy(offer intentOffer: Product.SubscriptionOffer? = nil) async -> Bool {
+    func buy(offer intentOffer: Product.SubscriptionOffer? = nil,
+             entry: PurchaseEntry = .inApp) async -> Bool {
         guard purchase != .purchasing else { return false }
         #if DEBUG
         if ProStage.offer != nil { return await stagedBuy() }
@@ -277,24 +289,43 @@ final class ProStore {
             options.insert(.winBackOffer(intentOffer))
         }
         purchase = .purchasing
+        pendingPurchaseEntry = entry
+        recordAnalytics(.purchaseStarted(entry: entry))
         do {
             switch try await product.purchase(options: options) {
             case let .success(.verified(transaction)):
                 await transaction.finish()
+                recordAnalytics(.purchaseCompleted(entry: entry))
+                pendingPurchaseEntry = nil
                 ownsPurchase = true
                 decide()
                 purchase = .idle
             case .success(.unverified):
+                recordAnalytics(.purchaseFailed(entry: entry))
+                pendingPurchaseEntry = nil
                 purchase = .failed(.unverified)
             case .pending:
+                recordAnalytics(.purchasePending(entry: entry))
                 purchase = .pending
             case .userCancelled:
+                recordAnalytics(.purchaseCancelled(entry: entry))
+                pendingPurchaseEntry = nil
                 purchase = .idle
             @unknown default:
+                recordAnalytics(.purchaseFailed(entry: entry))
+                pendingPurchaseEntry = nil
                 purchase = .idle
             }
         } catch {
-            purchase = Self.failure(for: error).map(Purchase.failed) ?? .idle
+            if let failure = Self.failure(for: error) {
+                recordAnalytics(.purchaseFailed(entry: entry))
+                pendingPurchaseEntry = nil
+                purchase = .failed(failure)
+            } else {
+                recordAnalytics(.purchaseCancelled(entry: entry))
+                pendingPurchaseEntry = nil
+                purchase = .idle
+            }
         }
         return isPro
     }

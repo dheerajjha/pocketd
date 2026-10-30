@@ -41,7 +41,12 @@ struct AnalyticsTaxonomyTests {
         .voiceAskUsed,
         .answerFeedback(positive: false),
         .routineCreated(template: .eveningWrapUp),
-        .todayTileTapped(tile: .sleep)
+        .todayTileTapped(tile: .sleep),
+        .purchaseStarted(entry: .inApp),
+        .purchaseCompleted(entry: .appStore),
+        .purchaseCancelled(entry: .inApp),
+        .purchasePending(entry: .appStore),
+        .purchaseFailed(entry: .inApp)
     ]
 
     @Test("every event's properties match the schema exactly")
@@ -85,7 +90,7 @@ struct AnalyticsTaxonomyTests {
         // other test in this file silently stops covering it. The count is
         // hand-maintained on purpose: bumping it is the moment you notice you
         // must also add a sample.
-        #expect(Self.sample.count == 28)
+        #expect(Self.sample.count == 33)
         #expect(Set(Self.sample.map(\.name)).count == Self.sample.count, "duplicate event in sample")
         #expect(Set(Self.sample.map(\.name)) == Set(AnalyticsSchema.allowedProperties.keys),
                 "sample and schema disagree about which events exist")
@@ -114,7 +119,8 @@ struct AnalyticsTaxonomyTests {
             + OnboardingStep.allCases.map(\.rawValue)
             + BriefSource.allCases.map(\.rawValue)
             + RoutineOrigin.allCases.map(\.rawValue)
-            + TodayTile.allCases.map(\.rawValue) {
+            + TodayTile.allCases.map(\.rawValue)
+            + PurchaseEntry.allCases.map(\.rawValue) {
             #expect(raw.count <= 24, "'\(raw)' is long enough to be carrying a message")
             #expect(raw.allSatisfy { $0.isLowercase || $0 == "_" || $0.isNumber })
         }

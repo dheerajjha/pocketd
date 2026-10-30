@@ -560,14 +560,16 @@ against this source tree rather than taken on trust.
 Three services are ever contacted. `huggingface.co`, to search for or
 download a model. `api.mixpanel.com`, which receives usage events — the app
 opened, a model downloaded or loaded, a message sent, the brief written, a
-routine run, the server started, a client answered, an ability switched on.
-They are on by default, and "Share anonymous usage counts" in You › Privacy
-turns them off; the complete list is `AnalyticsEvent.swift`, which is
-twenty-eight cases long and is meant to be read in a minute. And Apple's App
-Store, which StoreKit reaches for Pocketd Pro: the price when you open its
-sheet, a purchase or a restore when you ask for one, and whether this Apple
-Account owns Pro. The payment is between you and Apple. Pocketd stores nothing
-about it, and no usage event mentions it.
+routine run, the server started, a client answered, an ability switched on, or
+a Pocketd Pro purchase flow started, completed, was cancelled, remained pending
+or failed. They are on by default, and "Share anonymous usage counts" in You ›
+Privacy turns them off; the complete list is `AnalyticsEvent.swift`, which is
+thirty-three cases long and is meant to be read in a minute. Purchase-flow
+counts include only the outcome and whether they began in Pocketd or on its App
+Store page — never the price, product identifier, transaction or Apple Account.
+And Apple's App Store, which StoreKit reaches for Pocketd Pro: the price when
+you open its sheet, a purchase or a restore when you ask for one, and whether
+this Apple Account owns Pro. The payment is between you and Apple.
 
 Voice works the same way. The mic asks for the microphone and speech
 recognition, once each, and listening stops when you let go of the button, or

@@ -7,15 +7,21 @@ struct PocketdApp: App {
     /// The app exists for two things that have to happen before launch
     /// finishes, and SwiftUI's `App` has no hook that early. See `AppDelegate`.
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @State private var model = AppModel()
+    @State private var model: AppModel
     /// Where the app is. Owned here rather than by `RootView` so that it
     /// survives the view being torn down and rebuilt — which happens every time
     /// onboarding finishes, desk mode ends, or the scene is restored.
     @State private var navigator = Navigator()
     /// Pocketd Pro. Made with the app because its App Store listener has to be
     /// running from launch; see `ProStore`.
-    @State private var pro = ProStore()
+    @State private var pro: ProStore
     @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        let model = AppModel()
+        _model = State(initialValue: model)
+        _pro = State(initialValue: ProStore(recordAnalytics: { event in model.record(event) }))
+    }
 
     var body: some Scene {
         WindowGroup {

@@ -280,5 +280,5 @@ private struct ProSheetStage: ViewModifier {
     .padding(PDSpacing.gutter)
     .frame(maxHeight: .infinity)
     .pdCanvas()
-    .environment(ProStore())
+    .environment(ProStore(recordAnalytics: { _ in }))
 }
