@@ -34,7 +34,7 @@ struct ConversationSheet: View {
             AskView()
                 .navigationTitle("Conversation")
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar(removing: .title)
+                .hiddenConversationTitle()
                 .toolbar { toolbar }
         }
         .environment(toasts)
@@ -80,6 +80,24 @@ struct ConversationSheet: View {
             // Nothing to leave yet. A blank page that offers a blank page is
             // a button that does nothing, which reads as broken.
             .disabled(model.conversation.isEmpty)
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func hiddenConversationTitle() -> some View {
+        if #available(iOS 18.0, *) {
+            self.toolbar(removing: .title)
+        } else {
+            // Keep the navigation title for announcements, without drawing
+            // another heading between the same three toolbar controls.
+            self.toolbar {
+                ToolbarItem(placement: .principal) {
+                    Color.clear.frame(width: 1, height: 1)
+                        .accessibilityHidden(true)
+                }
+            }
         }
     }
 }

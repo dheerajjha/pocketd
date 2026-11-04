@@ -228,7 +228,11 @@ final class ProStore {
         guard response == .purchase else { return }
         product = intent.product
         offer = .ready(displayPrice: intent.product.displayPrice)
-        await buy(offer: intent.offer, entry: .appStore)
+        if #available(iOS 18.0, *) {
+            await buy(offer: intent.offer, entry: .appStore)
+        } else {
+            await buy(entry: .appStore)
+        }
     }
 
     // MARK: - The price
@@ -285,7 +289,7 @@ final class ProStore {
             return false
         }
         var options: Set<Product.PurchaseOption> = []
-        if let intentOffer, intentOffer.type == .winBack {
+        if #available(iOS 18.0, *), let intentOffer, intentOffer.type == .winBack {
             options.insert(.winBackOffer(intentOffer))
         }
         purchase = .purchasing

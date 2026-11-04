@@ -73,7 +73,7 @@ struct AskTranscript: View {
             // when the answer ends, a taller chip pushing the bar up — keeps
             // the bottom in view. At the largest sizes the last of those come
             // after the last token, so scrolling on tokens alone stopped short.
-            .onScrollGeometryChange(for: ScrollPosition.self) { geometry in
+            .onPDScrollGeometryChange(for: ScrollPosition.self) { geometry in
                 ScrollPosition(
                     isNearBottom: geometry.visibleRect.maxY - geometry.contentInsets.bottom
                         >= geometry.contentSize.height - 80,

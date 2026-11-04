@@ -9,6 +9,7 @@ import WidgetKit
 /// here is on or off — so there is no need for the value provider a
 /// `ControlWidgetToggle` would ask for. A tap just runs `OpenAskIntent`. See
 /// that file for what it leaves behind and why.
+@available(iOS 18.0, *)
 struct AskPocketdControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: "dev.pocketd.control.ask") {

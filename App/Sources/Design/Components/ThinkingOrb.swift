@@ -64,8 +64,13 @@ struct ThinkingOrb: View {
         ]
     }
 
+    @ViewBuilder
     private func mesh(at time: TimeInterval) -> some View {
-        MeshGradient(width: 3, height: 3, points: meshPoints(at: time), colors: meshColours)
+        if #available(iOS 18.0, *) {
+            MeshGradient(width: 3, height: 3, points: meshPoints(at: time), colors: meshColours)
+        } else {
+            legacyMesh(points: meshPoints(at: time))
+        }
     }
 
     /// A 3×3 grid whose edge midpoints and centre wander.
@@ -84,16 +89,38 @@ struct ThinkingOrb: View {
         ]
     }
 
+    @ViewBuilder
     private var still: some View {
-        MeshGradient(
-            width: 3, height: 3,
-            points: [
-                SIMD2(0, 0), SIMD2(0.5, 0), SIMD2(1, 0),
-                SIMD2(0, 0.5), SIMD2(0.5, 0.5), SIMD2(1, 0.5),
-                SIMD2(0, 1), SIMD2(0.5, 1), SIMD2(1, 1),
-            ],
-            colors: meshColours
-        )
+        let points: [SIMD2<Float>] = [
+            SIMD2(0, 0), SIMD2(0.5, 0), SIMD2(1, 0),
+            SIMD2(0, 0.5), SIMD2(0.5, 0.5), SIMD2(1, 0.5),
+            SIMD2(0, 1), SIMD2(0.5, 1), SIMD2(1, 1),
+        ]
+        if #available(iOS 18.0, *) {
+            MeshGradient(width: 3, height: 3, points: points, colors: meshColours)
+        } else {
+            legacyMesh(points: points)
+        }
+    }
+
+    /// MeshGradient itself starts at iOS 18. Keep the same orb, palette,
+    /// wandering points, rotation, dots and Reduce Motion behavior on iOS 17
+    /// using soft Canvas gradients. The existing renderer is unchanged above.
+    private func legacyMesh(points: [SIMD2<Float>]) -> some View {
+        let colours = meshColours
+        return Canvas { context, canvasSize in
+            let bounds = Path(CGRect(origin: .zero, size: canvasSize))
+            context.fill(bounds, with: .color(colours[4]))
+            let radius = max(canvasSize.width, canvasSize.height) * 0.75
+            for index in points.indices {
+                let centre = CGPoint(x: CGFloat(points[index].x) * canvasSize.width,
+                                     y: CGFloat(points[index].y) * canvasSize.height)
+                context.fill(bounds, with: .radialGradient(
+                    Gradient(colors: [colours[index], colours[index].opacity(0)]),
+                    center: centre, startRadius: 0, endRadius: radius
+                ))
+            }
+        }
     }
 
     // MARK: Dots

@@ -6,7 +6,7 @@ name: Pocketd
 options:
   bundleIdPrefix: dev.pocketd
   deploymentTarget:
-    iOS: "18.0"
+    iOS: "17.0"
   createIntermediateGroups: true
   groupSortPosition: top
 
@@ -380,6 +380,23 @@ targets:
       - sdk: WidgetKit.framework
       - sdk: SwiftUI.framework
 
+  # Standalone compatibility tests: no model download, app data, StoreKit
+  # account or inference dependency is needed to exercise the scroll adapter.
+  PocketdCompatibilityTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: App/CompatibilityTests
+      - path: App/Sources/Design/ScrollCompatibility.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.pocketd.compatibility.tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+      configs:
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+
 # A shared scheme, on disk and in git's view of the world.
 #
 # Without one, `xcodebuild -scheme Pocketd` still works — it synthesises a
@@ -388,6 +405,13 @@ targets:
 # clone's first Run) has nothing to select. That is a worse first five
 # minutes than it sounds, and it is one block of YAML.
 schemes:
+  PocketdCompatibilityTests:
+    build:
+      targets:
+        PocketdCompatibilityTests: all
+    test:
+      targets:
+        - PocketdCompatibilityTests
   Pocketd:
     build:
       targets:

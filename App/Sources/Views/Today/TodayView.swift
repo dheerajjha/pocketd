@@ -98,7 +98,7 @@ struct TodayView: View {
             .padding(.bottom, PDSpacing.l)
         }
         .scrollIndicators(.hidden)
-        .onScrollGeometryChange(for: Bool.self) { geometry in
+        .onPDScrollGeometryChange(for: Bool.self) { geometry in
             geometry.contentOffset.y + geometry.contentInsets.top > PDSpacing.xs
         } action: { _, scrolled in
             isScrolledUnderStatusBar = scrolled

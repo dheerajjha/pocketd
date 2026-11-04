@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Synchronization
 import LocalLLMClientLlama
 import llama
@@ -37,11 +38,19 @@ import llama
 /// before the next request, exactly as it already did after a cancellation
 /// left the caches half-written.
 final class DecodeAbort: Sendable {
-    private let tripped = Atomic<Bool>(false)
+    private let flag: any DecodeAbortFlag
 
-    func trip() { tripped.store(true, ordering: .relaxed) }
+    init() {
+        if #available(iOS 18.0, macOS 15.0, *) {
+            flag = AtomicDecodeAbortFlag()
+        } else {
+            flag = LockedDecodeAbortFlag()
+        }
+    }
 
-    var isTripped: Bool { tripped.load(ordering: .relaxed) }
+    func trip() { flag.trip() }
+
+    var isTripped: Bool { flag.isTripped }
 
     /// Hands this switch to `client`'s `llama_context`.
     ///
@@ -74,4 +83,27 @@ final class DecodeAbort: Sendable {
         }, retained)
         return true
     }
+}
+
+private protocol DecodeAbortFlag: Sendable {
+    func trip()
+    var isTripped: Bool { get }
+}
+
+/// Keep the existing lock-free flag on every OS that already supported it.
+@available(iOS 18.0, macOS 15.0, *)
+private final class AtomicDecodeAbortFlag: DecodeAbortFlag {
+    private let tripped = Atomic<Bool>(false)
+
+    func trip() { tripped.store(true, ordering: .relaxed) }
+    var isTripped: Bool { tripped.load(ordering: .relaxed) }
+}
+
+/// iOS 17 still needs a thread-safe, sticky cancellation flag. The lock only
+/// protects one Bool; no model work, callbacks or awaits happen while held.
+private final class LockedDecodeAbortFlag: DecodeAbortFlag {
+    private let tripped = OSAllocatedUnfairLock(initialState: false)
+
+    func trip() { tripped.withLock { $0 = true } }
+    var isTripped: Bool { tripped.withLock { $0 } }
 }

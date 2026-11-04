@@ -94,7 +94,7 @@ struct DetailPage<Content: View>: View {
         // The offset itself rather than a Bool: a Bool reports nothing for a
         // page that is already past the heading when it is first measured,
         // where any movement of the offset settles it either way.
-        .onScrollGeometryChange(for: CGFloat.self) { geometry in
+        .onPDScrollGeometryChange(for: CGFloat.self) { geometry in
             geometry.contentOffset.y + geometry.contentInsets.top
         } action: { _, offset in
             // Past roughly the heading's height: it is under the bar now.

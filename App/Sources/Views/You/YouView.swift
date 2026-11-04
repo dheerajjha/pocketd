@@ -55,7 +55,7 @@ struct YouView: View {
                 .padding(.top, PDSpacing.xs)
                 .padding(.bottom, PDSpacing.xl)
             }
-            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+            .onPDScrollGeometryChange(for: CGFloat.self) { geometry in
                 geometry.contentOffset.y + geometry.contentInsets.top
             } action: { _, offset in
                 let hidden = offset > 56
