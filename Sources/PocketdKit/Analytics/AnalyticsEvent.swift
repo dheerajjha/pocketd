@@ -13,6 +13,25 @@ public enum AnalyticsValue: Sendable, Equatable {
     case bool(Bool)
 }
 
+/// Which distribution supplied the running build.
+///
+/// Debug builds are local work. TestFlight and App Review both use a sandbox
+/// receipt, so they share one value and cannot be mistaken for App Store users.
+public enum AnalyticsInstallEnvironment: String, Sendable, CaseIterable {
+    case debug
+    case sandbox
+    case appStore = "app_store"
+
+    /// Mirrors the synchronous receipt-filename check used by Recordy.
+    /// `AppTransaction.shared` is async and may reach the network, which would
+    /// leave the first event without the environment we need to filter it.
+    public static func resolve(isDebugBuild: Bool, receiptFilename: String?) -> Self {
+        if isDebugBuild { return .debug }
+        if receiptFilename == "sandboxReceipt" { return .sandbox }
+        return .appStore
+    }
+}
+
 // MARK: - Bounded reasons
 
 /// Why a download ended badly.
@@ -354,7 +373,7 @@ public enum AnalyticsEvent: Sendable, Equatable {
         }
     }
 
-    public var properties: [String: AnalyticsValue] {
+    private var eventProperties: [String: AnalyticsValue] {
         switch self {
         case let .appOpened(isFirstLaunch):
             ["is_first_launch": .bool(isFirstLaunch)]
@@ -420,20 +439,29 @@ public enum AnalyticsEvent: Sendable, Equatable {
             ["purchase_entry": .string(entry.rawValue)]
         }
     }
+
+    /// Every event carries its build environment through the same mapping
+    /// that the schema tests inspect. A Mixpanel superproperty would bypass
+    /// that allow-list and make it possible to drop this field silently.
+    public func properties(installEnvironment: AnalyticsInstallEnvironment) -> [String: AnalyticsValue] {
+        var properties = eventProperties
+        properties["install_env"] = .string(installEnvironment.rawValue)
+        return properties
+    }
 }
 
 // MARK: - The schema
 
-/// The only property names any event may carry, by event name.
+/// The property names any event may carry, by event name.
 ///
-/// Written out by hand rather than derived from `properties`, because a schema
-/// derived from the code it is checking cannot disagree with it. This repo has
-/// shipped a test that asserted a source constant against itself and caught
-/// nothing for weeks; the value of this table is precisely that it is a second,
-/// independent statement of intent, and that changing one without the other is
-/// a build failure.
+/// Event-specific properties are written out by hand rather than derived from
+/// the event mapping, because a schema derived from the code it is checking
+/// cannot disagree with it. Shared properties are added to every entry below;
+/// this keeps `install_env` visible to the exact same tests as event fields.
 public enum AnalyticsSchema {
-    public static let allowedProperties: [String: Set<String>] = [
+    public static let commonProperties: Set<String> = ["install_env"]
+
+    private static let eventSpecificProperties: [String: Set<String>] = [
         "app_opened": ["is_first_launch"],
         "onboarding_completed": ["via", "destination"],
         "model_download_started": ["model_id", "size_bytes"],
@@ -468,6 +496,9 @@ public enum AnalyticsSchema {
         "purchase_pending": ["purchase_entry"],
         "purchase_failed": ["purchase_entry"]
     ]
+
+    public static let allowedProperties: [String: Set<String>] =
+        eventSpecificProperties.mapValues { $0.union(commonProperties) }
 
     /// Property names that must never appear, whatever anyone adds later.
     ///

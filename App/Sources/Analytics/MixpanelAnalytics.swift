@@ -33,6 +33,20 @@ struct MixpanelAnalytics: AnalyticsSink {
     /// account, nothing that can be pulled back out.
     private static let token = "7580d296e590b8efccefcaaf1245b2a0"
 
+    /// The receipt filename is synchronous, so this is present on the first
+    /// event. TestFlight and App Review share the `sandbox` bucket; the
+    /// asynchronous AppTransaction API cannot classify that first launch.
+    private static let installEnvironment: AnalyticsInstallEnvironment = {
+        #if DEBUG
+        return .debug
+        #else
+        return AnalyticsInstallEnvironment.resolve(
+            isDebugBuild: false,
+            receiptFilename: Bundle.main.appStoreReceiptURL?.lastPathComponent
+        )
+        #endif
+    }()
+
     /// Configures the SDK, once per process, whatever constructs this.
     ///
     /// A `static let` because it is the run-once, thread-safe construct the
@@ -139,15 +153,13 @@ struct MixpanelAnalytics: AnalyticsSink {
     /// transmittable value becomes a compile error in this function rather
     /// than a surprise in a payload nobody is looking at.
     ///
-    /// A pure translation, and it has to stay one. `AnalyticsSchema` is a
-    /// hand-written list of every property name any event may carry, and the
-    /// package's suite checks the taxonomy against it — a check that says
-    /// nothing about anything added below the protocol. The tempting edit, and
-    /// the one to refuse, is a super property registered at initialisation:
-    /// it would attach itself to every event ever sent, and no test in this
-    /// repository would be able to see it.
+    /// A pure translation, and it has to stay one. The package's suite checks
+    /// every event property against `AnalyticsSchema`; `install_env` enters
+    /// through that same map so the test covers the field the SDK receives.
+    /// Registering it as a Mixpanel superproperty would bypass that check.
     private static func properties(of event: AnalyticsEvent) -> Properties {
-        event.properties.mapValues { (value: AnalyticsValue) -> MixpanelType in
+        let values = event.properties(installEnvironment: Self.installEnvironment)
+        return values.mapValues { (value: AnalyticsValue) -> MixpanelType in
             switch value {
             case let .string(text): return text
             case let .int(number): return number

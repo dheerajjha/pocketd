@@ -57,15 +57,31 @@ struct AnalyticsTaxonomyTests {
         for event in Self.sample {
             let allowed = try #require(AnalyticsSchema.allowedProperties[event.name],
                                        "\(event.name) has no schema entry")
-            #expect(Set(event.properties.keys) == allowed,
-                    "\(event.name) sends \(Set(event.properties.keys).sorted()) but the schema allows \(allowed.sorted())")
+            let properties = event.properties(installEnvironment: .appStore)
+            #expect(Set(properties.keys) == allowed,
+                    "\(event.name) sends \(properties.keys.sorted()) but the schema allows \(allowed.sorted())")
+        }
+    }
+
+    @Test("every event carries the bounded install environment")
+    func installEnvironmentIsPresentForEveryEvent() {
+        #expect(Set(AnalyticsInstallEnvironment.allCases.map(\.rawValue)) == Set(["debug", "sandbox", "app_store"]))
+        #expect(AnalyticsInstallEnvironment.resolve(isDebugBuild: true, receiptFilename: "sandboxReceipt") == .debug)
+        #expect(AnalyticsInstallEnvironment.resolve(isDebugBuild: false, receiptFilename: "sandboxReceipt") == .sandbox)
+        #expect(AnalyticsInstallEnvironment.resolve(isDebugBuild: false, receiptFilename: nil) == .appStore)
+
+        for environment in AnalyticsInstallEnvironment.allCases {
+            for event in Self.sample {
+                #expect(event.properties(installEnvironment: environment)["install_env"] == .string(environment.rawValue),
+                        "\(event.name) did not report \(environment.rawValue)")
+            }
         }
     }
 
     @Test("no event carries a forbidden property name")
     func noForbiddenProperties() {
         for event in Self.sample {
-            for key in event.properties.keys {
+            for key in event.properties(installEnvironment: .appStore).keys {
                 #expect(AnalyticsSchema.forbiddenProperties.contains(key) == false,
                         "\(event.name) carries forbidden property '\(key)'")
             }
@@ -146,8 +162,8 @@ struct AnalyticsTaxonomyTests {
         for event in v2 {
             let allowed = AnalyticsSchema.allowedProperties[event.name]
             #expect(allowed != nil, "\(event.name) has no schema entry")
-            #expect(Set(event.properties.keys) == (allowed ?? []))
-            for key in event.properties.keys {
+            #expect(Set(event.properties(installEnvironment: .appStore).keys) == (allowed ?? []))
+            for key in event.properties(installEnvironment: .appStore).keys {
                 #expect(AnalyticsSchema.forbiddenProperties.contains(key) == false,
                         "\(event.name) carries forbidden property '\(key)'")
             }
@@ -159,14 +175,15 @@ struct AnalyticsTaxonomyTests {
         // to read the forbidden list will wonder.
         #expect(AnalyticsSchema.forbiddenProperties.contains("sleep"))
         #expect(AnalyticsSchema.forbiddenProperties.contains("steps"))
-        #expect(AnalyticsEvent.todayTileTapped(tile: .sleep).properties == ["tile": .string("sleep")])
+        let sleepProperties = AnalyticsEvent.todayTileTapped(tile: .sleep).properties(installEnvironment: .appStore)
+        #expect(sleepProperties == ["tile": .string("sleep"), "install_env": .string("app_store")])
     }
 
     @Test("no string value in any event looks like a network address")
     func noAddresses() {
         // is_loopback is a bool precisely so the LAN address never has to be.
         for event in Self.sample {
-            for (key, value) in event.properties {
+            for (key, value) in event.properties(installEnvironment: .appStore) {
                 guard case let .string(text) = value else { continue }
                 #expect(text.contains("://") == false, "\(event.name).\(key) looks like a URL")
                 let dotted = text.split(separator: ".")
