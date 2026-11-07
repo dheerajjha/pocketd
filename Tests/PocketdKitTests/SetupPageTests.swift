@@ -162,16 +162,27 @@ struct ClientSnippetTests {
         }
     }
 
-    @Test("an auth-free server still gives the SDKs a usable placeholder")
-    func noAuthPlaceholder() {
+    @Test("an auth-free server needs no authorization header in standard HTTP examples")
+    func noAuthHeader() {
         let snippets = ClientSnippets.all(baseURL: base, apiKey: nil, model: "m")
         let curl = try! #require(snippets.first { $0.id == "curl" })
         #expect(curl.body.contains("Authorization") == false)
 
-        // The OpenAI SDKs reject an empty api_key, so "" would be a broken snippet.
-        let python = try! #require(snippets.first { $0.id == "openai-python" })
-        #expect(python.body.contains("api_key=\"\"") == false)
-        #expect(python.body.contains("not-needed"))
+        for id in ["python", "javascript"] {
+            let snippet = try! #require(snippets.first { $0.id == id })
+            #expect(snippet.body.contains("Authorization") == false)
+            #expect(snippet.body.contains("not-needed") == false)
+        }
+    }
+
+    @Test("served examples use standard HTTP rather than provider SDK names")
+    func neutralExamples() {
+        for snippet in ClientSnippets.all(baseURL: base, apiKey: "pk-test", model: "smollm2-360m") {
+            let text = [snippet.id, snippet.title, snippet.body, snippet.note ?? ""].joined(separator: " ").lowercased()
+            for restricted in ["openai", "chatgpt", "gpt", "claude", "gemini"] {
+                #expect(!text.contains(restricted))
+            }
+        }
     }
 }
 

@@ -85,6 +85,10 @@ enum SetupPage {
               <dt>Model</dt><dd id="model"></dd>
             </dl>
             <div class="tabs" id="tabs"></div>
+            <p class="note">For Continue, opencode and Aider, see the
+              <a href="https://github.com/dheerajjha/pocketd/blob/main/docs/client-configurations.md"
+                 target="_blank" rel="noopener noreferrer">client configuration guide</a>.
+              No key or prompt is included in that link.</p>
             <pre id="snippet"></pre>
             <div class="note" id="note"></div>
             <div class="row">

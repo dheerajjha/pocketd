@@ -42,13 +42,8 @@ public enum ClientSnippets {
     public static func all(baseURL: URL, apiKey: String?, model: String) -> [ClientSnippet] {
         let base = baseURL.absoluteString
         let v1 = base + "/v1"
-        // The OpenAI SDKs reject an empty api_key outright, so an
-        // auth-disabled server still needs a placeholder rather than "".
-        let sdkKey = apiKey ?? "not-needed"
         let curlAuth = apiKey.map { "\n  -H \"Authorization: Bearer \($0)\" \\" } ?? ""
-        let noAuthNote = apiKey == nil
-            ? "Auth is off on this server, but these SDKs refuse an empty key — any placeholder works."
-            : nil
+        let httpAuth = apiKey.map { ", \"Authorization\": \"Bearer \($0)\"" } ?? ""
 
         return [
             ClientSnippet(
@@ -60,64 +55,54 @@ public enum ClientSnippets {
                   -H "Content-Type: application/json" \\\(curlAuth)
                   -d '{"model":"\(model)","messages":[{"role":"user","content":"hello"}]}'
                 """,
-                note: noAuthNote
+                note: nil
             ),
             ClientSnippet(
-                id: "continue",
-                title: "Continue",
-                language: "yaml",
-                body: """
-                models:
-                  - name: \(model)
-                    provider: openai
-                    model: \(model)
-                    apiBase: \(v1)
-                    apiKey: \(sdkKey)
-                """,
-                filename: "config.yaml",
-                note: "Paste into ~/.continue/config.yaml under models:."
-            ),
-            ClientSnippet(
-                id: "openai-python",
+                id: "python",
                 title: "Python",
                 language: "python",
                 body: """
-                from openai import OpenAI
+                import json
+                from urllib.request import Request, urlopen
 
-                client = OpenAI(base_url="\(v1)", api_key="\(sdkKey)")
-
-                stream = client.chat.completions.create(
-                    model="\(model)",
-                    messages=[{"role": "user", "content": "hello"}],
-                    stream=True,
+                request = Request(
+                    "\(v1)/chat/completions",
+                    data=json.dumps({
+                        "model": "\(model)",
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": False,
+                        "max_tokens": 64,
+                    }).encode(),
+                    headers={"Content-Type": "application/json"\(httpAuth)},
                 )
-                for chunk in stream:
-                    print(chunk.choices[0].delta.content or "", end="")
+                with urlopen(request, timeout=120) as response:
+                    result = json.load(response)
+                print(result["choices"][0]["message"]["content"])
                 """,
-                note: noAuthNote
+                note: "Uses Python's standard library; no package to install."
             ),
             ClientSnippet(
-                id: "openai-js",
+                id: "javascript",
                 title: "JavaScript",
                 language: "javascript",
                 body: """
-                import OpenAI from "openai";
-
-                const client = new OpenAI({
-                  baseURL: "\(v1)",
-                  apiKey: "\(sdkKey)",
+                const response = await fetch("\(v1)/chat/completions", {
+                  method: "POST",
+                  headers: {"Content-Type": "application/json"\(httpAuth)},
+                  body: JSON.stringify({
+                    model: "\(model)",
+                    messages: [{role: "user", content: "hello"}],
+                    stream: false,
+                    max_tokens: 64,
+                  }),
                 });
-
-                const stream = await client.chat.completions.create({
-                  model: "\(model)",
-                  messages: [{ role: "user", content: "hello" }],
-                  stream: true,
-                });
-                for await (const chunk of stream) {
-                  process.stdout.write(chunk.choices[0]?.delta?.content ?? "");
+                const result = await response.json();
+                if (!response.ok) {
+                  throw new Error(result.error?.message ?? "Request failed");
                 }
+                console.log(result.choices[0].message.content);
                 """,
-                note: noAuthNote
+                note: "Uses built-in fetch; no SDK to install."
             ),
             ClientSnippet(
                 id: "open-webui",
@@ -130,43 +115,6 @@ public enum ClientSnippets {
                   API key: \(apiKey ?? "(leave blank)")
                 """,
                 note: "Open WebUI in Docker cannot reach your phone on the host network. Run it with --network host, or add --add-host and use your phone's address."
-            ),
-            ClientSnippet(
-                id: "opencode",
-                title: "opencode",
-                language: "json",
-                body: """
-                {
-                  "$schema": "https://opencode.ai/config.json",
-                  "provider": {
-                    "pocketd": {
-                      "npm": "@ai-sdk/openai-compatible",
-                      "name": "Pocketd",
-                      "options": {
-                        "baseURL": "\(v1)",
-                        "apiKey": "\(sdkKey)"
-                      },
-                      "models": {
-                        "\(model)": { "name": "\(model)" }
-                      }
-                    }
-                  }
-                }
-                """,
-                filename: "opencode.json",
-                note: "Paste into ~/.config/opencode/opencode.json, or opencode.json in your project. Restart opencode — it does not pick up provider changes while running."
-            ),
-            ClientSnippet(
-                id: "aider",
-                title: "Aider",
-                language: "bash",
-                body: """
-                export OPENAI_API_BASE=\(v1)
-                export OPENAI_API_KEY=\(sdkKey)
-
-                aider --model openai/\(model)
-                """,
-                note: noAuthNote
             ),
         ]
     }

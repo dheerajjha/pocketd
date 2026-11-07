@@ -221,9 +221,10 @@ system prompt, stop button, history kept locally, a speed readout per reply.
 No Docker, no account, no extension.
 
 The page asks once for the six digits shown on the phone and remembers the key.
-`/setup` has the same handshake and hands back ready-to-paste configs for curl,
-Continue, opencode, the OpenAI SDKs for Python and JavaScript, Open WebUI and
-Aider.
+`/setup` has the same handshake and hands back ready-to-paste HTTP examples for
+curl, Python's standard library and JavaScript's built-in fetch, plus Open WebUI
+settings. [Client configurations](docs/client-configurations.md) covers Continue,
+opencode and Aider without changing the server's compatibility.
 
 ## It can see
 
