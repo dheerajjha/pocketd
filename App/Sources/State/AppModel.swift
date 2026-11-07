@@ -705,6 +705,7 @@ final class AppModel {
         await store.load()
         await engine.updateDefaultSampling(configuration.sampling)
         installed = await store.installed()
+        await restoreInterruptedDownloads()
         settleOnboardingForExistingInstall()
 
         // After the onboarding flag has been settled, not before. That flag is

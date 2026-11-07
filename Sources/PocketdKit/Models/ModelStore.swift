@@ -248,6 +248,12 @@ public actor ModelStore {
         FileManager.default.fileExists(atPath: resumeDataURL(for: model).path)
     }
 
+    /// Discover saved catalogue transfers without starting any network work.
+    /// A resume blob may be stale; the downloader decides whether it can use it.
+    public func interruptedDownloads(in catalogue: [ModelRecord] = ModelCatalog.all) -> [ModelRecord] {
+        catalogue.filter { !isInstalled($0) && hasResumeData(for: $0) }
+    }
+
     /// The same question, asked of a cancel that has only just happened.
     ///
     /// URLSession produces its resume blob from the completion handler of

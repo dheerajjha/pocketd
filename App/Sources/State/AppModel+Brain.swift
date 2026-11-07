@@ -70,6 +70,15 @@ extension AppModel {
 
     // MARK: - Downloads
 
+    func restoreInterruptedDownloads() async {
+        for record in await store.interruptedDownloads() where transfers[record.id] == nil {
+            transfers[record.id] = ModelTransfer(
+                record: record,
+                state: .paused("An earlier download stopped. Resume tries to continue it.")
+            )
+        }
+    }
+
     /// The downloads worth mentioning, in a stable order.
     ///
     /// Active first: a download in progress outranks a notice about one that
