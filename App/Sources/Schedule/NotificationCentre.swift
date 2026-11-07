@@ -74,6 +74,9 @@ final class NotificationCentre {
     /// and must not become one.
     func attach() {
         UNUserNotificationCenter.current().delegate = delegate
+        #if DEBUG
+        NotificationDiagnostics.record("delegate response=\(delegate.responds(to: NSSelectorFromString("userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:"))) presentation=\(delegate.responds(to: NSSelectorFromString("userNotificationCenter:willPresentNotification:withCompletionHandler:")))")
+        #endif
     }
 
     // MARK: - Permission
@@ -99,15 +102,45 @@ final class NotificationCentre {
     /// so on screen.
     @discardableResult
     func requestAuthorization() async -> Bool {
+        #if DEBUG
+        NotificationDiagnostics.record("authorization begin")
+        if ProcessInfo.processInfo.arguments.contains("-pocketd.notificationRawCallbacks") {
+            return await withCheckedContinuation { continuation in
+                UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                    NotificationDiagnostics.record("authorization raw callback granted=\(granted)")
+                    continuation.resume(returning: granted)
+                }
+            }
+        }
+        #endif
         let granted = try? await UNUserNotificationCenter.current()
             .requestAuthorization(options: [.alert, .sound])
+        #if DEBUG
+        NotificationDiagnostics.record("authorization end granted=\(granted ?? false)")
+        #endif
         return granted ?? false
     }
 
     /// Where permission stands, for a screen that needs to explain why a task
     /// will stay quiet.
     func authorizationStatus() async -> UNAuthorizationStatus {
-        await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        #if DEBUG
+        NotificationDiagnostics.record("settings begin")
+        if ProcessInfo.processInfo.arguments.contains("-pocketd.notificationRawCallbacks") {
+            return await withCheckedContinuation { continuation in
+                UNUserNotificationCenter.current().getNotificationSettings { settings in
+                    let status = settings.authorizationStatus
+                    NotificationDiagnostics.record("settings raw callback status=\(status.rawValue)")
+                    continuation.resume(returning: status)
+                }
+            }
+        }
+        #endif
+        let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        #if DEBUG
+        NotificationDiagnostics.record("settings end status=\(status.rawValue)")
+        #endif
+        return status
     }
 
     // MARK: - After a change
@@ -168,7 +201,7 @@ final class NotificationCentre {
     /// Deliberately does not request authorization. See the type's note.
     func reconcile(_ tasks: [ScheduledTask], now: Date = Date(), calendar: Calendar = .current) async {
         let centre = UNUserNotificationCenter.current()
-        let status = await centre.notificationSettings().authorizationStatus
+        let status = await authorizationStatus()
         guard status == .authorized || status == .provisional else { return }
 
         // `dueness(now:)` answers `nil` for a disabled task and for a spent
@@ -456,6 +489,9 @@ final class NotificationCentre {
     // MARK: - Taps
 
     fileprivate func received(tap taskID: UUID) {
+        #if DEBUG
+        NotificationDiagnostics.record("received task=\(taskID)")
+        #endif
         requestedTask = taskID
     }
 
@@ -492,15 +528,23 @@ private final class ScheduleNotificationDelegate: NSObject, UNUserNotificationCe
     /// run in a context where a model is actually allowed to load.
     func userNotificationCenter(
         _ centre: UNUserNotificationCenter,
-        didReceive response: UNNotificationResponse
-    ) async {
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping @Sendable () -> Void
+    ) {
         // A dismissal is not a request to run anything. `UNNotificationDefault-
         // ActionIdentifier` is the tap; anything else here is a swipe-away or a
         // custom action this app does not register.
-        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier,
-              let taskID = Self.taskID(of: response)
-        else { return }
-        await NotificationCentre.shared.received(tap: taskID)
+        let taskID = response.actionIdentifier == UNNotificationDefaultActionIdentifier
+            ? Self.taskID(of: response) : nil
+        Task { @MainActor in
+            if let taskID { NotificationCentre.shared.received(tap: taskID) }
+            // UIKit's notification-response completion must run on the main
+            // thread, even for a dismissal or an unrecognised request.
+            #if DEBUG
+            NotificationDiagnostics.record("response completion valid=\(taskID != nil)")
+            #endif
+            completionHandler()
+        }
     }
 
     /// What to do when one of these lands while the app is already open.
@@ -535,7 +579,11 @@ private final class ScheduleNotificationDelegate: NSObject, UNUserNotificationCe
         withCompletionHandler completionHandler: @escaping @Sendable (Int) -> Void
     ) {
         let options: UNNotificationPresentationOptions = [.banner, .list]
-        completionHandler(Int(options.rawValue))
+        #if DEBUG
+        NotificationDiagnostics.record("will present request=\(notification.request.identifier)")
+        #endif
+        let rawOptions = Int(options.rawValue)
+        DispatchQueue.main.async { completionHandler(rawOptions) }
     }
 
     /// `userInfo` first, and the request identifier only as a fallback. A

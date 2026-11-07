@@ -37,6 +37,9 @@ struct PocketdApp: App {
                     SystemModelProbe.runIfRequested()
                     #endif
                     await model.bootstrap()
+                    #if DEBUG
+                    await NotificationDiagnostics.scheduleIfRequested(model)
+                    #endif
                 }
                 // "Use from your laptop" is Pro, and the switch only asks when
                 // it is turned on. A server left on from before — a TestFlight
