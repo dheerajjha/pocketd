@@ -188,6 +188,10 @@ struct ProAccessTests {
 
     @Test("the price button carries the App Store's own price string")
     func unlockTitle() {
+        #expect(ProCopy.privacyURL.scheme == "https")
+        #expect(ProCopy.termsURL.scheme == "https")
+        #expect(ProCopy.privacyURL.host == "dheerajjha.github.io")
+        #expect(ProCopy.termsURL.host == "www.apple.com")
         #expect(ProCopy.unlockTitle(displayPrice: "$9.99") == "Unlock for $9.99")
         #expect(ProCopy.unlockTitle(displayPrice: "9,99 €") == "Unlock for 9,99 €")
         #expect(ProCopy.unlockTitle(displayPrice: "₹899.00") == "Unlock for ₹899.00")

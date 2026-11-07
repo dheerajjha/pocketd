@@ -31,7 +31,7 @@ struct YouView: View {
 
     /// Where the published policy lives. Written out rather than assembled,
     /// because a privacy link that 404s is worse than no privacy link.
-    private static let policyURL = URL(string: "https://dheerajjha.github.io/pocketd/")!
+    private static let policyURL = ProCopy.privacyURL
 
     /// The App Store's own review page for Pocketd. `requestReview()` is
     /// Apple's to show or to swallow — it is rationed, and shows nothing at

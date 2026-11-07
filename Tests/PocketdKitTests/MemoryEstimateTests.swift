@@ -78,7 +78,7 @@ struct MemoryEstimateTests {
 
     /// An iPhone 14: 6 GB physical, no increased-memory-limit entitlement.
     private let iPhone14 = DeviceBudget(physicalMemoryBytes: 6 * 1024 * 1024 * 1024,
-                                        hasIncreasedMemoryLimit: false)
+                                        hasIncreasedMemoryLimit: false, environment: .device)
 
     @Test("the KV cache is linear in context")
     func kvCacheScalesWithContext() {
@@ -238,7 +238,7 @@ struct MemoryEstimateTests {
 struct FittingContextTests {
 
     private let iPhone14 = DeviceBudget(physicalMemoryBytes: 6 * 1024 * 1024 * 1024,
-                                        hasIncreasedMemoryLimit: false)
+                                        hasIncreasedMemoryLimit: false, environment: .device)
 
     @Test("the answer is a context that actually loads, and the next one up is not")
     func largestContextIsLoadable() throws {

@@ -105,6 +105,12 @@ struct ProSheet: View {
                     .padding(.bottom, PDSpacing.s)
                     .transition(.opacity)
             }
+            Text(ProCopy.footer)
+                .font(Font.pd.footnote)
+                .foregroundStyle(Color.pd.inkSecondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity)
             PrimaryButton(
                 title: buttonTitle,
                 arrow: false,
@@ -113,12 +119,7 @@ struct ProSheet: View {
                 action: buy
             )
             secondaryLinks
-            Text(ProCopy.footer)
-                .font(Font.pd.footnote)
-                .foregroundStyle(Color.pd.inkSecondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity)
+            legalLinks
         }
         .animation(PDMotion.gentle, value: statusLine)
         .padding(.horizontal, PDSpacing.heroGutter)
@@ -138,6 +139,21 @@ struct ProSheet: View {
                 .disabled(pro.isRestoring || pro.purchase == .purchasing)
             SecondaryLink(ProCopy.notNow) { dismiss() }
         }
+    }
+
+    private var legalLinks: some View {
+        let layout = typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(spacing: 0))
+            : AnyLayout(HStackLayout(spacing: PDSpacing.m))
+        return layout {
+            Link("Terms", destination: ProCopy.termsURL)
+                .frame(minWidth: PDMetric.minHitTarget, minHeight: PDMetric.minHitTarget)
+            Link("Privacy", destination: ProCopy.privacyURL)
+                .frame(minWidth: PDMetric.minHitTarget, minHeight: PDMetric.minHitTarget)
+        }
+        .font(Font.pd.footnote)
+        .foregroundStyle(Color.pd.inkSecondary)
+        .buttonStyle(.plain)
     }
 
     // MARK: - States

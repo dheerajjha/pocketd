@@ -21,6 +21,14 @@ import FlyingFox
 @Suite("Background download session", .serialized)
 struct DownloadSessionTests {
 
+    @Test("only an application outside a test run can receive background relaunch events")
+    func relaunchEligibility() {
+        #expect(BackgroundDownloadSession.canBeRelaunched(bundleID: "dev.pocketd.app", bundleExtension: "app", isTesting: false))
+        #expect(!BackgroundDownloadSession.canBeRelaunched(bundleID: "dev.pocketd.tests", bundleExtension: "xctest", isTesting: false))
+        #expect(!BackgroundDownloadSession.canBeRelaunched(bundleID: "dev.pocketd.app", bundleExtension: "app", isTesting: true))
+        #expect(!BackgroundDownloadSession.canBeRelaunched(bundleID: nil, bundleExtension: "", isTesting: false))
+    }
+
     /// A session of this test's own. Sessions are keyed globally by identifier,
     /// so two tests sharing one would share a routing table, which is the thing
     /// under test.

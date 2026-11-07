@@ -64,3 +64,9 @@ on all three. An honest gap is better than a plausible fiction.
 make test
 make build-sim   # slow: compiles llama.cpp
 ```
+
+After generating the project, the shared `PocketdKitTests` scheme runs the same
+core tests on an iOS simulator, without loading a language model. The
+`PocketdKitMacTests` scheme runs those core tests on macOS. The
+`PocketdCompatibilityTests` scheme checks the app's version-specific scroll adapter.
+The `Pocketd` scheme checks purchase-sheet navigation with its local StoreKit configuration.

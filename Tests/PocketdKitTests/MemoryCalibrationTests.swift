@@ -121,6 +121,7 @@ struct MemoryCalibrationTests {
             let budget = DeviceBudget(
                 physicalMemoryBytes: 6 * gigabyte,
                 hasIncreasedMemoryLimit: false,
+                environment: .device,
                 provenLoadBytes: calibration.largestSuccessfulLoadBytes
             )
             #expect(budget.isProven == false)
@@ -146,6 +147,7 @@ struct MemoryCalibrationTests {
         let small = DeviceBudget(
             physicalMemoryBytes: 6 * gigabyte,
             hasIncreasedMemoryLimit: true,
+            environment: .device,
             provenLoadBytes: 683_826_592
         )
         #expect(small.isProven)
@@ -155,6 +157,7 @@ struct MemoryCalibrationTests {
         let big = DeviceBudget(
             physicalMemoryBytes: 6 * gigabyte,
             hasIncreasedMemoryLimit: true,
+            environment: .device,
             provenLoadBytes: fraction + gigabyte
         )
         #expect(big.usableBytes == fraction + gigabyte,
@@ -168,6 +171,7 @@ struct MemoryCalibrationTests {
         let budget = DeviceBudget(
             physicalMemoryBytes: 6 * gigabyte,
             hasIncreasedMemoryLimit: true,
+            environment: .device,
             provenLoadBytes: 40 * gigabyte
         )
         #expect(budget.usableBytes == 6 * gigabyte)
@@ -182,7 +186,8 @@ struct MemoryCalibrationTests {
             // An unentitled 6 GB phone by the fraction: refused outright.
             var budget = DeviceBudget(
                 physicalMemoryBytes: 6 * gigabyte,
-                hasIncreasedMemoryLimit: false
+                hasIncreasedMemoryLimit: false,
+                environment: .device
             )
             #expect(budget.fit(for: model) == .willNotFit)
 
@@ -206,7 +211,7 @@ struct MemoryCalibrationTests {
     func readingsDoNotMoveTheBudget() {
         withDefaults { defaults in
             let calibration = MemoryCalibration(defaults: defaults)
-            var budget = DeviceBudget(physicalMemoryBytes: 8 * gigabyte, hasIncreasedMemoryLimit: false)
+            var budget = DeviceBudget(physicalMemoryBytes: 8 * gigabyte, hasIncreasedMemoryLimit: false, environment: .device)
             let fraction = budget.usableBytes
             #expect(budget.pressure == .unknown, "no reading yet")
 
@@ -233,7 +238,8 @@ struct MemoryCalibrationTests {
             let budget = DeviceBudget.current(
                 hasIncreasedMemoryLimit: false,
                 calibration: calibration,
-                available: .fixed(3 * gigabyte)
+                available: .fixed(3 * gigabyte),
+                environment: .device
             )
 
             #expect(calibration.availableMemoryCeilingBytes == 3 * gigabyte,
@@ -251,7 +257,8 @@ struct MemoryCalibrationTests {
             let budget = DeviceBudget.current(
                 hasIncreasedMemoryLimit: true,
                 calibration: calibration,
-                available: .unavailable
+                available: .unavailable,
+                environment: .device
             )
             #expect(budget.isProven == false)
             #expect(budget.pressure == .unknown)

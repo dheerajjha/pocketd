@@ -380,6 +380,53 @@ targets:
       - sdk: WidgetKit.framework
       - sdk: SwiftUI.framework
 
+  PocketdKitTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/PocketdKitTests
+    info:
+      path: App/Resources/KitTests-Info.plist
+      properties:
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.pocketd.kit.tests
+        SWIFT_VERSION: "6.0"
+    dependencies:
+      - package: PocketdKit
+        product: PocketdKit
+
+  PocketdKitMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Tests/PocketdKitTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.pocketd.kit.mac.tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+    dependencies:
+      - package: PocketdKit
+        product: PocketdKit
+
+  PocketdUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: App/UITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.pocketd.ui.tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+        TEST_TARGET_NAME: Pocketd
+    dependencies:
+      - target: Pocketd
+
   # Standalone compatibility tests: no model download, app data, StoreKit
   # account or inference dependency is needed to exercise the scroll adapter.
   PocketdCompatibilityTests:
@@ -405,6 +452,20 @@ targets:
 # clone's first Run) has nothing to select. That is a worse first five
 # minutes than it sounds, and it is one block of YAML.
 schemes:
+  PocketdKitMacTests:
+    build:
+      targets:
+        PocketdKitMacTests: all
+    test:
+      targets:
+        - PocketdKitMacTests
+  PocketdKitTests:
+    build:
+      targets:
+        PocketdKitTests: all
+    test:
+      targets:
+        - PocketdKitTests
   PocketdCompatibilityTests:
     build:
       targets:
@@ -424,10 +485,10 @@ schemes:
       # `simctl launch` and `xcodebuild build` ignore it; see `ProStage` for
       # the simulator.
       storeKitConfiguration: App/Resources/Pocketd.storekit
-    # No test targets here: the suite is the Swift package's, run with
-    # `swift test`, and it deliberately does not need a simulator.
     test:
       config: Debug
+      targets:
+        - PocketdUITests
     profile:
       config: Release
     analyze:

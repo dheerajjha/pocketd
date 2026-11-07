@@ -332,7 +332,17 @@ final class BackgroundDownloadSession: NSObject, @unchecked Sendable {
     /// attempts, and a download test that passed in 3.2 seconds alone timed out
     /// after 60 in company. Serialising the download suites against each other
     /// did not fix it, because the queue was never ours — it was the system's.
-    static let processCanBeRelaunched = Bundle.main.bundleIdentifier != nil
+    // An iOS unit-test runner has a bundle identifier too, but no app delegate
+    // that can receive completed background transfers after the test exits.
+    static func canBeRelaunched(bundleID: String?, bundleExtension: String, isTesting: Bool) -> Bool {
+        bundleID != nil && bundleExtension.lowercased() == "app" && !isTesting
+    }
+
+    static let processCanBeRelaunched = canBeRelaunched(
+        bundleID: Bundle.main.bundleIdentifier,
+        bundleExtension: Bundle.main.bundleURL.pathExtension,
+        isTesting: ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    )
 
     /// The configuration choice, as a function of the one fact it depends on.
     ///

@@ -273,6 +273,8 @@ public enum ProCopy {
     public static let restoring = "Restoring…"
     public static let notNow = "Not now"
     public static let footer = "One-time purchase. No subscription, no account."
+    public static let privacyURL = URL(string: "https://dheerajjha.github.io/pocketd/")!
+    public static let termsURL = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!
     /// Ask to Buy: the purchase is waiting for a parent.
     public static let waitingForApproval = "Waiting for approval."
     /// The toast once Pro is on — bought, restored, or approved.

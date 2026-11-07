@@ -84,7 +84,7 @@ struct CataloguePromiseTests {
         #expect(gemma.sizeBytes > 3_000_000_000)
 
         let iPhone14 = DeviceBudget(physicalMemoryBytes: 6 * 1024 * 1024 * 1024,
-                                    hasIncreasedMemoryLimit: true)
+                                    hasIncreasedMemoryLimit: true, environment: .device)
         #expect(iPhone14.fit(for: gemma) == .willNotFit)
     }
 

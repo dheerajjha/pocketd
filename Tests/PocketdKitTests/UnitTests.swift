@@ -95,7 +95,8 @@ struct DeviceBudgetTests {
     /// An iPhone 14: 6 GB physical, no increased-memory-limit entitlement.
     private let iPhone14 = DeviceBudget(
         physicalMemoryBytes: 6 * 1024 * 1024 * 1024,
-        hasIncreasedMemoryLimit: false
+        hasIncreasedMemoryLimit: false,
+        environment: .device
     )
 
     @Test("fits a 1B model comfortably on a 6 GB device")
@@ -119,7 +120,8 @@ struct DeviceBudgetTests {
 
         let entitled = DeviceBudget(
             physicalMemoryBytes: 6 * 1024 * 1024 * 1024,
-            hasIncreasedMemoryLimit: true
+            hasIncreasedMemoryLimit: true,
+            environment: .device
         )
         #expect(entitled.fit(for: model) == .tight)
     }
@@ -139,7 +141,8 @@ struct DeviceBudgetTests {
     func entitlementEffect() {
         let entitled = DeviceBudget(
             physicalMemoryBytes: 6 * 1024 * 1024 * 1024,
-            hasIncreasedMemoryLimit: true
+            hasIncreasedMemoryLimit: true,
+            environment: .device
         )
         #expect(entitled.usableBytes > iPhone14.usableBytes)
         #expect(entitled.usableBytes < iPhone14.physicalMemoryBytes)
@@ -184,7 +187,7 @@ struct ModelStoreTests {
 
         let store = ModelStore(
             directory: directory,
-            budget: DeviceBudget(physicalMemoryBytes: 2 << 30, hasIncreasedMemoryLimit: false)
+            budget: DeviceBudget(physicalMemoryBytes: 2 << 30, hasIncreasedMemoryLimit: false, environment: .device)
         )
         let model = try #require(ModelCatalog.model(withID: "qwen3-4b"))
 
