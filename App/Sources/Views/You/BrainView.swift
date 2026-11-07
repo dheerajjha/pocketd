@@ -141,6 +141,11 @@ struct BrainView: View {
     private func accessory(for record: ModelRecord) -> BrainCardAccessory {
         let inUse = !model.isUsingBuiltInBrain && model.effectiveBrain == .downloaded(id: record.id)
         if model.loadingModelID == record.id { return .status("Getting ready") }
+        if model.isInstalled(record), model.lastLoadFailure?.id == record.id {
+            return .action("Try again", symbol: "arrow.clockwise") {
+                Task { await model.useDownloadedBrain(id: record.id) }
+            }
+        }
         if inUse { return .inUse }
         if model.isInstalled(record) {
             return .action("Use this", symbol: BrainCardAccessory.useSymbol) {
@@ -174,8 +179,10 @@ struct BrainView: View {
             symbol: "bubble.left",
             title: record.displayName,
             detail: readsYourDay(record) ? DayAccess.readsYourDay.label : "Chat only — can't read your day",
-            accessory: model.loadingModelID == record.id ? .status("Getting ready") : .inUse
-        )
+            accessory: accessory(for: record)
+        ) {
+            BrainTransferStatus(record: record)
+        }
     }
 
     // MARK: - Facts
@@ -330,12 +337,12 @@ struct BrainTransferStatus: View {
                 running(fraction: transfer.fraction, line: progressLine(transfer))
             case .stopping:
                 sentence("Stopping…")
-            case .paused:
-                sentence("Paused at \(percent(transfer.fraction)).")
-            case .failed:
-                sentence("The download didn't finish.")
+            case let .paused(reason), let .failed(reason):
+                sentence(reason)
             case .finished:
-                EmptyView()
+                if model.lastLoadFailure?.id == record.id, let reason = model.lastLoadFailure?.sentence {
+                    sentence(reason)
+                }
             }
         } else if model.lastLoadFailure?.id == record.id, let reason = model.lastLoadFailure?.sentence {
             sentence(reason)
@@ -549,6 +556,11 @@ private struct BrainRow: View {
         let transfer = model.transfer(for: record.id)
         if model.loadingModelID == record.id {
             quiet("Getting ready")
+        } else if model.isInstalled(record), model.lastLoadFailure?.id == record.id {
+            PillButton(title: "Try again", symbol: "arrow.clockwise") {
+                Task { await model.useDownloadedBrain(id: record.id) }
+            }
+            .accessibilityLabel("Try loading \(record.displayName) again")
         } else if isInUse {
             HStack(spacing: PDSpacing.xxs) {
                 Image(systemName: "checkmark").font(Font.pd.tick)

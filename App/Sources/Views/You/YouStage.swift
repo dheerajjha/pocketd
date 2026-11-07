@@ -115,6 +115,11 @@ enum YouStage {
         if asked("health") { model.healthToolsEnabled = true }
 
         if asked("brain") { await stageBrain(model) }
+        // Presentation fixture only: no attempt to force a memory termination.
+        if asked("loadFailure"), case let .downloaded(id)? = model.effectiveBrain {
+            await model.offloadModel()
+            model.lastLoadFailure = (id, BrainStatus.loadFailureSentence(for: .outOfMemory))
+        }
         if asked("serve") {
             await model.startServer()
             await model.newPairingCode()

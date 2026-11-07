@@ -94,7 +94,7 @@ public enum DownloadInterruption: Sendable, Equatable {
 
     public var message: String {
         switch self {
-        case .connectionLost: "Paused — Pocketd has to stay open to download. Tap to resume."
+        case .connectionLost: "Paused — the connection was interrupted. Tap to resume."
         case .offline: "Paused — no network. Tap to resume."
         }
     }
