@@ -179,7 +179,9 @@ reached.
 
 ## Install
 
-Requires Xcode 26 and [XcodeGen](https://github.com/yonaskolb/XcodeGen)
+Requires Xcode 27, because the app compiles against the iOS 27 SDK's
+FoundationModels API (used behind availability checks), and
+[XcodeGen](https://github.com/yonaskolb/XcodeGen)
 (`brew install xcodegen`). The `.xcodeproj` is generated, not committed.
 
 ```bash

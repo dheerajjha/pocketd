@@ -35,20 +35,17 @@ jobs:
         run: swift test
 
   app:
-    name: app (iOS simulator, ${{ matrix.runner }})
-    # The notification delegate follows how the SDK imports UserNotifications
-    # under C++ interop, which changes between Xcode releases (Xcode 16 rejects
-    # the current spelling). Build on the Xcode the project is developed with
-    # and on the oldest one the README supports.
-    runs-on: ${{ matrix.runner }}
+    name: app (iOS simulator)
+    # The app compiles against the iOS 27 SDK: it calls FoundationModels API
+    # that is new in iOS 27 (behind availability checks), and its notification
+    # delegate follows the iOS 27 import of UserNotifications under C++
+    # interop. Xcode 16 and Xcode 26 cannot build it, so the job runs on the
+    # Xcode 27 image, the version the README asks for.
+    runs-on: xcode-27
     # The app target builds llama.cpp from source through LocalLLMClient, which
     # is minutes of C++ even with a warm cache. It is a separate job so that a
     # Swift-level break in the package reports in one minute instead of fifteen.
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [xcode-27, macos-26]
     steps:
       - uses: actions/checkout@v4
 
@@ -64,8 +61,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .build
-          key: ${{ runner.os }}-${{ matrix.runner }}-spm-${{ hashFiles('project.yml', 'Package.swift') }}
-          restore-keys: ${{ runner.os }}-${{ matrix.runner }}-spm-
+          key: ${{ runner.os }}-xcode27-spm-${{ hashFiles('project.yml', 'Package.swift') }}
+          restore-keys: ${{ runner.os }}-xcode27-spm-
 
       # Code signing is off: this proves the app compiles, and nothing here can
       # or should produce a signed build. -skipMacroValidation is required
