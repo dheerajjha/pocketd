@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, macos-14]
+        os: [macos-26, macos-15]
     steps:
       - uses: actions/checkout@v4
 
@@ -35,12 +35,20 @@ jobs:
         run: swift test
 
   app:
-    name: app (iOS simulator)
-    runs-on: macos-15
+    name: app (iOS simulator, ${{ matrix.runner }})
+    # The notification delegate follows how the SDK imports UserNotifications
+    # under C++ interop, which changes between Xcode releases (Xcode 16 rejects
+    # the current spelling). Build on the Xcode the project is developed with
+    # and on the oldest one the README supports.
+    runs-on: ${{ matrix.runner }}
     # The app target builds llama.cpp from source through LocalLLMClient, which
     # is minutes of C++ even with a warm cache. It is a separate job so that a
     # Swift-level break in the package reports in one minute instead of fifteen.
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [xcode-27, macos-26]
     steps:
       - uses: actions/checkout@v4
 
@@ -56,8 +64,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .build
-          key: ${{ runner.os }}-spm-${{ hashFiles('project.yml', 'Package.swift') }}
-          restore-keys: ${{ runner.os }}-spm-
+          key: ${{ runner.os }}-${{ matrix.runner }}-spm-${{ hashFiles('project.yml', 'Package.swift') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.runner }}-spm-
 
       # Code signing is off: this proves the app compiles, and nothing here can
       # or should produce a signed build. -skipMacroValidation is required
