@@ -321,6 +321,9 @@ extension AppModel {
            target.canWrite(to: currentConversationID, messages: conversation) {
             conversation[target.slot].content = ReplyMarker.markingStopped(conversation[target.slot].content)
         }
+        // Cancellation is cooperative; reject the old task's final callback
+        // too, including any save it would otherwise schedule after a delete.
+        generationSerial += 1
         generationTask?.cancel()
         generationTask = nil
         inFlightTarget = nil
