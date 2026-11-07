@@ -683,6 +683,7 @@ extension AppModel {
     }
 
     func newConversation() async {
+        if isGenerating { stopGenerating() }
         await flushConversation()
         conversation.removeAll()
         draft = ""
