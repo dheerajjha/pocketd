@@ -59,6 +59,8 @@ struct IntroTests {
         #expect(plan.preselected == .builtIn)
         #expect(plan.action(for: .builtIn) == .useBuiltIn)
         #expect(plan.action(for: .download) == .download(qwen))
+        #expect(plan.primaryTitle(for: .download) == "Download and continue")
+        #expect(plan.primaryTitle(for: .builtIn) == "Continue")
     }
 
     @Test("Apple still fetching its model: the download is recommended, built-in still offered")
@@ -90,6 +92,7 @@ struct IntroTests {
         #expect(plan.layout == .nothingFits)
         #expect(plan.preselected == nil)
         #expect(plan.action(for: plan.preselected) == .nothing)
+        #expect(plan.primaryTitle(for: plan.preselected) == "Continue")
     }
 
     @Test("Built-in available on a phone no download fits: one row, still a choice")
@@ -109,12 +112,14 @@ struct IntroTests {
         #expect(plan.inUse == .download)
         #expect(plan.recommended == nil)
         #expect(plan.action(for: .download) == .nothing)
+        #expect(plan.primaryTitle(for: .download) == "Continue")
     }
 
     @Test("Back while it is still downloading: Continue does not start a second one")
     func backWhileArriving() {
         let plan = plan(chosen: .downloaded(id: qwen.id), arriving: [qwen])
         #expect(plan.download == .arriving(qwen))
+        #expect(plan.primaryTitle(for: .download) == "Continue")
         #expect(plan.inUse == .download)
         #expect(plan.preselected == .download)
         #expect(plan.action(for: .download) == .nothing)
@@ -134,6 +139,7 @@ struct IntroTests {
         let plan = plan(builtIn: .notEligible, installed: [smol], recommendation: .some(smol))
         #expect(plan.download == .onPhone(smol))
         #expect(plan.action(for: .download) == .useDownloaded(id: smol.id))
+        #expect(plan.primaryTitle(for: .download) == "Continue")
     }
 
     // MARK: Replay

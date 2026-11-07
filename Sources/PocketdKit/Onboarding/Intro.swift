@@ -245,6 +245,11 @@ public extension Intro {
                 }
             }
         }
+
+        public func primaryTitle(for selection: Option?) -> String {
+            if case .download = action(for: selection) { return Intro.Copy.downloadAndContinue }
+            return "Continue"
+        }
     }
 }
 
@@ -510,6 +515,8 @@ public extension Intro {
         public static let downloadTitle = "Private download"
         public static let downloadWorksAnywhere = "Works even with Apple Intelligence off."
         public static let gettingBrainTitle = "Pocketd is getting its brain."
+        public static let getBrainTitle = "Get Pocketd ready."
+        public static let downloadAndContinue = "Download and continue"
         public static let gettingBrainLine =
             "Pocketd thinks on this iPhone, so its brain is one download. After that, Pocketd works with no signal."
         public static let hasBrainTitle = "Pocketd has its brain."

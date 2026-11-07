@@ -63,7 +63,7 @@ struct OnboardingBrainStep: View {
             ornament: .icon("brain"),
             headline: Intro.Copy.brainTitle,
             secondary: Intro.Copy.brainLine,
-            primary: .init("Continue") { proceed(plan, selected: selected) }
+            primary: .init(plan.primaryTitle(for: selected)) { proceed(plan, selected: selected) }
         ) {
             VStack(alignment: .leading, spacing: PDSpacing.s) {
                 if let builtIn = plan.builtIn {
@@ -102,11 +102,12 @@ struct OnboardingBrainStep: View {
     private func downloadOnly(_ plan: Intro.BrainPlan) -> some View {
         let download = plan.download
         let isHere: Bool = if case .onPhone? = download { true } else { false }
+        let isArriving: Bool = if case .arriving? = download { true } else { false }
         return OnboardingPage(
             ornament: .icon(isHere ? "checkmark" : "arrow.down"),
-            headline: isHere ? Intro.Copy.hasBrainTitle : Intro.Copy.gettingBrainTitle,
+            headline: isHere ? Intro.Copy.hasBrainTitle : (isArriving ? Intro.Copy.gettingBrainTitle : Intro.Copy.getBrainTitle),
             secondary: isHere ? Intro.Copy.hasBrainLine : Intro.Copy.gettingBrainLine,
-            primary: .init("Continue") { proceed(plan, selected: .download) }
+            primary: .init(plan.primaryTitle(for: .download)) { proceed(plan, selected: .download) }
         ) {
             if let download {
                 VStack(alignment: .leading, spacing: PDSpacing.s) {
