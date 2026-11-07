@@ -137,9 +137,10 @@ extension AppModel {
     /// over "You're all set" with nothing on screen saying what it was for. It
     /// finds the question answered and asks nothing more.
     func setUpIntroMorningBrief(at time: TimeOfDay, weekdaysOnly: Bool) async {
-        if await NotificationCentre.shared.authorizationStatus() == .notDetermined {
-            await NotificationCentre.shared.requestAuthorization()
-        }
+        // This call is idempotent after iOS has answered. A settings read first
+        // adds a daemon round trip that can delay the sheet over the primer.
+        await NotificationCentre.shared.requestAuthorization()
+        guard !Task.isCancelled else { return }
         await setUpMorningBrief(at: time, weekdaysOnly: weekdaysOnly)
     }
 

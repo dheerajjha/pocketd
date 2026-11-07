@@ -45,6 +45,7 @@ struct OnboardingMorningBriefStep: View {
     var onContinue: () -> Void
 
     @State private var saving = false
+    @State private var savingTask: Task<Void, Never>?
 
     /// `TimeOfDay` on the way in and out, `Date` in the middle, because
     /// `DatePicker` has no hour-and-minute type. Only the two components are
@@ -66,7 +67,7 @@ struct OnboardingMorningBriefStep: View {
             secondary: Intro.Copy.morningLine,
             primer: notificationsUndecided != false ? Intro.Copy.morningPrimer : nil,
             primary: .init(Intro.Copy.setItUp, isLoading: saving, run: setUp),
-            escape: .init(Intro.Copy.notNow, run: onContinue)
+            escape: .init(Intro.Copy.notNow, run: skip)
         ) {
             VStack(alignment: .leading, spacing: PDSpacing.l) {
                 PDCard(warm: true) {
@@ -102,6 +103,7 @@ struct OnboardingMorningBriefStep: View {
                 }
             }
         }
+        .onDisappear { savingTask?.cancel() }
     }
 
     // MARK: - The two controls
@@ -152,12 +154,21 @@ struct OnboardingMorningBriefStep: View {
     private func setUp() {
         guard !saving else { return }
         saving = true
-        Task {
+        savingTask = Task {
             await model.setUpIntroMorningBrief(at: time, weekdaysOnly: weekdaysOnly)
+            guard !Task.isCancelled else { return }
             saving = false
+            savingTask = nil
             Haptics.success()
             onContinue()
         }
+    }
+
+    private func skip() {
+        savingTask?.cancel()
+        savingTask = nil
+        saving = false
+        onContinue()
     }
 }
 
