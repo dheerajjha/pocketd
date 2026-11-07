@@ -262,11 +262,14 @@ extension AppModel {
                     let cleaned = echo.clean(reply.content).text.trimmingCharacters(in: .whitespacesAndNewlines)
                     if cleaned != reply.content.trimmingCharacters(in: .whitespacesAndNewlines) {
                         self.conversation[target.slot].content = cleaned
-                        if cleaned.isEmpty, reply.cards.isEmpty {
-                            self.discardEmptyReply()
-                            self.generationError = "That one didn't work."
-                            self.replyFailureRemedy = .tryAgain
-                        }
+                    }
+                    // A stream can finish without producing a token. That is
+                    // still a missing answer, even when echo cleanup changed
+                    // nothing; never keep an empty assistant turn in history.
+                    if cleaned.isEmpty, reply.cards.isEmpty {
+                        self.discardEmptyReply()
+                        self.generationError = "That one didn't work."
+                        self.replyFailureRemedy = .tryAgain
                     }
                 }
                 self.inFlightTarget = nil
@@ -297,7 +300,7 @@ extension AppModel {
     private func discardEmptyReply() {
         guard let last = conversation.indices.last,
               conversation[last].role == .assistant,
-              conversation[last].content.isEmpty,
+              conversation[last].content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               conversation[last].cards.isEmpty
         else { return }
         conversation.remove(at: last)
