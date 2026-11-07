@@ -74,14 +74,16 @@
 
 <h1>Privacy Policy</h1>
 
-<p class="meta"><strong>Pocketd</strong> · Last updated 21 October 2026</p>
+<p class="meta"><strong>Pocketd</strong> · Last updated 7 November 2026</p>
 
 <p>Three kinds of request leave your phone: model searches and downloads, which
 go to Hugging Face; a fixed list of usage events, which go to Mixpanel unless
 you turn them off; and, for Pocketd Pro, the requests Apple's StoreKit makes to
-the App Store. Nothing else is sent anywhere. Your conversations, everything the
-model says back, and anything Pocketd reads from Health, Calendar or Reminders
-stay on the device and cannot appear in any of them.</p>
+the App Store. Conversations in the iPhone app and anything Pocketd reads from
+Health, Calendar or Reminders stay on the device and cannot appear in any of
+those requests. If you turn on the local server, a connected device sends its
+own prompts to the phone and receives answers over your local network. Inference
+still runs on the phone; no hosted inference service receives those exchanges.</p>
 
 <p>The rest of this page is the detail behind those sentences, including the
 parts that are less tidy than the sentences are.</p>
@@ -119,7 +121,10 @@ and screen size, whether the phone is on Wi-Fi or which kind of mobile network,
 a mobile-carrier field that current iOS answers only with a placeholder, and the
 SDK's own version.
 Mixpanel is told not to work out a location from the IP address the events
-arrive from.</p>
+arrive from. Events also carry a build-environment label: Release builds with a
+sandbox receipt report <code>sandbox</code> (including TestFlight and App Review),
+and other Release builds report <code>app_store</code>. Debug builds do not
+transmit events.</p>
 
 <p>These events are on by default. You › Privacy has a switch, <strong>Share
 anonymous usage counts</strong>, that turns them off; turning it off also throws

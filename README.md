@@ -579,9 +579,11 @@ and nothing you say is ever recorded or uploaded. Reading the brief out loud
 uses the same on-device voice synthesis as the rest of iOS.
 
 What stays is the part worth promising. Inference is local — Apple's built-in
-model runs on the phone, and a downloaded one is a file on it — and the HTTP
-server only answers, so nothing you type and nothing the model says back is
-ever transmitted. Health, calendar and reminder data are read on-device and are
+model runs on the phone, and a downloaded one is a file on it. Conversations in
+the iPhone app stay on the phone. When you use the local server, a connected
+device sends its own prompts and receives answers over your Wi-Fi; no hosted
+inference service receives those exchanges. Health, calendar and reminder data
+are read on-device and are
 refused to network callers — including the chat page the phone itself serves —
 by the origin gate in `RequestOrigin.swift`. The assistant can also add events
 and reminders — including repeating ones, as a native `EKRecurrenceRule` rather
