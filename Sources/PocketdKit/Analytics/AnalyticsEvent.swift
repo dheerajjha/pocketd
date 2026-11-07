@@ -22,7 +22,7 @@ public enum AnalyticsInstallEnvironment: String, Sendable, CaseIterable {
     case sandbox
     case appStore = "app_store"
 
-    /// Mirrors the synchronous receipt-filename check used by Recordy.
+    /// Uses the synchronous receipt-filename check.
     /// `AppTransaction.shared` is async and may reach the network, which would
     /// leave the first event without the environment we need to filter it.
     public static func resolve(isDebugBuild: Bool, receiptFilename: String?) -> Self {

@@ -244,15 +244,15 @@ public enum PersonalDataWrites {
         case let .unauthorized(authorization): return ["text": authorization.explanation(for: .reminders)]
         }
 
-        let matches = rows.filter { matches(title, $0.title.attackerControlledValue()) }
-        guard !matches.isEmpty else {
+        let candidates = rows.filter { matches(title, $0.title.attackerControlledValue()) }
+        guard !candidates.isEmpty else {
             return ["text": "I could not find an open reminder matching \"\(title)\"."]
         }
-        guard matches.count == 1, let target = matches.first else {
+        guard candidates.count == 1, let target = candidates.first else {
             // Never a guess. Picking one of three reminders that all match is
             // the kind of wrong that is only discovered later, by which time
             // the user has thrown away the thing they still needed.
-            return ["text": "\(matches.count) open reminders match \"\(title)\". Which one?"]
+            return ["text": "\(candidates.count) open reminders match \"\(title)\". Which one?"]
         }
 
         switch await complete(target) {
