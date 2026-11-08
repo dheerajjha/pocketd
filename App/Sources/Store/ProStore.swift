@@ -76,6 +76,7 @@ final class ProStore {
     @ObservationIgnored private var ownsPurchase = false
     @ObservationIgnored private var app: AppFacts?
     @ObservationIgnored private var product: Product?
+    @ObservationIgnored private var transactionRevision = 0
     @ObservationIgnored private let recordAnalytics: @MainActor (AnalyticsEvent) -> Void
     /// Kept only while an Ask to Buy decision is pending in this process.
     @ObservationIgnored private var pendingPurchaseEntry: PurchaseEntry?
@@ -107,7 +108,15 @@ final class ProStore {
                 await self?.receive(intent)
             }
         }
+        #if DEBUG
+        // An explicit restore test begins with unknown ownership, not a fake
+        // transaction. Listeners and Restore still use the real StoreKit APIs.
+        if !ProStage.manualRestore {
+            Task { [weak self] in await self?.refresh() }
+        }
+        #else
         Task { [weak self] in await self?.refresh() }
+        #endif
     }
 
     // MARK: - Is it on
@@ -123,8 +132,18 @@ final class ProStore {
             return
         }
         #endif
+        let revision = transactionRevision
         let purchased = await Self.ownsPro()
+        // A verified purchase is sufficient. The app transaction is needed
+        // only for the separate early-supporter rule, not to delay Restore.
+        if purchased, revision == transactionRevision {
+            ownsPurchase = true
+            decide()
+        }
         let app = await Self.readAppTransaction()
+        // A verified update received while this read was suspended is newer
+        // than its initial ownership snapshot.
+        guard revision == transactionRevision else { return }
         #if DEBUG
         ownsPurchase = purchased || stagedPurchase
         #else
@@ -200,8 +219,13 @@ final class ProStore {
     /// finished elsewhere, a restore, a refund.
     private func receive(_ update: VerificationResult<Transaction>) async {
         guard case let .verified(transaction) = update else { return }
-        await transaction.finish()
-        guard transaction.productID == ProAccess.productID else { return }
+        guard transaction.productID == ProAccess.productID else {
+            await transaction.finish()
+            return
+        }
+        transactionRevision += 1
+        ownsPurchase = transaction.revocationDate == nil
+        decide()
         if purchase == .pending {
             if let entry = pendingPurchaseEntry {
                 recordAnalytics(.purchaseCompleted(entry: entry))
@@ -209,6 +233,7 @@ final class ProStore {
             pendingPurchaseEntry = nil
             purchase = .idle
         }
+        await transaction.finish()
         await refresh()
     }
 
@@ -298,12 +323,13 @@ final class ProStore {
         do {
             switch try await product.purchase(options: options) {
             case let .success(.verified(transaction)):
-                await transaction.finish()
-                recordAnalytics(.purchaseCompleted(entry: entry))
-                pendingPurchaseEntry = nil
+                transactionRevision += 1
                 ownsPurchase = true
                 decide()
+                recordAnalytics(.purchaseCompleted(entry: entry))
+                pendingPurchaseEntry = nil
                 purchase = .idle
+                await transaction.finish()
             case .success(.unverified):
                 recordAnalytics(.purchaseFailed(entry: entry))
                 pendingPurchaseEntry = nil
@@ -513,6 +539,7 @@ enum ProStage {
     }
 
     static var opensSheet: Bool { arguments.contains("-pocketd.proSheet") }
+    static var manualRestore: Bool { arguments.contains("-pocketd.testManualRestore") }
 
     /// Whether anything here replaces StoreKit for this run.
     static var isStaged: Bool { facts != nil || offer != nil }

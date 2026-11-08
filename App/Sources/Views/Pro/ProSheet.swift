@@ -63,7 +63,11 @@ struct ProSheet: View {
         .interactiveDismissDisabled(pro.purchase == .purchasing)
         .task {
             pro.clearFailure()
+            #if DEBUG
+            if !ProStage.manualRestore { await pro.refreshIfNeeded() }
+            #else
             await pro.refreshIfNeeded()
+            #endif
             await pro.loadOffer()
         }
         .onChange(of: pro.isPro) { _, isPro in
