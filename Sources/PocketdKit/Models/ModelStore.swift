@@ -369,7 +369,8 @@ public actor ModelStore {
     public func delete(_ model: ModelRecord) async throws {
         if !metadataWritable { await load() }
         guard metadataWritable else { throw MetadataUnavailable() }
-        discardFiles(for: model)
+        guard transfersInFlight[model.id, default: 0] == 0 else { throw RecoveryUnavailable() }
+        try removeRecoveryFiles(for: manifest[model.id] ?? model)
         manifest[model.id] = nil
         unavailableIDs.remove(model.id)
         integrity[model.id] = nil
@@ -383,14 +384,17 @@ public actor ModelStore {
     /// right often enough to be worth a warning and wrong often enough that
     /// refusing outright would be the app overruling someone who knows their own
     /// device better than a heuristic does.
+    /// `restarting` replaces an unavailable saved download from its original
+    /// source, clearing rejected/partial files without dropping its entry.
     public func download(
         _ model: ModelRecord,
-        allowingOversized: Bool = false
+        allowingOversized: Bool = false,
+        restarting: Bool = false
     ) -> AsyncThrowingStream<DownloadProgress, any Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    try await performDownload(model, allowingOversized: allowingOversized) { progress in
+                    try await performDownload(model, allowingOversized: allowingOversized, restarting: restarting) { progress in
                         continuation.yield(progress)
                     }
                     continuation.finish()
@@ -403,12 +407,23 @@ public actor ModelStore {
     }
 
     private func performDownload(
-        _ model: ModelRecord,
+        _ requestedModel: ModelRecord,
         allowingOversized: Bool,
+        restarting: Bool,
         onProgress: @escaping @Sendable (DownloadProgress) -> Void
     ) async throws {
         if !metadataWritable { await load() }
         guard metadataWritable else { throw MetadataUnavailable() }
+        let model: ModelRecord
+        if restarting {
+            // Recover the saved entry, including its original download source.
+            // Ownership stays intact if the replacement fails or is cancelled.
+            guard let saved = manifest[requestedModel.id], !isInstalled(saved),
+                  transfersInFlight[saved.id, default: 0] == 0 else { throw RecoveryUnavailable() }
+            model = saved
+        } else {
+            model = requestedModel
+        }
         transfersInFlight[model.id, default: 0] += 1
         defer {
             let remaining = (transfersInFlight[model.id] ?? 1) - 1
@@ -420,6 +435,7 @@ public actor ModelStore {
             throw ModelStoreError.insufficientMemory(model: model.id)
         }
         try checkDiskSpace(for: model)
+        if restarting { try removeRecoveryFiles(for: model) }
 
         let destination = fileURL(for: model)
         let resumeURL = resumeDataURL(for: model)
@@ -591,6 +607,36 @@ public actor ModelStore {
             try? FileManager.default.removeItem(at: projector)
             try? FileManager.default.removeItem(at: directory.appendingPathComponent("\(model.id).mmproj.resume"))
         }
+    }
+
+    /// An explicit restart/removal clears rejected weights and their resume
+    /// data, including the staging file named by a readable resume blob.
+    private func removeRecoveryFiles(for model: ModelRecord) throws {
+        var files = [fileURL(for: model), resumeDataURL(for: model)]
+        if let projector = projectorURL(for: model) {
+            files += [projector, directory.appendingPathComponent("\(model.id).mmproj.resume")]
+        }
+        for resume in files where resume.pathExtension == "resume" {
+            if let data = try? Data(contentsOf: resume),
+               let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+               let name = info["NSURLSessionResumeInfoTempFileName"] as? String,
+               name == (name as NSString).lastPathComponent, name.hasPrefix("CFNetworkDownload") {
+                try removeIfPresent(FileManager.default.temporaryDirectory.appendingPathComponent(name))
+            }
+        }
+        for file in files { try removeIfPresent(file) }
+    }
+
+    private func removeIfPresent(_ url: URL) throws {
+        do { try FileManager.default.removeItem(at: url) }
+        catch {
+            let error = error as NSError
+            guard error.domain == NSCocoaErrorDomain, error.code == NSFileNoSuchFileError else { throw error }
+        }
+    }
+
+    private struct RecoveryUnavailable: LocalizedError {
+        var errorDescription: String? { "This model is busy or no longer unavailable. Check again." }
     }
 
     private func run(

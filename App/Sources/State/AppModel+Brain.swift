@@ -130,7 +130,12 @@ extension AppModel {
         await store.downloadsInFlight()
     }
 
-    func download(_ model: ModelRecord, allowingOversized: Bool = false) {
+    func downloadAgain(_ record: ModelRecord) {
+        guard let saved = unavailableModels.first(where: { $0.id == record.id }) else { return }
+        download(saved, restarting: true)
+    }
+
+    func download(_ model: ModelRecord, allowingOversized: Bool = false, restarting: Bool = false) {
         guard downloadTasks[model.id] == nil else { return }
         // Both of these sit after the guard, so a second tap on a download
         // already running is not a second download. A resume is one: it comes
@@ -161,7 +166,7 @@ extension AppModel {
             state: .waiting,
             // A resume starts from the bytes already on disk, so the bar
             // belongs where the pause left it rather than back at zero.
-            lastProgress: transfers[model.id]?.lastProgress,
+            lastProgress: restarting ? nil : transfers[model.id]?.lastProgress,
             allowingOversized: allowingOversized || transfers[model.id]?.allowingOversized == true
         )
 
@@ -173,7 +178,7 @@ extension AppModel {
         downloadTasks[model.id] = Task { [store] in
             do {
                 let permitted = await MainActor.run { self.transfers[model.id]?.allowingOversized ?? allowingOversized }
-                for try await progress in await store.download(model, allowingOversized: permitted) {
+                for try await progress in await store.download(model, allowingOversized: permitted, restarting: restarting) {
                     await MainActor.run { self.publishProgress(progress) }
                 }
                 let list = await store.installed()
@@ -394,6 +399,10 @@ extension AppModel {
         try? await store.delete(model)
         installed = await store.installed()
         unavailableModels = await store.unavailable()
+        if !installed.contains(where: { $0.id == model.id }),
+           !unavailableModels.contains(where: { $0.id == model.id }) {
+            clearTransfer(model.id)
+        }
         // The phone's own brain may have been the one removed: decided again,
         // which is Apple's model where this phone has it, else the next
         // download — never a phone left with no brain while one could answer.

@@ -141,6 +141,7 @@ struct BrainView: View {
     private func accessory(for record: ModelRecord) -> BrainCardAccessory {
         let inUse = !model.isUsingBuiltInBrain && model.effectiveBrain == .downloaded(id: record.id)
         if model.loadingModelID == record.id { return .status("Getting ready") }
+        if let transfer = model.transfer(for: record.id), transfer.isActive || transfer.state == .stopping { return .none }
         if model.isUnavailable(record) {
             return .action("Check again", symbol: "arrow.clockwise") {
                 Task { await model.checkModelAvailability() }
@@ -334,9 +335,7 @@ struct BrainTransferStatus: View {
     let record: ModelRecord
 
     var body: some View {
-        if model.isUnavailable(record) {
-            sentence("The saved file is unavailable. Your download record is kept.")
-        } else if let transfer = model.transfer(for: record.id) {
+        if let transfer = model.transfer(for: record.id) {
             switch transfer.state {
             case .waiting:
                 running(fraction: nil, line: "Starting…")
@@ -344,7 +343,11 @@ struct BrainTransferStatus: View {
                 running(fraction: transfer.fraction, line: progressLine(transfer))
             case .stopping:
                 sentence("Stopping…")
-            case let .paused(reason), let .failed(reason):
+            case let .paused(reason):
+                // An unavailable entry offers a clean Download again, not
+                // Resume; do not promise continuation from rejected bytes.
+                if !model.isUnavailable(record) { sentence(reason) }
+            case let .failed(reason):
                 sentence(reason)
             case .finished:
                 if model.lastLoadFailure?.id == record.id, let reason = model.lastLoadFailure?.sentence {
@@ -353,6 +356,11 @@ struct BrainTransferStatus: View {
             }
         } else if model.lastLoadFailure?.id == record.id, let reason = model.lastLoadFailure?.sentence {
             sentence(reason)
+        }
+        if model.isUnavailable(record), model.transfer(for: record.id)?.isActive != true,
+           model.transfer(for: record.id)?.state != .stopping {
+            sentence("The saved file is unavailable. Your download record is kept.")
+            UnavailableBrainRecovery(record: record)
         }
     }
 
@@ -394,6 +402,34 @@ struct BrainTransferStatus: View {
 
     private func percent(_ fraction: Double) -> String {
         "\(Int((fraction * 100).rounded(.down)))%"
+    }
+}
+
+/// Recovery belongs to the saved download, not a new catalogue purchase.
+/// It appears on both the main Brain card and its More brains row.
+private struct UnavailableBrainRecovery: View {
+    @Environment(AppModel.self) private var model
+    let record: ModelRecord
+    @State private var removing = false
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: PDSpacing.s) { actions }
+            VStack(alignment: .leading, spacing: PDSpacing.xxs) { actions }
+        }
+        .confirmationDialog("Remove \(record.displayName)?", isPresented: $removing, titleVisibility: .visible) {
+            Button("Remove", role: .destructive) { Task { await model.delete(record) } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Removes this download record and any remaining files.")
+        }
+    }
+
+    @ViewBuilder private var actions: some View {
+        PillButton(title: "Download again", symbol: "arrow.down") { model.downloadAgain(record) }
+            .accessibilityLabel("Download \(record.displayName) again")
+        InlineLink("Remove", tint: .pd.danger) { removing = true }
+            .accessibilityLabel("Remove \(record.displayName)")
     }
 }
 
@@ -563,6 +599,8 @@ private struct BrainRow: View {
         let transfer = model.transfer(for: record.id)
         if model.loadingModelID == record.id {
             quiet("Getting ready")
+        } else if transfer?.isActive == true || transfer?.state == .stopping {
+            EmptyView()
         } else if model.isUnavailable(record) {
             PillButton(title: "Check again", symbol: "arrow.clockwise") {
                 Task { await model.checkModelAvailability() }
@@ -586,8 +624,6 @@ private struct BrainRow: View {
                 Task { await model.useDownloadedBrain(id: record.id) }
             }
             .accessibilityLabel("Use \(record.displayName)")
-        } else if transfer?.isActive == true || transfer?.state == .stopping {
-            EmptyView()
         } else if !fit.allowsDownload {
             quiet(pdFitWords(fit))
         } else if case .paused? = transfer?.state {
