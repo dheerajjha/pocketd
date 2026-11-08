@@ -79,7 +79,7 @@ struct OtherDevicesView: View {
                 .init("square.grid.2x2", "Works with apps you already have"),
                 .init("wifi", "Stays on your Wi-Fi"),
             ],
-            primaryTitle: "Turn on",
+            primaryTitle: "Continue",
             // iOS asks once, the first time the phone shows itself on the
             // network; on later visits nothing appears and the line is merely
             // early.
