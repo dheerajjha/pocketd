@@ -176,6 +176,9 @@ public actor ModelStore {
     private let session: URLSession
     private var budget: DeviceBudget
     private var manifest: [String: ModelRecord] = [:]
+    private var unavailableIDs: Set<String> = []
+    private var integrity: [String: ModelFileIntegrity] = [:]
+    private var metadataWritable: Bool
     /// Models with a transfer running right now, counted rather than flagged
     /// because nothing stops two callers asking for the same id at once.
     ///
@@ -189,6 +192,7 @@ public actor ModelStore {
     private var transfersInFlight: [String: Int] = [:]
 
     private var manifestURL: URL { directory.appendingPathComponent("manifest.json") }
+    private var integrityURL: URL { directory.appendingPathComponent("integrity.json") }
 
     /// Keeps the download gate honest when the context limit changes.
     ///
@@ -204,6 +208,7 @@ public actor ModelStore {
         self.directory = directory
         self.budget = budget
         self.session = session
+        self.metadataWritable = false
     }
 
     /// Default location: Application Support, excluded from iCloud backup.
@@ -225,17 +230,64 @@ public actor ModelStore {
     }
 
     public func load() async {
-        guard let data = try? Data(contentsOf: manifestURL),
-              let decoded = try? JSONDecoder().decode([String: ModelRecord].self, from: data)
-        else { return }
-        // Drop entries whose file vanished — a manifest that lies about what is
-        // installed produces a `/v1/models` list the server cannot actually serve.
-        manifest = decoded.filter { FileManager.default.fileExists(atPath: fileURL(for: $0.value).path) }
-        if manifest.count != decoded.count { persist() }
+        do {
+            let data = try Data(contentsOf: manifestURL)
+            manifest = try JSONDecoder().decode([String: ModelRecord].self, from: data)
+        } catch {
+            unavailableIDs = Set(manifest.keys)
+            metadataWritable = Self.isMissingFile(error) && manifest.isEmpty
+            if metadataWritable {
+                do {
+                    _ = try Data(contentsOf: integrityURL)
+                    metadataWritable = false
+                } catch { metadataWritable = Self.isMissingFile(error) }
+            }
+            return
+        }
+        metadataWritable = false
+        do {
+            integrity = try JSONDecoder().decode([String: ModelFileIntegrity].self, from: Data(contentsOf: integrityURL))
+        } catch {
+            if !Self.isMissingFile(error) {
+                unavailableIDs = Set(manifest.keys)
+                return
+            }
+        }
+        unavailableIDs = []
+        var learned = false
+        for record in manifest.values {
+            do {
+                let observed = try ModelFileIntegrity.read(model: record, weights: fileURL(for: record), projector: projectorURL(for: record))
+                if let expected = integrity[record.id] {
+                    guard observed == expected else {
+                        unavailableIDs.insert(record.id)
+                        continue
+                    }
+                } else {
+                    // Additive migration for existing, size-verified downloads.
+                    integrity[record.id] = observed
+                    learned = true
+                }
+            } catch {
+                unavailableIDs.insert(record.id)
+            }
+        }
+        metadataWritable = true
+        if learned {
+            do { try persistIntegrity() }
+            catch { metadataWritable = false }
+        }
+        // Availability must never remove ownership or rewrite manifest.json.
     }
 
     public func installed() -> [ModelRecord] {
-        manifest.values.sorted { $0.displayName < $1.displayName }
+        manifest.values.filter { !unavailableIDs.contains($0.id) && filesExist(for: $0) }
+            .sorted { $0.displayName < $1.displayName }
+    }
+
+    public func unavailable() -> [ModelRecord] {
+        manifest.values.filter { unavailableIDs.contains($0.id) || !filesExist(for: $0) }
+            .sorted { $0.displayName < $1.displayName }
     }
 
     /// Every model id with a transfer running right now, whoever started it.
@@ -277,7 +329,8 @@ public actor ModelStore {
     }
 
     public func isInstalled(_ model: ModelRecord) -> Bool {
-        manifest[model.id] != nil
+        guard let stored = manifest[model.id] else { return false }
+        return !unavailableIDs.contains(model.id) && filesExist(for: stored)
     }
 
     public nonisolated func fileURL(for model: ModelRecord) -> URL {
@@ -291,7 +344,8 @@ public actor ModelStore {
     }
 
     public func localURL(forID id: String) -> URL? {
-        manifest[id].map { fileURL(for: $0) }
+        guard let record = manifest[id], isInstalled(record) else { return nil }
+        return fileURL(for: record)
     }
 
     /// Discards a paused download's resume data.
@@ -312,9 +366,14 @@ public actor ModelStore {
         }
     }
 
-    public func delete(_ model: ModelRecord) throws {
+    public func delete(_ model: ModelRecord) async throws {
+        if !metadataWritable { await load() }
+        guard metadataWritable else { throw MetadataUnavailable() }
         discardFiles(for: model)
         manifest[model.id] = nil
+        unavailableIDs.remove(model.id)
+        integrity[model.id] = nil
+        try persistIntegrity()
         persist()
     }
 
@@ -348,6 +407,8 @@ public actor ModelStore {
         allowingOversized: Bool,
         onProgress: @escaping @Sendable (DownloadProgress) -> Void
     ) async throws {
+        if !metadataWritable { await load() }
+        guard metadataWritable else { throw MetadataUnavailable() }
         transfersInFlight[model.id, default: 0] += 1
         defer {
             let remaining = (transfersInFlight[model.id] ?? 1) - 1
@@ -459,7 +520,10 @@ public actor ModelStore {
         // was once out by 1.3 GB.
         installed.sizeBytes = weightsBytes
         installed.projectorSizeBytes = projectorBytes
+        integrity[model.id] = try ModelFileIntegrity.read(model: installed, weights: destination, projector: projectorURL(for: installed))
+        try persistIntegrity()
         manifest[model.id] = installed
+        unavailableIDs.remove(model.id)
         persist()
         let total = weightsBytes + projectorBytes
         onProgress(DownloadProgress(modelID: id, receivedBytes: total, totalBytes: total))
@@ -467,14 +531,9 @@ public actor ModelStore {
 
     /// The file's real size, or a thrown error and no file at all.
     ///
-    /// Deliberately not a hash. PocketPal's comment on the same check
-    /// (`src/utils/index.ts`) is that hashing is unreliable and expensive, and
-    /// on a phone that is the whole story: SHA-256 over a 4 GB GGUF is tens of
-    /// seconds of wall clock and battery at the exact moment the user is
-    /// waiting to use the thing, to catch a class of corruption — silently
-    /// flipped bytes in an otherwise complete transfer — that TLS and TCP
-    /// checksums have already made vanishingly rare. Truncation is the failure
-    /// that actually happens, and truncation is visible in the length.
+    /// The transfer's size check runs before fingerprinting. Fingerprints then
+    /// protect adoption of a file that was temporarily unavailable, without
+    /// reading the whole model into memory or changing its manifest format.
     ///
     /// The 0.1% band is PocketPal's number and it is sized for the fallback
     /// path: a hand-written catalogue figure is off by rounding, not by a
@@ -600,7 +659,32 @@ public actor ModelStore {
     }
 
     private func persist() {
+        guard metadataWritable else { return }
         guard let data = try? JSONEncoder().encode(manifest) else { return }
         try? data.write(to: manifestURL, options: .atomic)
+    }
+
+    private func persistIntegrity() throws {
+        try JSONEncoder().encode(integrity).write(to: integrityURL, options: .atomic)
+    }
+
+    private func filesExist(for model: ModelRecord) -> Bool {
+        guard FileManager.default.fileExists(atPath: fileURL(for: model).path) else { return false }
+        if model.projectorFilename != nil {
+            guard let projector = projectorURL(for: model) else { return false }
+            return FileManager.default.fileExists(atPath: projector.path)
+        }
+        return true
+    }
+
+    private struct MetadataUnavailable: LocalizedError {
+        var errorDescription: String? {
+            "Model information could not be read. No model files were changed. Try again."
+        }
+    }
+
+    private static func isMissingFile(_ error: any Error) -> Bool {
+        let error = error as NSError
+        return error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError
     }
 }

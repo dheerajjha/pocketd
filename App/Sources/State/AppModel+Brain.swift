@@ -23,7 +23,7 @@ extension AppModel {
     /// things that were finished or compiled in.
     var catalog: [ModelRecord] {
         ModelCatalog.listing(
-            installed: installed,
+            installed: installed + unavailableModels,
             transferring: transfers.values
                 .map(\.record)
                 .sorted { $0.displayName < $1.displayName }
@@ -97,6 +97,17 @@ extension AppModel {
 
     func isInstalled(_ model: ModelRecord) -> Bool {
         installed.contains { $0.id == model.id }
+    }
+
+    func isUnavailable(_ model: ModelRecord) -> Bool {
+        unavailableModels.contains { $0.id == model.id }
+    }
+
+    func checkModelAvailability() async {
+        await store.load()
+        installed = await store.installed()
+        unavailableModels = await store.unavailable()
+        await applyEffectiveBrain()
     }
 
     /// What the manifest says is installed, read now rather than remembered.
@@ -201,6 +212,7 @@ extension AppModel {
                 }
                 let shouldLoad = await MainActor.run {
                     self.installed = list
+                    self.unavailableModels.removeAll { $0.id == model.id }
                     // The manifest's record, not the one we started with: the
                     // store verifies the sizes on the way in, and for a search
                     // download those were an API's claim until now.
@@ -381,6 +393,7 @@ extension AppModel {
         }
         try? await store.delete(model)
         installed = await store.installed()
+        unavailableModels = await store.unavailable()
         // The phone's own brain may have been the one removed: decided again,
         // which is Apple's model where this phone has it, else the next
         // download — never a phone left with no brain while one could answer.

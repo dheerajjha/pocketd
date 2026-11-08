@@ -141,6 +141,11 @@ struct BrainView: View {
     private func accessory(for record: ModelRecord) -> BrainCardAccessory {
         let inUse = !model.isUsingBuiltInBrain && model.effectiveBrain == .downloaded(id: record.id)
         if model.loadingModelID == record.id { return .status("Getting ready") }
+        if model.isUnavailable(record) {
+            return .action("Check again", symbol: "arrow.clockwise") {
+                Task { await model.checkModelAvailability() }
+            }
+        }
         if model.isInstalled(record), model.lastLoadFailure?.id == record.id {
             return .action("Try again", symbol: "arrow.clockwise") {
                 Task { await model.useDownloadedBrain(id: record.id) }
@@ -329,7 +334,9 @@ struct BrainTransferStatus: View {
     let record: ModelRecord
 
     var body: some View {
-        if let transfer = model.transfer(for: record.id) {
+        if model.isUnavailable(record) {
+            sentence("The saved file is unavailable. Your download record is kept.")
+        } else if let transfer = model.transfer(for: record.id) {
             switch transfer.state {
             case .waiting:
                 running(fraction: nil, line: "Starting…")
@@ -556,6 +563,11 @@ private struct BrainRow: View {
         let transfer = model.transfer(for: record.id)
         if model.loadingModelID == record.id {
             quiet("Getting ready")
+        } else if model.isUnavailable(record) {
+            PillButton(title: "Check again", symbol: "arrow.clockwise") {
+                Task { await model.checkModelAvailability() }
+            }
+            .accessibilityLabel("Check \(record.displayName) availability")
         } else if model.isInstalled(record), model.lastLoadFailure?.id == record.id {
             PillButton(title: "Try again", symbol: "arrow.clockwise") {
                 Task { await model.useDownloadedBrain(id: record.id) }
@@ -605,7 +617,7 @@ private struct BrainRow: View {
         ProAccess.brainNeedsPro(
             id: record.id,
             recommendedID: BrainRecommendation.recommended(for: model.budget)?.id,
-            onPhone: []
+            onPhone: Set(model.unavailableModels.map(\.id))
         )
     }
 

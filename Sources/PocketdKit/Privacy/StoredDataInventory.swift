@@ -431,7 +431,7 @@ public extension ModelFileRole {
     /// the short one first would file every projector as a set of weights for
     /// a model id that does not exist.
     static func of(fileNamed name: String) -> ModelFileRole {
-        if name == "manifest.json" { return .manifest }
+        if name == "manifest.json" || name == "integrity.json" { return .manifest }
         if let id = name.stem(droppingSuffix: ".mmproj.gguf") { return .projector(id: id) }
         if let id = name.stem(droppingSuffix: ".mmproj.resume") { return .resumeBlob(id: id) }
         if let id = name.stem(droppingSuffix: ".gguf") { return .weights(id: id) }

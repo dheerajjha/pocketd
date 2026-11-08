@@ -152,7 +152,7 @@ struct DeviceBudgetTests {
 @Suite("Model store")
 struct ModelStoreTests {
 
-    @Test("round-trips the manifest and forgets files that vanished")
+    @Test("round-trips the manifest and retains unavailable file records")
     func manifestRoundTrip() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -161,7 +161,8 @@ struct ModelStoreTests {
 
         let budget = DeviceBudget(physicalMemoryBytes: 8 << 30, hasIncreasedMemoryLimit: false)
         let store = ModelStore(directory: directory, budget: budget)
-        let model = try #require(ModelCatalog.model(withID: "smollm2-360m"))
+        var model = try #require(ModelCatalog.model(withID: "smollm2-360m"))
+        model.sizeBytes = Int64(Data("weights".utf8).count)
 
         // Simulate a completed download.
         try Data("weights".utf8).write(to: store.fileURL(for: model))
@@ -175,7 +176,10 @@ struct ModelStoreTests {
         try FileManager.default.removeItem(at: store.fileURL(for: model))
         let reopened = ModelStore(directory: directory, budget: budget)
         await reopened.load()
-        #expect(await reopened.installed().isEmpty, "a manifest that outlives its files lies to /v1/models")
+        #expect(await reopened.installed().isEmpty, "unavailable files must not be advertised as installed")
+        #expect(await reopened.unavailable().map(\.id) == [model.id])
+        #expect(try JSONDecoder().decode([String: ModelRecord].self,
+            from: Data(contentsOf: directory.appendingPathComponent("manifest.json")))[model.id] != nil)
     }
 
     @Test("refuses to download a model the device cannot hold")

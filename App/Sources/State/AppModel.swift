@@ -59,6 +59,7 @@ final class AppModel {
     // MARK: - Brain: what is on this phone and what is in memory
 
     var installed: [ModelRecord] = []
+    var unavailableModels: [ModelRecord] = []
 
     /// Every model arriving on this phone, keyed by id, with the record.
     ///
@@ -705,6 +706,7 @@ final class AppModel {
         await store.load()
         await engine.updateDefaultSampling(configuration.sampling)
         installed = await store.installed()
+        unavailableModels = await store.unavailable()
         await restoreInterruptedDownloads()
         settleOnboardingForExistingInstall()
 

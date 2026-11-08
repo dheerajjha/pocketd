@@ -24,7 +24,8 @@ struct InterruptedDownloadDiscoveryTests {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let model = try #require(ModelCatalog.model(withID: "smollm2-360m"))
+        var model = try #require(ModelCatalog.model(withID: "smollm2-360m"))
+        model.sizeBytes = 1
         let store = ModelStore(directory: directory, budget: DeviceBudget(physicalMemoryBytes: 8 << 30, hasIncreasedMemoryLimit: false))
         try Data([1]).write(to: store.fileURL(for: model))
         try Data([1]).write(to: directory.appendingPathComponent("\(model.id).resume"))
