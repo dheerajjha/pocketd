@@ -58,13 +58,16 @@ struct AskBar: View {
                 .tint(Color.pd.accent)
                 .lineLimit(1...4)
                 .focused(focus ?? $isFocused)
-                .submitLabel(.send)
+                // Multiline fields insert a newline on the software Return key.
+                // Sending is the separate control at the trailing edge.
+                .submitLabel(.return)
                 .disabled(isListening)
                 // The placeholder is not a label: VoiceOver stops reading it
                 // the moment there is a character in the field, and a text
                 // field announced as nothing but its contents gives no clue
                 // what typing into it will do.
                 .accessibilityLabel("Your question")
+                .accessibilityIdentifier("ask.composer")
                 // 12pt from the capsule's edge with nothing before it — the
                 // bar's own 8 plus 4 — the same as the circle at the far end,
                 // whose 36pt glyph sits inside a 44pt target.
@@ -116,6 +119,7 @@ struct AskBar: View {
             }
             .buttonStyle(PDPressStyle())
             .accessibilityLabel("Send")
+            .accessibilityIdentifier("ask.send")
         } else if showsMic {
             Image(systemName: isListening ? "waveform" : "mic")
                 .font(Font.pd.body)
