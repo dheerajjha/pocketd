@@ -3,7 +3,7 @@ import SwiftUI
 import UIKit
 
 /// The proof behind every promise on the Privacy page: what this app holds,
-/// what it sends and where, and what it may read — measured on this phone.
+/// what it sends and where, and what it may read.
 ///
 /// The numbers are counted by walking the app's own folder, not by asking the
 /// app what it thinks it saved (see `StoredDataAudit`), and every byte is
@@ -37,7 +37,7 @@ struct PrivacyDetailsView: View {
         ScrollViewReader { proxy in
             YouDetailScreen(
                 title: "Privacy details",
-                subtitle: "Counted on this iPhone just now, file by file. Pull down to count again."
+                subtitle: "Files are counted on this iPhone. Pull down to count them again."
             ) {
                 statementSection(.account)
                 statementSection(.asking)
@@ -447,13 +447,10 @@ struct PrivacyDetailsView: View {
         }
     }
 
-    /// What is lost, in the terms it will be lost in — and, on this page,
-    /// that there is no copy anywhere to restore from.
     private func message(for action: Pending) -> String {
         switch action {
         case .conversations:
-            let summary = audit.conversations
-            return "\(Format.counted(summary.readableCount, "conversation")), \(pdBytes(summary.byteCount)). Nothing was ever uploaded, so there is no copy anywhere to bring back."
+            return audit.conversations.deletionMessage
         case .partialDownloads:
             let area = audit.survey?.area(.partialDownloads) ?? StoredDataArea(kind: .partialDownloads)
             return "Frees \(pdBytes(area.tally.byteCount)). A paused download starts again from the beginning."
@@ -463,12 +460,7 @@ struct PrivacyDetailsView: View {
         case let .orphan(row):
             return "Frees \(pdBytes(row.file.byteCount)). \(row.explanation)"
         case .everything:
-            var sentences = DeletionNarrative.confirmation(plan: audit.deletionPlan(model))
-            if audit.deletionPlan(model).included.contains(where: { $0.name == DeletionPlan.EntryName.models }),
-               !model.isUsingBuiltInBrain {
-                sentences.insert("Pocketd will need a brain again before it can answer.", at: 1)
-            }
-            return sentences.joined(separator: " ")
+            return audit.deletionConfirmation(model)
         }
     }
 

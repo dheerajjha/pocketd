@@ -70,6 +70,10 @@ struct OnboardingAllSetStep: View {
             Image(systemName: "checkmark.circle.fill")
                 .font(Font.pd.body)
                 .foregroundStyle(Color.pd.positive)
+        case let .privateCloudCompute(status):
+            Image(systemName: status.canChoose ? "icloud" : "exclamationmark.icloud")
+                .font(Font.pd.body)
+                .foregroundStyle(status.canChoose ? Color.pd.positive : Color.pd.caution)
         case .gettingReady:
             Image(systemName: "arrow.down.circle")
                 .font(Font.pd.body)
@@ -130,6 +134,12 @@ struct OnboardingAllSetStep: View {
                     .font(Font.pd.rowTitle)
                     .foregroundStyle(Color.pd.ink)
                     .fixedSize(horizontal: false, vertical: true)
+                if model.isUsingPrivateCloudCompute {
+                    Text(Intro.Copy.nameUseWithCloud)
+                        .font(Font.pd.secondary)
+                        .foregroundStyle(Color.pd.inkSecondaryWarm)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 TextField(Intro.Copy.namePlaceholder, text: $name)
                     .font(Font.pd.statText.weight(.regular))
                     .foregroundStyle(Color.pd.ink)

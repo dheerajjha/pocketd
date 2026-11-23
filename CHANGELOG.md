@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- On supported iPhones, you can choose **Apple Private Cloud Compute** during
+  setup or in You › Brain. Only then does iOS send prompts and relevant
+  conversation history or connected Calendar, Reminders and Health details to
+  Apple's private servers for replies, briefs and routines. Local brains remain
+  the default. The mic still turns speech into text on the phone, and paired
+  laptops use downloaded models only.
+
 ## [1.1.2] - Unreleased
 
 ### Added

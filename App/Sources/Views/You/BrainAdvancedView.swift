@@ -20,7 +20,8 @@ struct BrainAdvancedView: View {
     var body: some View {
         YouDetailScreen(
             title: "Technical details",
-            subtitle: "What runs Pocketd on this iPhone, and how fast."
+            subtitle: model.cloudStatus.isListed || model.isUsingPrivateCloudCompute
+                ? "Where Pocketd answers and what this iPhone can run." : "What runs Pocketd on this iPhone, and how fast."
         ) {
             inUse
             speed
@@ -33,7 +34,17 @@ struct BrainAdvancedView: View {
 
     @ViewBuilder
     private var inUse: some View {
-        if model.isUsingBuiltInBrain {
+        if model.isUsingPrivateCloudCompute {
+            YouSection("Selected brain") {
+                ValueRow(title: "Brain", value: AppleCloudStatus.title)
+                RowDivider(inset: 0)
+                ValueRow(title: "Processing", value: "Apple’s private cloud")
+                RowDivider(inset: 0)
+                ValueRow(title: "Availability", value: model.cloudStatus.statusLine)
+                RowDivider(inset: 0)
+                ValueRow(title: "Other devices use", value: servedName ?? "A download, when one asks")
+            }
+        } else if model.isUsingBuiltInBrain {
             YouSection("In use") {
                 ValueRow(title: "Brain", value: BuiltInBrainOffer.title)
                 RowDivider(inset: 0)
@@ -84,7 +95,7 @@ struct BrainAdvancedView: View {
 
     /// The download in memory for the phone, from the catalogue.
     private var residentDownload: ModelRecord? {
-        guard let id = model.loadedModelID, id != ModelRecord.builtInID else { return nil }
+        guard let id = model.loadedModelID, id != ModelRecord.builtInID, id != ModelRecord.privateCloudComputeID else { return nil }
         return model.catalog.first { $0.id == id }
     }
 
@@ -106,7 +117,8 @@ struct BrainAdvancedView: View {
     private var speed: some View {
         let rates = model.log.compactMap(\.tokensPerSecond)
 
-        YouSection("Speed", footnote: rates.isEmpty ? nil : "Measured on real answers. It drops as the phone warms up.") {
+        let title = model.isUsingPrivateCloudCompute ? "Speed for other devices" : "Speed"
+        YouSection(title, footnote: rates.isEmpty ? nil : "Measured on real answers. It drops as the phone warms up.") {
             if rates.isEmpty {
                 Text("Nothing measured yet this session.")
                     .font(Font.pd.secondary)

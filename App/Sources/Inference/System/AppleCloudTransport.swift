@@ -65,23 +65,29 @@ enum AppleCloudTransport {
     /// can itself fail offline; don't read the person's day in that case.
     static func prepare() async throws(InferenceError) -> AppleRequestModel {
         guard let model = permittedModel else { throw InferenceError.privateCloud(.unavailable) }
+        let result: Result<AppleRequestModel, InferenceError>? = await SystemToolRun.withDeadline(.seconds(12)) {
+            do { return .success(try await metadata(for: model)) }
+            catch { return .failure(inferenceError(for: error)) }
+        }
+        guard !Task.isCancelled else { throw InferenceError.cancelled }
+        guard let result else { throw InferenceError.privateCloud(.timedOut) }
+        return try result.get()
+    }
+
+    private static func metadata(for model: PrivateCloudComputeLanguageModel) async throws -> AppleRequestModel {
         func checkStatus() throws {
             try Task.checkCancellation()
             if let failure = AppleCloudFailure(blocking: nativeStatus(of: model)) {
                 throw InferenceError.privateCloud(failure)
             }
         }
-        do {
-            try checkStatus()
-            guard try await model.supportsLocale() else { throw InferenceError.privateCloud(.unsupportedLanguage) }
-            try Task.checkCancellation()
-            let size = try await model.contextSize
-            guard size > 0 else { throw InferenceError.privateCloud(.notReady) }
-            try checkStatus()
-            return AppleRequestModel(cloud: model, contextSize: size)
-        } catch {
-            throw inferenceError(for: error)
-        }
+        try checkStatus()
+        guard try await model.supportsLocale() else { throw InferenceError.privateCloud(.unsupportedLanguage) }
+        try Task.checkCancellation()
+        let size = try await model.contextSize
+        guard size > 0 else { throw InferenceError.privateCloud(.notReady) }
+        try checkStatus()
+        return AppleRequestModel(cloud: model, contextSize: size)
     }
 
     static func inferenceError(for error: any Error, afterWrite: Bool = false) -> InferenceError {

@@ -455,7 +455,7 @@ extension AppModel {
     func keepsStoredBrief(_ brief: DailyBrief) -> Bool {
         guard case let .model(id) = brief.source else { return true }
         // Apple's model is in no catalogue, and reads the day.
-        guard let writer = (catalog + [ModelRecord.builtIn]).first(where: { $0.id == id }),
+        guard let writer = (catalog + [.builtIn, .privateCloudCompute]).first(where: { $0.id == id }),
               writer.dayAccess(resident: loadedModelID == id ? personalDataToolGate : nil).readsYourDay
         else { return false }
         return Self.screenedBrief(

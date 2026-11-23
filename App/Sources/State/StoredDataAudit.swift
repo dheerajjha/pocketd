@@ -98,6 +98,14 @@ final class StoredDataAudit {
         /// text someone typed, they are still in the count, and a delete that
         /// walked the readable list alone would leave them behind.
         var unreadableCount: Int { max(0, fileCount - readableCount) }
+
+        var deletionMessage: String {
+            let size = formattedByteCount(byteCount)
+            let what = readableCount > 0
+                ? "\(Format.counted(readableCount, "conversation")), \(size)"
+                : "\(size) of conversation files"
+            return "\(what). \(DeletionNarrative.localDeletionNotice)"
+        }
     }
 
     struct PermissionRow: Identifiable, Equatable {
@@ -160,26 +168,15 @@ final class StoredDataAudit {
 
     // MARK: - What leaves
 
-    /// Every outbound connection this app makes.
-    ///
-    /// Two come from a grep of the whole repository for `URLSession` and
-    /// `URLRequest`, both to Hugging Face, both about brain files. Thinking
-    /// never calls out — the brain is a file on this phone, or Apple's model,
-    /// which also runs on it. The server does call out, but only because a
-    /// device on the Wi-Fi asked it to search or to fetch a brain, which is
-    /// why both rows say so.
-    ///
-    /// The third is the usage-count library, and it is written out here
-    /// precisely because that grep cannot find it: its requests are made inside
-    /// a dependency, so nothing in this repository's own source mentions them.
-    /// A connection nobody remembered to type is exactly how this list stopped
-    /// being true the first time.
-    ///
-    /// Hardcoded rather than observed, and that is the weakness of this
-    /// section: it is a claim about the source, checked when it was written.
-    /// `StoredDataAuditRulesTests` reads this file for promises the shipped
-    /// events disprove.
+    /// Includes requests made by iOS and the analytics SDK, which a list of
+    /// Pocketd's own URLSession calls would miss. These are possible destinations,
+    /// not a log of requests this particular phone made.
     let destinations: [Destination] = [
+        Destination(
+            host: AppleCloudStatus.title,
+            sends: "With this brain selected, iOS sends the prompt and relevant context to Apple's private servers when Pocketd asks for a reply, brief or routine. A brief can include your greeting name, your next event or last night's sleep.",
+            when: "Before you choose, iOS may check availability with Apple. This check doesn't include your prompts, conversation history or connected day data."
+        ),
         Destination(
             host: "Hugging Face, for brain search",
             sends: "The name you searched for, and this iPhone's network address.",
@@ -187,14 +184,19 @@ final class StoredDataAudit {
         ),
         Destination(
             host: "Hugging Face, for brain downloads",
-            sends: "Which brain file to send, and this iPhone's network address. No account and nothing about you.",
-            when: "Only while a brain downloads."
+            sends: "The repository and file to fetch, and this iPhone's network address. No Pocketd account is attached.",
+            when: "Only while a brain downloads, including downloads requested by a paired device."
         ),
         Destination(
             host: "Mixpanel, for usage counts",
             sends: "Counts of \(StoredDataAudit.analyticsEventCount) kinds of event, including whether a Pocketd Pro purchase started, completed, was cancelled, is pending or failed, and whether it began in Pocketd or on its App Store page. No price, product identifier, transaction, Apple Account, question, answer, or data from Health, Calendar or Reminders.",
             when: "While you use Pocketd, unless you turn off Share anonymous usage counts. It is on at first.",
             carriesUsageCounts: true
+        ),
+        Destination(
+            host: "App Store, for Pocketd Pro",
+            sends: "StoreKit asks Apple about Pocketd Pro and handles your purchase or restore. Payment is between you and Apple.",
+            when: "When Pocketd checks whether you own Pro, shows its price, or you buy or restore it."
         ),
     ]
 
@@ -209,7 +211,7 @@ final class StoredDataAudit {
     /// reassurances do. Trimmed to the ones a person can act on or would
     /// want to know; the source has the rest.
     let caveats: [String] = [
-        "While Use from your laptop is on, this iPhone shows its name, Pocketd's version and its brain to devices on the same Wi-Fi, so a laptop can find it. That never leaves your network.",
+        "While Use from your laptop is on, this iPhone announces its name, Pocketd's version and the downloaded brain it serves to devices on the same Wi-Fi.",
         "Opening a brain's web page hands the address to Safari, which then works as Safari always does.",
         "Copying the address or the key puts it on the clipboard. If Handoff is on, iOS shares the clipboard with your other Apple devices.",
     ]
@@ -234,7 +236,7 @@ final class StoredDataAudit {
         var heading: String {
             switch self {
             case .account: "No account"
-            case .asking: "What you ask"
+            case .asking: "Where Pocketd answers"
             case .otherDevices: "Other devices"
             case .downloads: "What leaves this iPhone"
             case .usage: "Usage counts"
@@ -249,13 +251,13 @@ final class StoredDataAudit {
         var statement: String? {
             switch self {
             case .account:
-                "Pocketd has no account, no sign-in and no server of its own. No crash reports, and nothing ties what you do here to you elsewhere."
+                "There's no Pocketd account or sign-in. Pocketd doesn't run its own cloud service or send crash reports."
             case .asking:
-                "Pocketd thinks on this iPhone, with a downloaded brain or Apple's built-in one. Your conversations, and what Pocketd reads from Calendar, Reminders and Health, stay here."
+                "Built into iPhone and downloaded brains process prompts here. Apple processes prompts on its private servers only if you choose Apple Private Cloud Compute. For replies, briefs and routines that use it, iOS can include relevant conversation history or details from Calendar, Reminders and Health that you've connected. With any brain, Pocketd's mic turns speech into text on this iPhone. The audio stays here."
             case .otherDevices:
-                "With Use from your laptop on, devices on your Wi-Fi can ask Pocketd questions. They never see your conversations, and cannot read your calendar, reminders or health."
+                "Paired devices get answers to their own prompts from a downloaded brain on this iPhone. They can't use either Apple brain, open your saved conversations or read your calendar, reminders or health."
             case .downloads:
-                "Three connections, and nothing else. None of them carries what you ask or what Pocketd reads."
+                "These services receive different information. The usage-counts switch controls only what goes to Mixpanel."
             case .usage:
                 "Usage counts are shared with Mixpanel, who process them for us. Nothing is sold."
             case .storage, .permissions, .deleting:
@@ -275,17 +277,21 @@ final class StoredDataAudit {
 
     /// WHO CAN SEE IT.
     static let whoCanSeeIt: [Promise] = [
-        Promise(symbol: "person.crop.circle", title: "Only you. There's no account", proof: .account),
-        Promise(symbol: "bubble.left", title: "Nothing you ask is sent anywhere", proof: .asking),
-        Promise(symbol: "laptopcomputer", title: "Other devices can't read your calendar, reminders or health", proof: .otherDevices),
+        Promise(symbol: "person.crop.circle", title: "No Pocketd account or sign-in", proof: .account),
+        Promise(symbol: "laptopcomputer", title: "Paired devices use downloaded brains only", detail: "They can't read your conversations, calendar, reminders or health.", proof: .otherDevices),
     ]
 
-    /// The first line of WHAT LEAVES THE PHONE; the usage-count switch is the
-    /// second, drawn by the page because it is a control.
+    static let cloudRequests = Promise(
+        symbol: "cloud",
+        title: AppleCloudStatus.title,
+        detail: "Only if you choose it: prompts, relevant conversation history and details from sources you connect.",
+        proof: .asking
+    )
+
     static let brainDownloads = Promise(
         symbol: "arrow.down.circle",
-        title: "Brain downloads",
-        detail: "Only the brain you pick, from Hugging Face. Nothing about you goes with it.",
+        title: "Brain searches and downloads",
+        detail: "Hugging Face sees your search term or the file you request and your network address.",
         proof: .downloads
     )
 
@@ -474,14 +480,14 @@ final class StoredDataAudit {
                     // leave standing on the one screen whose whole purpose is
                     // being believed, so this one says what changed and who is
                     // allowed to change it.
-                    note: "Reads events, and adds one when you ask on this iPhone. Routines only read; other devices can do neither."
+                    note: "Reads events, and adds one when you ask on this iPhone. Routines only read; paired devices can't access Calendar."
                 ))
             case "NSRemindersFullAccessUsageDescription":
                 rows.append(PermissionRow(
                     title: "Reminders",
                     infoKey: key,
                     state: state(for: EventAccess.authorization(for: .reminders)),
-                    note: "Reads reminders, and adds or ticks one off when you ask on this iPhone. Routines only read; other devices can do neither. Nothing is deleted."
+                    note: "Reads reminders, and adds or ticks one off when you ask on this iPhone. Routines only read; paired devices can't access Reminders. Nothing is deleted."
                 ))
             case "NSHealthShareUsageDescription":
                 rows.append(PermissionRow(
@@ -539,6 +545,16 @@ final class StoredDataAudit {
     }
 
     // MARK: - Deleting
+
+    func deletionConfirmation(_ model: AppModel) -> String {
+        let plan = deletionPlan(model)
+        var sentences = DeletionNarrative.confirmation(plan: plan)
+        if case .downloaded = model.effectiveBrain,
+           plan.included.contains(where: { $0.name == DeletionPlan.EntryName.models }) {
+            sentences.insert("This includes the downloaded brain you use for answers.", at: 1)
+        }
+        return sentences.joined(separator: " ")
+    }
 
     /// Removes every conversation, including the ones the app cannot read.
     ///

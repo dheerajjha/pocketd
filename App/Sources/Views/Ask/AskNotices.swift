@@ -44,6 +44,7 @@ struct AskNoticeView: View {
             case .startNewChat?: return ("Start a new chat", "arrow.right")
             case .tryAgain?: return ("Try again", "arrow.clockwise")
             case .openSettings?: return ("Open Settings", "arrow.up.right")
+            case .chooseLocalBrain?: return ("Choose a local brain", "arrow.left.arrow.right")
             case nil: return nil
             }
         }
@@ -71,6 +72,7 @@ struct AskNoticeView: View {
         case .gettingReady: "hourglass"
         case .chooseBrain: "sparkles"
         case .brainFailed: "exclamationmark.triangle"
+        case .appleCloud: "icloud"
         case .cannotReadYourDay: "calendar.badge.exclamationmark"
         }
     }
@@ -79,7 +81,7 @@ struct AskNoticeView: View {
     /// brain, or an offer to connect a source, is not a fault.
     private var tint: Color {
         switch notice {
-        case .replyFailed, .brainFailed, .cannotReadYourDay: .pd.caution
+        case .replyFailed, .brainFailed, .cannotReadYourDay, .appleCloud: .pd.caution
         case .offer, .gettingReady, .chooseBrain: .pd.ink
         }
     }
@@ -89,6 +91,7 @@ struct AskNoticeView: View {
             switch model.replyFailureRemedy {
             case .startNewChat?: Task { await model.newConversation() }
             case .tryAgain?: model.retryLastQuestion()
+            case .chooseLocalBrain?: navigator.openYou(.brain)
             case .openSettings?:
                 if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
             case nil: break

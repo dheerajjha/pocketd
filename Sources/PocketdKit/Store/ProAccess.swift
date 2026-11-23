@@ -246,13 +246,13 @@ public extension ProAccess {
 public extension ProAccess {
     /// Whether getting this brain needs Pocketd Pro.
     ///
-    /// Free when it is Built into iPhone, the one recommended download, or
+    /// Free when it is either Apple model, the one recommended download, or
     /// already on the phone — including a download that is part-way there.
     /// Anything else is "Any brain". Using, choosing or removing a brain that
     /// is on the phone is never gated; this question is only asked of a
     /// download that has not happened yet.
     static func brainNeedsPro(id: String, recommendedID: String?, onPhone: Set<String>) -> Bool {
-        if id == ModelRecord.builtInID || onPhone.contains(id) { return false }
+        if BrainChoice(residentID: id).isAppleManaged || onPhone.contains(id) { return false }
         if let recommendedID, id == recommendedID { return false }
         return true
     }

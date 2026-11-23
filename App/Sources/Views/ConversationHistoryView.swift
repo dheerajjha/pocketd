@@ -60,7 +60,7 @@ struct ConversationHistoryView: View {
                     ContentUnavailableView {
                         Label("No conversations yet", systemImage: "bubble.left.and.bubble.right")
                     } description: {
-                        Text("Everything you ask is kept here, on this iPhone.")
+                        Text("Your conversation history is stored on this iPhone.")
                     }
                 } else {
                     list

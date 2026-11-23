@@ -96,6 +96,24 @@ struct YouRowsTests {
         #expect(off.detail == "Turn on Apple Intelligence")
     }
 
+    @Test("The saved cloud brain and its allowance outrank an unrelated local download")
+    func selectedCloudRow() {
+        for status in [AppleCloudStatus.available, .notReady, .approachingLimit, .limitReached(reset: nil)] {
+            let row = BrainRowSummary.make(
+                status: .arriving(fraction: 0.2, minutesLeft: 4), usingBuiltIn: false, builtInAvailability: .available,
+                downloadName: "Qwen3 1.7B", selectedCloud: status
+            )
+            #expect(row == BrainRowSummary(title: "Apple Private Cloud Compute", detail: status.statusLine))
+        }
+        #expect(BrainRowSummary.cloudDetail(.available, brain: .loading) == "Getting ready")
+        #expect(BrainRowSummary.cloudDetail(.available, brain: .failed(reason: "Try again later.")) == "Try again later.")
+        let unsupported = BrainRowSummary.make(
+            status: .ready, usingBuiltIn: true, builtInAvailability: .available,
+            downloadName: nil, selectedCloud: .unavailable
+        )
+        #expect(unsupported == BrainRowSummary(title: "Built into iPhone", detail: "Ready"))
+    }
+
     @Test("A download: its name, then Ready, Getting ready · N%, or the way out")
     func downloadRow() {
         func row(_ status: BrainStatus, waiting: Bool = true) -> BrainRowSummary {

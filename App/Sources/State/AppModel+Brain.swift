@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import PocketdKit
 
 /// The brain: the catalogue, downloads, loading and unloading, and keeping it
@@ -38,6 +39,7 @@ extension AppModel {
     var loadedModelName: String {
         guard let id = loadedModelID else { return "No model" }
         if id == ModelRecord.builtInID { return BuiltInBrainOffer.title }
+        if id == ModelRecord.privateCloudComputeID { return AppleCloudStatus.title }
         return catalog.first { $0.id == id }?.displayName ?? id
     }
 
@@ -247,6 +249,7 @@ extension AppModel {
                     // over the moment it lands rather than at the next launch.
                     let arrived = self.catalog.first { $0.id == model.id } ?? model
                     let wasChosen = self.brainChoice == .downloaded(id: model.id)
+                    guard self.brainChoice != .privateCloudCompute else { return false }
                     return wasChosen || BrainStatus.shouldLoadArrival(
                         current: self.brainStatus,
                         arrivedReadsYourDay: arrived.dayAccess().readsYourDay
@@ -259,7 +262,7 @@ extension AppModel {
                     while await MainActor.run(body: { self.isGenerating }) {
                         try? await Task.sleep(for: .seconds(1))
                     }
-                    await self.loadModel(model, remember: true)
+                    if self.brainChoice != .privateCloudCompute { await self.loadModel(model, remember: true) }
                 }
             } catch is CancellationError {
                 await MainActor.run {
@@ -392,7 +395,7 @@ extension AppModel {
             // The file is about to go, not just the memory. A scheduled run
             // reading through it would be decoding from a deleted mapping —
             // unless the phone is on Apple's model, where no run is.
-            if !isUsingBuiltInBrain { await cancelScheduleSweep() }
+            if !isUsingAppleManagedBrain { await cancelScheduleSweep() }
             await engine.unload()
             await recalibrateAfterUnload()
         }
@@ -483,8 +486,8 @@ extension AppModel {
         // the choice — and while the phone is on Apple's model, such a load
         // only ever serves other devices.
         if remember {
-            brainChoice = .downloaded(id: model.id)
-            brainChoice?.save()
+            brainChoiceIntent = UUID()
+            rememberPhoneBrain(.downloaded(id: model.id))
             await phoneBrain.use(.downloaded(id: model.id))
         }
         // The same argument as the reply below, for the run nobody can see. A
@@ -595,7 +598,7 @@ extension AppModel {
         // decoding through. Same reason as the reply below, and the same
         // reason `loadModel` does it. On Apple's model the phone's own work
         // is not running through these weights, so it is left alone.
-        if !isUsingBuiltInBrain {
+        if !isUsingAppleManagedBrain {
             await cancelScheduleSweep()
             if isGenerating { stopGenerating() }
             cancelBriefGeneration()
@@ -649,17 +652,29 @@ extension AppModel {
     /// `BrainStatus`. Read this instead of combining `loadedModelID`,
     /// `isLoadingModel`, the downloads and the tool gate.
     var brainStatus: BrainStatus {
+        if !isUsingPrivateCloudCompute, loadedModelID == ModelRecord.privateCloudComputeID {
+            // Opt-out is synchronous; the engine's residency mirror updates
+            // after an actor hop. Don't issue a cloud turn during that gap.
+            return .loading
+        }
+        if isUsingPrivateCloudCompute {
+            guard cloudStatus.canChoose else { return .failed(reason: cloudStatus.statusLine) }
+            if loadedModelID != ModelRecord.privateCloudComputeID {
+                if let failure = lastLoadFailure, failure.id == ModelRecord.privateCloudComputeID { return .failed(reason: failure.sentence) }
+                return .loading
+            }
+        }
         var inputs = BrainStatus.Inputs(
             resident: loadedModelID.map { id in
                 BrainStatus.Resident(
-                    choice: id == ModelRecord.builtInID ? .builtIn : .downloaded(id: id),
+                    choice: BrainChoice(residentID: id),
                     readsYourDay: residentReadsYourDay(id)
                 )
             },
             // A download loading for other devices is not the phone's brain
             // loading, and must not turn a ready Apple model into "getting
             // ready" for as long as it takes.
-            isLoading: isLoadingModel && !isUsingBuiltInBrain,
+            isLoading: isLoadingModel && !isUsingAppleManagedBrain,
             arriving: arrivingBrain,
             hasDownloaded: !installed.isEmpty,
             loadFailure: lastLoadFailure?.sentence
@@ -685,7 +700,7 @@ extension AppModel {
     /// The engine's verdict once it has one, the catalogue's until then.
     private func residentReadsYourDay(_ id: String) -> Bool {
         // Apple's model is always handed the tools.
-        if id == ModelRecord.builtInID { return true }
+        if BrainChoice(residentID: id).isAppleManaged { return true }
         guard let record = catalog.first(where: { $0.id == id }) else {
             return personalDataToolGate.registersTools
         }
@@ -711,7 +726,7 @@ extension AppModel {
         // On Apple's model a question waits for Apple's model — it may be
         // arriving, or one switch away in Settings — and a gigabyte of weights
         // is not loaded behind the user's choice to answer it.
-        guard !isUsingBuiltInBrain else { return }
+        guard !isUsingAppleManagedBrain else { return }
         guard loadedModelID == nil, !isLoadingModel else { return }
         let remembered = UserDefaults.standard.string(forKey: Keys.loadedModel)
         let candidates = installed
@@ -760,7 +775,7 @@ extension AppModel {
         await syncResidency()
         // Put back on the next visit only if it was the phone's brain; one
         // held for other devices reloads on their next request by itself.
-        if !isUsingBuiltInBrain { autoReleased = (resident, .idle) }
+        if !isUsingAppleManagedBrain { autoReleased = (resident, .idle) }
     }
 
     func suppressAutoRelease(_ reason: String) { releaseSuppressions.insert(reason) }
@@ -794,7 +809,7 @@ extension AppModel {
         // its life: a suspended process sitting on two gigabytes is the first
         // thing the kernel reclaims, and the user experiences that as the app
         // having quit itself.
-        let wasPhoneBrain = !isUsingBuiltInBrain
+        let wasPhoneBrain = !isUsingAppleManagedBrain
         if wasPhoneBrain, isGenerating { stopGenerating() }
         await engine.unload()
         await recalibrateAfterUnload()
@@ -814,17 +829,23 @@ extension AppModel {
         await loadModel(record, remember: false)
     }
 
-    // MARK: - Which brain: built into iPhone, or downloaded
+    // MARK: - The phone's selected provider
 
     /// The brain answering the phone today: the user's choice where it can
     /// answer, otherwise the fallback `BrainChoice.effective` defines — and on
     /// a fresh install with nothing chosen, Apple's model whenever this phone
     /// has it.
     var effectiveBrain: BrainChoice? {
-        BrainChoice.effective(chosen: brainChoice, builtIn: builtInAvailability, installed: installedPreferenceOrder)
+        BrainChoice.effective(chosen: brainChoice, builtIn: builtInAvailability, installed: installedPreferenceOrder, cloud: cloudStatus)
     }
 
     var isUsingBuiltInBrain: Bool { effectiveBrain == .builtIn }
+    var isUsingPrivateCloudCompute: Bool { effectiveBrain == .privateCloudCompute }
+    private var isUsingAppleManagedBrain: Bool { effectiveBrain?.isAppleManaged == true }
+
+    func isUsingDownload(_ id: String) -> Bool {
+        effectiveBrain == .downloaded(id: id) && (brainChoice != .privateCloudCompute || loadedModelID == id)
+    }
 
     /// How the Brain page and onboarding present Apple's model on this phone.
     var builtInOffer: BuiltInBrainOffer { .make(for: builtInAvailability) }
@@ -843,12 +864,52 @@ extension AppModel {
     /// for the phone is then a gigabyte or two doing nothing, and is let go;
     /// one the server is using stays where it is.
     func useBuiltInBrain() async {
-        brainChoice = .builtIn
-        BrainChoice.builtIn.save()
+        let intent = UUID()
+        brainChoiceIntent = intent
+        await selectAppleBrain(.builtIn, intent: intent)
+    }
+
+    /// The Settings button and an explicit onboarding selection are the only
+    /// ways into cloud mode. Recheck the SDK at the tap, not just at render time.
+    @discardableResult
+    func usePrivateCloudCompute() async -> Bool {
+        guard !Task.isCancelled else { return false }
+        let intent = UUID()
+        brainChoiceIntent = intent
+        let current = await Self.readCloudStatus()
+        guard !Task.isCancelled, brainChoiceIntent == intent else { return false }
+        cloudStatusRead = UUID()
+        cloudStatus = current
+        guard current.canChoose else {
+            if brainChoice == .privateCloudCompute { await applyEffectiveBrain() }
+            return false
+        }
+        await selectAppleBrain(.privateCloudCompute, intent: intent)
+        return brainChoiceIntent == intent && isUsingPrivateCloudCompute && loadedModelID == ModelRecord.privateCloudComputeID
+    }
+
+    func rememberPhoneBrain(_ choice: BrainChoice) {
+        if brainChoice != choice && (choice == .privateCloudCompute || brainChoice == .privateCloudCompute) {
+            // A previously queued local question remains editable. Choosing a
+            // provider is not a second Send action for that old request.
+            waitingQuestion = nil
+            generationError = nil
+            replyFailureRemedy = nil
+        }
+        brainChoice = choice
+        choice.save()
+    }
+
+    private func selectAppleBrain(_ choice: BrainChoice, intent: UUID) async {
+        rememberPhoneBrain(choice)
         if isGenerating { stopGenerating() }
         cancelBriefGeneration()
+        scheduleSweep?.cancel()
+        await phoneBrain.use(choice)
+        await cancelScheduleSweep()
+        guard brainChoiceIntent == intent else { return }
         await applyEffectiveBrain()
-        if isUsingBuiltInBrain, !serverShouldRun, await engine.loadedModel() != nil {
+        if brainChoiceIntent == intent, isUsingAppleManagedBrain, !serverShouldRun, await engine.loadedModel() != nil {
             await engine.unload()
             await recalibrateAfterUnload()
             await syncResidency()
@@ -861,6 +922,23 @@ extension AppModel {
         await loadModel(record)
     }
 
+    /// A download chosen in the intro may still be hours from arrival. Stop
+    /// using a previous cloud choice immediately, rather than when it lands.
+    func selectPendingDownload(_ id: String) {
+        let leavingCloud = brainChoice == .privateCloudCompute
+        let intent = UUID()
+        brainChoiceIntent = intent
+        rememberPhoneBrain(.downloaded(id: id))
+        guard leavingCloud else { return }
+        if isGenerating { stopGenerating() }
+        cancelBriefGeneration()
+        scheduleSweep?.cancel()
+        Task {
+            guard brainChoiceIntent == intent else { return }
+            await applyEffectiveBrain()
+        }
+    }
+
     /// Puts the brain that should answer the phone in charge, and in memory.
     ///
     /// For a download, the chosen one first and then the rest, which is the
@@ -871,9 +949,13 @@ extension AppModel {
     func applyEffectiveBrain() async {
         let effective = effectiveBrain
         await phoneBrain.use(effective)
+        guard effective == effectiveBrain else { return }
         switch effective {
         case .builtIn:
-            await loadBuiltInBrain()
+            await loadAppleBrain(.builtIn)
+        case .privateCloudCompute:
+            if cloudStatus.canChoose { await loadAppleBrain(.privateCloudCompute) }
+            else { await syncResidency() }
         case let .downloaded(id):
             // Already in memory — the server may have put it there — costs
             // nothing.
@@ -888,6 +970,7 @@ extension AppModel {
                 candidates.insert(candidates.remove(at: index), at: 0)
             }
             for candidate in candidates {
+                guard effective == effectiveBrain else { return }
                 await loadModel(candidate, remember: false)
                 if loadedModelID != nil { break }
             }
@@ -905,6 +988,56 @@ extension AppModel {
         UserDefaults.standard.set(now.rawValue, forKey: Self.builtInAvailabilityKey)
         guard now != builtInAvailability else { return false }
         builtInAvailability = now
+        return true
+    }
+
+    private nonisolated static func readCloudStatus() async -> AppleCloudStatus {
+        #if DEBUG && targetEnvironment(simulator)
+        if let status = CloudUITestSupport.status { return status }
+        #endif
+        #if canImport(FoundationModels)
+        if #available(iOS 27.0, *), AppleCloudSigning.permitsRequests {
+            // Locale metadata may reach Apple. A cold/offline service must
+            // not hold the onboarding Continue button or a returning launch.
+            return await SystemToolRun.withDeadline(.seconds(6)) { await SystemModelEngine.checkedCloudStatus() } ?? .notReady
+        }
+        #endif
+        return .unavailable
+    }
+
+    /// The first readiness check can precede Apple's authentication result.
+    /// Observe OS changes while a chooser (or a cloud chat) is on screen; no
+    /// polling and no cached entitlement or quota carried across launches.
+    func watchCloudStatus() async {
+        await refreshCloudStatus()
+        #if DEBUG && targetEnvironment(simulator)
+        if CloudUITestSupport.status != nil { return }
+        #endif
+        if #available(iOS 27.0, *), AppleCloudSigning.permitsRequests {
+            for await _ in Self.nativeCloudStates() {
+                guard !Task.isCancelled else { return }
+                await refreshCloudStatus()
+            }
+        }
+    }
+
+    @available(iOS 27.0, *)
+    private nonisolated static func nativeCloudStates() -> Observations<AppleCloudStatus, Never> {
+        Observations { SystemModelEngine.cloudStatus }
+    }
+
+    @discardableResult
+    func refreshCloudStatus(reconcile: Bool = true) async -> Bool {
+        let read = UUID()
+        cloudStatusRead = read
+        let current = await Self.readCloudStatus()
+        guard read == cloudStatusRead, current != cloudStatus else { return false }
+        let oldChoice = effectiveBrain, couldAnswer = cloudStatus.canChoose
+        cloudStatus = current
+        if reconcile, brainChoice == .privateCloudCompute,
+           oldChoice != effectiveBrain || couldAnswer != current.canChoose {
+            await applyEffectiveBrain()
+        }
         return true
     }
 
@@ -928,13 +1061,16 @@ extension AppModel {
     /// succeeds while Apple Intelligence is off or still arriving, so the
     /// choice takes and starts answering the moment it can; only a phone that
     /// can never run it refuses.
-    private func loadBuiltInBrain() async {
+    private func loadAppleBrain(_ record: ModelRecord) async {
         do {
-            try await phoneBrain.load(model: .builtIn)
-            if lastLoadFailure?.id == ModelRecord.builtInID { lastLoadFailure = nil }
+            try await phoneBrain.load(model: record)
+            if lastLoadFailure?.id == record.id { lastLoadFailure = nil }
         } catch {
-            lastLoadFailure = (ModelRecord.builtInID, BuiltInBrainOffer.unavailableFootnote)
+            let reason = record.isBuiltInBrain ? BuiltInBrainOffer.unavailableFootnote
+                : (error as? LocalizedError)?.errorDescription ?? "Apple Private Cloud Compute couldn't start. Choose a local brain or try again."
+            lastLoadFailure = (record.id, reason)
         }
+        guard effectiveBrain?.modelID == record.id else { return }
         await refreshToolGate()
         await syncResidency()
         sendWaitingQuestionIfReady()

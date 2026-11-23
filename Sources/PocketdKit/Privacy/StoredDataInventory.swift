@@ -127,7 +127,7 @@ public enum StoredDataKind: String, Sendable, CaseIterable, Codable {
             // Both callers, not only brain search: the usage-count library
             // reaches the network through the same system client, so whatever
             // it leaves behind is counted here too.
-            "What iOS kept from Pocketd's downloads, searches and usage counts. Nothing you typed is in it."
+            "Cached responses and cookies from downloads, searches and usage counts. Pocketd saves conversations separately."
         case .shaderCache:
             "Prepared graphics code that helps a brain start faster. It describes the app, not you."
         case .systemState:

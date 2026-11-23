@@ -198,11 +198,12 @@ extension InferenceServer {
     /// models is free; on a phone it costs a few seconds and a memory eviction,
     /// but failing outright would break every one of those clients.
     func resolveModel(id requested: String) async throws -> ModelRecord {
+        guard !BrainChoice(residentID: requested).isAppleManaged else { throw InferenceError.modelNotFound(requested) }
         let engine = currentEngine()
         let loaded = await engine.loadedModel()
 
         if requested.isEmpty {
-            if let loaded { return loaded }
+            if let loaded, !BrainChoice(residentID: loaded.id).isAppleManaged { return loaded }
             guard let first = await models().first else { throw InferenceError.noModelLoaded }
             try await engine.load(model: first)
             return first

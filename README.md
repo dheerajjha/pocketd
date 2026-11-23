@@ -10,7 +10,9 @@ your reminders and your health data on the device, and writes you a short
 brief each morning — a paragraph about your actual day, not a dashboard. Ask
 it what's next, what's overdue, or how you slept, by typing, by holding the
 mic button, or from Control Center. Tell it to set a reminder or add an event
-and it does. Nothing you say and nothing it reads ever leaves the phone.
+and it does. By default, Pocketd answers on the phone. If you choose **Apple
+Private Cloud Compute** in **You › Brain**, iOS sends the prompt and relevant
+context to Apple's private servers instead.
 
 ![Today: a short brief in plain words with a Read aloud link, four tiles for Up next, Due, Sleep and Activity, and an "Ask about your day…" field with one suggested question at the bottom](docs/screenshot-today.png)
 
@@ -41,11 +43,12 @@ page opens the conversation already listening. Speech recognition runs on the
 device — `requiresOnDeviceRecognition` is set once and never unset — so on a
 phone or in a locale where that isn't available, the mic button hides itself
 rather than quietly sending your voice to a server. Releasing the mic sends
-the final words. If dictation can’t finish, the words already heard stay in
-the box for you to edit or send. An answer that touches
-your calendar, reminders or health comes back as one card: a sentence, and
-under it a timeline of events, a checklist of reminders you can tick off
-without leaving the card, or a small grid of health numbers. A reminder or an
+the final words to the brain you chose. Even with Private Cloud Compute, the
+audio stays on the phone; it is the text that goes to Apple. If dictation can’t
+finish, the words already heard stay in the box for you to edit or send.
+An answer that touches your calendar, reminders or health comes back as one
+card: a sentence, and under it a timeline of events, a checklist you can tick
+off without leaving the card, or a small grid of health numbers. A reminder or an
 event it adds comes with an Undo that lasts five minutes. Stop stops, at once,
 and the reply says "Stopped." If a question needs a source that's switched
 off, the conversation offers to connect it right there rather than answering
@@ -86,23 +89,20 @@ for privacy, and for using it from your laptop (the same server pocketd has
 always run, below), each saying its state in a line, with the detail one
 level down. About holds Pocketd Pro, Rate Pocketd, the privacy policy and
 Replay intro; Advanced holds the assistant's instructions, server settings and
-diagnostics. Privacy is promises first — only you can see your data, nothing
-you ask is sent anywhere, other devices can't read your calendar, reminders or
-health — with the proof one level down, walking the container and accounting
-for every byte in it.
-
-![You: your name, what Pocketd can see with a switch each for Calendar, Reminders and Health, then one row each for Brain and Privacy, with Use from your laptop below](docs/screenshot-you.png)
+diagnostics. Privacy shows where your chosen brain processes requests, what a
+paired device can access, and how to turn off usage counts. Open Privacy
+details to see what each service receives and what Pocketd stores on the phone.
 
 ## First run
 
-First run is five screens, with no Skip. **Meet Pocketd** says what it
-promises — no account, nothing you ask leaves this phone, works with no
-signal — and that it counts anonymous app usage, with where to turn that off.
-**Choose how Pocketd thinks** offers Built into iPhone, recommended where
-Apple Intelligence is on, or the one private download sized for this phone,
-which starts downloading when you continue; a phone without Apple Intelligence
-sees only the download. **Connect your day** has Calendar, Reminders and
-Health on one screen, each optional, each asked for only when you tap its row,
+First run is five screens, with no Skip. **Meet Pocketd** explains that no
+Pocketd account is needed and where to turn off anonymous usage counts.
+**Choose how Pocketd thinks** recommends a local brain: Built into iPhone
+where Apple Intelligence is ready, or a private download sized for this phone.
+Continuing with the recommended choice doesn't turn on cloud processing. If
+iOS offers Apple Private Cloud Compute, you can choose it here or in You › Brain.
+**Connect your day** has Calendar, Reminders and Health on one screen, each
+optional, each asked for only when you tap its row,
 with a line naming the button iOS is about to show. **Get your day every
 morning** sets a morning brief for weekdays — 7:30 unless you pick another
 time — with an example notification written from your own day. **You're all
@@ -110,12 +110,10 @@ set** ticks off what is connected and asks, if you like, what to call you. A
 brain already on the phone is never downloaded again, and anything you skip is
 offered again later by the tile that needs it.
 
-![Onboarding, step two: "Choose how Pocketd thinks", with Built into iPhone marked Recommended and a private download with its size](docs/screenshot-onboarding.png)
+## Choose a brain
 
-## Two brains
-
-Pocketd thinks with one of two brains, and you choose. Brain, under You,
-switches between them at any time.
+In **You › Brain**, choose where Pocketd answers questions, writes briefs and
+runs routines that need a model. The first two choices below work on the phone.
 
 - **Built into iPhone** is Apple's on-device model, reached through the
   FoundationModels framework. There is nothing to download. It needs iOS 26 or
@@ -125,24 +123,31 @@ switches between them at any time.
   Qwen3 1.7B at 1.11 GB, picked because it can read your day and fits the
   phone. It works with Apple Intelligence on or off, on any iPhone with room
   for it, and once it's downloaded it needs no signal.
+- **Apple Private Cloud Compute** is an optional brain on supported iPhones
+  running iOS 27 or later. Before you choose, iOS may check availability with
+  Apple without sending your prompts or day data. Only if you select this brain
+  does iOS send the prompt to Apple's private servers. It can include relevant
+  conversation history, your instructions, or details from Calendar, Reminders
+  and Health that you connected. For example, a brief can include the name you
+  use for greetings and your next appointment. This brain needs an internet
+  connection and is subject to Apple's daily usage limit. Pocketd never
+  switches a local brain to the cloud to finish a request.
 
-Both run the same three tools against Calendar, Reminders and Health, so
-either one can read your day and add to it. A brain that can't call tools
-can't read your calendar, so it is never recommended and never writes the
-brief; the brief falls back to a template built from the same data. More
-brains, under Brain, lists the rest of the catalogue and a search across
-Hugging Face, each brain marked "Reads your day" or "Chat only".
+Pocketd reads connected sources on the phone, whichever brain you choose.
+A brain that can't call tools can't read your calendar, so it is never
+recommended and never writes the brief. In that case Pocketd uses a template
+built from the same data. More brains, under Brain, lists the rest of the
+catalogue and a search across Hugging Face, each brain marked "Reads your day"
+or "Chat only".
 
-The server for your laptop only ever serves downloaded GGUF brains. Apple's
-model answers the phone's own questions and is never exposed over HTTP; a
-phone that uses the built-in brain is offered the recommended download for
-other devices.
+The server for your laptop serves only downloaded GGUF brains. Neither Apple
+brain is exposed over HTTP. Even if you choose Private Cloud Compute on your
+iPhone, your laptop's prompts are answered on the phone by a downloaded model.
 
 ## Pocketd Pro
 
-Pocketd is MIT-licensed, and building it from this repository gets you
-everything, Pro included. Pro is a handful of gates in the app, all of them in
-this source tree, and there is no Pocketd server deciding anything. A Debug
+Pocketd is MIT-licensed, including the code for Pocketd Pro. The app checks
+which Pro features are unlocked; there is no Pocketd server deciding that. A Debug
 build run from Xcode unlocks it with a test purchase from the scheme's StoreKit
 file, which charges nothing, or launch one with `-pocketd.proOverride on`; in
 a build of your own you're free to take the gates out.
@@ -157,9 +162,9 @@ unlocks three things:
 - **Any brain** — downloading brains beyond the recommended one, and
   searching Hugging Face for more.
 
-Everything else is free: Today and its pages, the brief, the conversation with
-either brain, the widgets, Siri and Control Center, the Morning brief and the
-Overdue nudge, and any brain already on the phone. Anyone who installed
+Pocketd Pro isn't needed for Today and its pages, the brief, the conversation,
+the widgets, Siri and Control Center, the Morning brief, the Overdue nudge,
+or any brain already on the phone. Anyone who installed
 Pocketd from the App Store before 1.1.0 gets Pro free; the server was free
 when they installed it, and they keep it. Restore purchase is in You › About.
 
@@ -174,8 +179,8 @@ Intelligence, so it needs an iPhone 15 Pro or newer and refuses to run on
 anything older.
 
 `pocketd` is the other approach: llama.cpp, GGUF weights, and a real HTTP
-server, on any device that can run iOS 18. It uses Apple's model too now, for
-the phone's own answers where there is one, but the server always runs the
+server, on any device that can run iOS 18. The app can also use Apple's models
+for its own answers where available, but the server always runs the
 downloaded brain, so it works the same on a phone Apple Intelligence never
 reached.
 
@@ -193,17 +198,17 @@ make app          # generates Pocketd.xcodeproj
 open Pocketd.xcodeproj
 ```
 
-Set your team in Signing & Capabilities, then run on a device. A free Apple
-developer account works; the provisioning profile expires after seven days and
-you re-sign.
+Set your team in Signing & Capabilities, then run on a device. To use Private
+Cloud Compute, the signed app and the device must support that capability. See
+[Building and testing with Apple Private Cloud Compute](docs/apple-private-cloud-compute.md).
 
 ## Also, a server for your laptop
 
 `pocketd` turns an iPhone into an inference server too. Download a brain, turn
-on Allow other devices under You › Other devices, and every device on your
-Wi-Fi can talk to it through the OpenAI and Ollama APIs they already speak — no
-account, and not one prompt or reply leaving your network. Turning it on is
-part of Pocketd Pro.
+on Allow other devices under You › Other devices, and clients on your Wi-Fi can
+talk to it through the OpenAI and Ollama APIs they already speak. Their prompts
+and replies travel between the client and the phone over your network, using
+the downloaded brain. Turning the server on is part of Pocketd Pro.
 
 ```bash
 curl http://192.168.1.42:11434/v1/chat/completions \
@@ -392,7 +397,7 @@ These are not bugs, and pretending otherwise would waste your afternoon.
   Add  ...  _pocketd._tcp.  iPhone 17
 
   $ dns-sd -L "iPhone 17" _pocketd._tcp local.
-  ... can be reached at Ranjus-MacBook-Pro.local.:11434
+  ... can be reached at iPhone.local.:11434
   version=1.1.0 api=openai,ollama auth=required model=qwen3-1.7b
   ```
 - **Sampling costs a reload.** llama.cpp binds its sampler to the context, so
@@ -477,7 +482,7 @@ App/Sources/             the SwiftUI app
   State/Navigator.swift  the one stack, the conversation sheet, pending hand-offs
   Speech/                on-device speech-to-text and read-aloud
   Inference/             llama.cpp adapter (LocalLLMClient) for downloaded brains
-  Inference/System/      Apple's on-device model, through FoundationModels
+  Inference/System/      Apple's on-device and Private Cloud Compute models, through FoundationModels
   Store/                 StoreKit 2: buying and restoring Pocketd Pro
 App/Widgets/             TodayWidget.swift reads the brief the app mirrors for it
 project.yml              XcodeGen spec; the .xcodeproj is generated
@@ -562,8 +567,17 @@ published policy, and the URL App Store Connect points at. It is
 [`docs/index.html`](docs/index.html) in this repository: short, and checkable
 against this source tree rather than taken on trust.
 
-Three services are ever contacted. `huggingface.co`, to search for or
-download a model. `api.mixpanel.com`, which receives usage events — the app
+**Where requests go.** Built into iPhone and downloaded brains process your
+prompts, conversation history and connected day details on the phone. Only if
+you select **Apple Private Cloud Compute** does iOS send the prompt and
+relevant context to Apple's private servers for replies, briefs and routines
+that use the brain. That context can include earlier messages and details from
+Calendar, Reminders or Health, such as your next event or a sleep summary. A paired
+laptop still uses a downloaded model on your iPhone; its prompts and replies
+travel over your local network and aren't forwarded to Apple.
+
+**Other services.** `huggingface.co` handles model searches and downloads.
+`api.mixpanel.com` receives usage events — the app
 opened, a model downloaded or loaded, a message sent, the brief written, a
 routine run, the server started, a client answered, an ability switched on, or
 a Pocketd Pro purchase flow started, completed, was cancelled, remained pending
@@ -572,40 +586,29 @@ Privacy turns them off; the complete list is `AnalyticsEvent.swift`, which is
 thirty-three cases long and is meant to be read in a minute. Purchase-flow
 counts include only the outcome and whether they began in Pocketd or on its App
 Store page — never the price, product identifier, transaction or Apple Account.
-And Apple's App Store, which StoreKit reaches for Pocketd Pro: the price when
-you open its sheet, a purchase or a restore when you ask for one, and whether
+StoreKit contacts Apple's App Store for Pocketd Pro: the price when you open
+its sheet, a purchase or a restore when you ask for one, and whether
 this Apple Account owns Pro. The payment is between you and Apple.
 
-Voice works the same way. The mic asks for the microphone and speech
-recognition, once each, and listening stops when you let go of the button, or
-tap it again. Recognition runs on the device — `requiresOnDeviceRecognition`
-is set once and never unset, so there is no fallback to a server recognizer —
-and nothing you say is ever recorded or uploaded. Reading the brief out loud
-uses the same on-device voice synthesis as the rest of iOS.
+**Voice.** Pocketd's mic turns speech into text on the phone. It doesn't save
+or send the audio. The resulting text is a prompt for the selected brain, just
+like a typed question. Reading the brief aloud uses on-device voice synthesis.
 
-What stays is the part worth promising. Inference is local — Apple's built-in
-model runs on the phone, and a downloaded one is a file on it. Prompts and replies
-from conversations in the iPhone app stay on that phone. The local server is a
-different path: clients you pair send their own prompts to the phone and receive
-its generated replies over your local network. No hosted inference service
-receives either conversation. Health, calendar and reminder data are read
-on-device and refused to network callers — including the chat page the phone itself serves —
-by the origin gate in `RequestOrigin.swift`. The assistant can also add events
-and reminders — including repeating ones, as a native `EKRecurrenceRule` rather
-than anything this app simulates — behind a second and stricter gate in the same
-file:
-`mayWritePersonalData` admits only the conversation on the phone, so a network
-client cannot change anything and neither can a routine, which reads at an hour
-when nobody is watching and shares its context with calendar titles that
-strangers wrote. No usage event can carry any of it
-either: `AnalyticsSchema` is an allow-list of property names beside a list of
+**Connected sources.** Pocketd reads Health, Calendar and Reminders on-device.
+The origin gate in `RequestOrigin.swift` keeps those sources out of reach of
+network callers, including the chat page the phone itself serves. The assistant
+can also add events and reminders, including repeating ones, using a native
+`EKRecurrenceRule`. A stricter gate in the same file, `mayWritePersonalData`,
+allows writes only from the conversation in the app. Neither a network client
+nor a routine can change your calendar or reminders. Usage events cannot carry
+those details either: `AnalyticsSchema` is an allow-list of property names beside a list of
 banned ones, and a test fails the build when an event names a prompt, a file, an
 address or a health figure. There is no crash reporting and no account.
 
 The page also spells out the parts that are less tidy: the Bonjour broadcast,
 the hand-offs to Safari and Maps, and the system pasteboard. The app's own
-Privacy page, in You, makes the same promises, and Privacy details, one level
-down, walks the container and accounts for every byte in it.
+Privacy page, in You, shows the current processing choice. Privacy details,
+one level down, lists the destinations and measures the files in the app's folder.
 
 ## License
 

@@ -5,9 +5,12 @@ Python and JavaScript, plus Open WebUI's Ollama connection settings. The same
 server also works with the clients below. These configurations are free to use;
 no additional Pocketd purchase or hosted inference account is needed.
 
-Replace `PHONE`, `KEY` and `MODEL` with the address, API key and model shown on
-your phone. Keep the phone on Pocketd while using the server. Never publish the
-key or put the server on the public internet.
+Replace `PHONE`, `KEY` and `MODEL` with the address, API key and a downloaded
+model shown on your phone. Even if you choose Apple Private Cloud Compute in
+the app, the server answers your laptop with a downloaded model on the phone.
+Neither Apple brain is available to these clients. Keep the phone on Pocketd
+while using the server. Never publish the key or put the server on the public
+internet.
 
 ## Continue
 

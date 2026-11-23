@@ -19,6 +19,8 @@ public enum AskNotice: Sendable, Equatable {
     case chooseBrain(questionWaiting: Bool)
     /// The brain would not start.
     case brainFailed(questionWaiting: Bool)
+    /// Apple's current server quota or readiness needs attention; the local choices remain available.
+    case appleCloud(AppleCloudStatus)
     /// The brain answers, and cannot read your calendar.
     case cannotReadYourDay
 
@@ -46,6 +48,8 @@ public enum AskNotice: Sendable, Equatable {
         switch self {
         case let .replyFailed(sentence):
             return sentence
+        case let .appleCloud(status):
+            return status.statusLine
         case let .offer(offer):
             return "Connect \(offer.ability.noun) so Pocketd can answer that."
         case let .gettingReady(minutesLeft, waiting):
@@ -77,7 +81,7 @@ public enum AskNotice: Sendable, Equatable {
         case .replyFailed: .startNewChat
         case let .offer(offer): .connect(offer.ability)
         case .gettingReady: .none
-        case .chooseBrain, .brainFailed, .cannotReadYourDay: .chooseBrain
+        case .chooseBrain, .brainFailed, .cannotReadYourDay, .appleCloud: .chooseBrain
         }
     }
 
@@ -89,13 +93,14 @@ public enum AskNotice: Sendable, Equatable {
         case .gettingReady: nil
         case .chooseBrain, .brainFailed: "Choose"
         case .cannotReadYourDay: "Switch"
+        case .appleCloud: "Choose a local brain"
         }
     }
 
     public var dismissal: Dismissal {
         switch self {
         case .replyFailed, .offer: .forNow
-        case .gettingReady, .chooseBrain, .brainFailed: .never
+        case .gettingReady, .chooseBrain, .brainFailed, .appleCloud: .never
         case .cannotReadYourDay: .forever(key: Self.cannotReadYourDayKey)
         }
     }
@@ -119,19 +124,22 @@ public extension AskNotice {
         public var questionWaiting: Bool
         /// Keys of notices put away for good.
         public var dismissed: Set<String>
+        public var selectedCloud: AppleCloudStatus?
 
         public init(
             brain: BrainStatus,
             replyFailure: String? = nil,
             offer: ToolOffer? = nil,
             questionWaiting: Bool = false,
-            dismissed: Set<String> = []
+            dismissed: Set<String> = [],
+            selectedCloud: AppleCloudStatus? = nil
         ) {
             self.brain = brain
             self.replyFailure = replyFailure
             self.offer = offer
             self.questionWaiting = questionWaiting
             self.dismissed = dismissed
+            self.selectedCloud = selectedCloud
         }
     }
 
@@ -145,7 +153,9 @@ public extension AskNotice {
     /// 4. A brain that cannot read the day — true, and worth saying once.
     static func decide(_ inputs: Inputs) -> AskNotice? {
         if let failure = inputs.replyFailure { return .replyFailed(failure) }
+        if let cloud = inputs.selectedCloud, !cloud.canChoose { return .appleCloud(cloud) }
         if let offer = inputs.offer { return .offer(offer) }
+        if inputs.selectedCloud == .approachingLimit { return .appleCloud(.approachingLimit) }
         switch inputs.brain {
         case let .arriving(_, minutesLeft):
             return .gettingReady(minutesLeft: minutesLeft, questionWaiting: inputs.questionWaiting)

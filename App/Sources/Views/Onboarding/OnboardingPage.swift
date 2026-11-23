@@ -33,12 +33,15 @@ struct OnboardingPage<Content: View>: View {
         var title: String
         var isEnabled: Bool = true
         var isLoading: Bool = false
+        var identifier: String
         var run: () -> Void
 
-        init(_ title: String, isEnabled: Bool = true, isLoading: Bool = false, run: @escaping () -> Void) {
+        init(_ title: String, isEnabled: Bool = true, isLoading: Bool = false,
+             identifier: String = "intro.primary", run: @escaping () -> Void) {
             self.title = title
             self.isEnabled = isEnabled
             self.isLoading = isLoading
+            self.identifier = identifier
             self.run = run
         }
     }
@@ -122,6 +125,7 @@ struct OnboardingPage<Content: View>: View {
                 isEnabled: primary.isEnabled,
                 action: primary.run
             )
+            .accessibilityIdentifier(primary.identifier)
             if let escape {
                 TextLink(escape.title, tint: .pd.inkSecondaryWarm, action: escape.run)
                     .frame(maxWidth: .infinity)

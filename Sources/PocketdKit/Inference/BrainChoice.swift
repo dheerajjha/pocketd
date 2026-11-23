@@ -3,16 +3,14 @@ import Foundation
 /// Which brain answers the phone's own questions: the conversation, the daily
 /// brief and the routines.
 ///
-/// Two kinds, and the owner's decision was to offer both as first-class
-/// choices rather than hide one behind the other. Apple's model costs nothing to
-/// download and is ready the moment Apple Intelligence is; a downloaded brain
-/// works on any iPhone, with Apple Intelligence on or off, and is the only kind
-/// the server can lend to other devices — Apple's model is not ours to serve.
-/// So this choice is about the phone alone. Whatever it says, the server keeps
-/// using a downloaded brain, and nothing here can change that.
+/// The built-in model and GGUF downloads run locally. Apple's cloud model is
+/// a separate, explicit choice for this phone. The LAN server always uses a
+/// downloaded model and never inherits a phone's choice of either Apple model.
 public enum BrainChoice: Sendable, Hashable {
     /// Apple Intelligence, through FoundationModels. iOS 26 and later.
     case builtIn
+    /// A person explicitly chose to have Apple process requests in Private Cloud Compute.
+    case privateCloudCompute
     /// A GGUF brain on disk, by its `ModelRecord.id`.
     case downloaded(id: String)
 
@@ -21,11 +19,36 @@ public enum BrainChoice: Sendable, Hashable {
     public var modelID: String {
         switch self {
         case .builtIn: ModelRecord.builtInID
+        case .privateCloudCompute: ModelRecord.privateCloudComputeID
         case let .downloaded(id): id
         }
     }
 
     public var isBuiltIn: Bool { self == .builtIn }
+
+    /// Only GGUF records can be served, downloaded or offloaded by Pocketd.
+    public var isAppleManaged: Bool { self == .builtIn || self == .privateCloudCompute }
+
+    public init(residentID: String) {
+        switch residentID {
+        case ModelRecord.builtInID: self = .builtIn
+        case ModelRecord.privateCloudComputeID: self = .privateCloudCompute
+        default: self = .downloaded(id: residentID)
+        }
+    }
+
+    /// Revalidate at dispatch: a request queued against a local model (or a
+    /// network client's "any model") must not cross a subsequent switch to PCC.
+    public static func validateCloudRoute(_ request: GenerationRequest, selected: Self?) throws {
+        if selected == .privateCloudCompute {
+            guard request.modelID == ModelRecord.privateCloudComputeID else {
+                throw InferenceError.modelMismatch(requested: request.modelID, loaded: ModelRecord.privateCloudComputeID)
+            }
+            if case .network = request.origin { throw InferenceError.modelNotFound(request.modelID) }
+        } else if request.modelID == ModelRecord.privateCloudComputeID {
+            throw InferenceError.noModelLoaded
+        }
+    }
 }
 
 // MARK: - Persistence
@@ -38,11 +61,11 @@ public extension BrainChoice {
     /// finds the server has stopped serving.
     static let defaultsKey = "pocketd.brainChoice"
 
-    /// A plain string, so the value reads sensibly in a defaults dump and in
-    /// the stored-data audit: `builtIn` or `downloaded:<id>`.
+    /// A stable provider identifier, independent of its translated display name.
     var storedValue: String {
         switch self {
         case .builtIn: "builtIn"
+        case .privateCloudCompute: "privateCloudCompute"
         case let .downloaded(id): "downloaded:\(id)"
         }
     }
@@ -51,6 +74,7 @@ public extension BrainChoice {
     /// A choice that cannot be read is no choice, and "no choice" has a
     /// well-defined answer (see `effective`); a guess does not.
     init?(storedValue: String) {
+        if storedValue == "privateCloudCompute" { self = .privateCloudCompute; return }
         if storedValue == "builtIn" {
             self = .builtIn
             return
@@ -58,7 +82,7 @@ public extension BrainChoice {
         let prefix = "downloaded:"
         guard storedValue.hasPrefix(prefix) else { return nil }
         let id = String(storedValue.dropFirst(prefix.count))
-        guard !id.isEmpty else { return nil }
+        guard !id.isEmpty, !BrainChoice(residentID: id).isAppleManaged else { return nil }
         self = .downloaded(id: id)
     }
 
@@ -78,7 +102,7 @@ public extension BrainChoice {
             return stored
         }
         guard let legacy = defaults.string(forKey: legacyLoadedModelKey), !legacy.isEmpty,
-              legacy != ModelRecord.builtInID
+              !BrainChoice(residentID: legacy).isAppleManaged
         else { return nil }
         return .downloaded(id: legacy)
     }
@@ -115,14 +139,22 @@ public extension BrainChoice {
     static func effective(
         chosen: BrainChoice?,
         builtIn: BuiltInBrainAvailability,
-        installed: [String]
+        installed: [String],
+        cloud: AppleCloudStatus = .unavailable
     ) -> BrainChoice? {
-        let fallback: BrainChoice? = installed.first.map { .downloaded(id: $0) }
+        let downloads = installed.filter { !BrainChoice(residentID: $0).isAppleManaged }
+        let fallback: BrainChoice? = downloads.first.map { .downloaded(id: $0) }
         switch chosen {
         case .builtIn:
             return builtIn.canNeverAnswer ? fallback : .builtIn
+        case .privateCloudCompute:
+            // A restored preference cannot enable a server on an unsupported
+            // device. A temporary readiness or quota change keeps the choice
+            // visible, without replaying a request on some other provider.
+            if cloud != .unavailable { return .privateCloudCompute }
+            return builtIn == .available ? .builtIn : fallback
         case let .downloaded(id):
-            if installed.contains(id) { return .downloaded(id: id) }
+            if downloads.contains(id) { return .downloaded(id: id) }
             if let fallback { return fallback }
             return builtIn == .available ? .builtIn : nil
         case nil:

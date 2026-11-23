@@ -30,9 +30,10 @@ Roughly by how long it takes:
    Bring a test that captures the exact shape the client wanted, and say in a
    comment which client and which field.
 
-3. **A new backend** (~half a day) — conform to `InferenceEngine`. That protocol
-   is the only thing the server knows about inference; MLX and Apple's
-   Foundation Models are both reachable through LocalLLMClient already.
+3. **A new backend** (~half a day) — conform to `InferenceEngine`.
+   `SystemModelEngine` shows how the app uses Apple's models. The HTTP server
+   serves downloaded models only; neither Apple's on-device model nor Apple
+   Private Cloud Compute is available to network clients.
 
 ## The rules that matter
 

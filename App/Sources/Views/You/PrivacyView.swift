@@ -3,17 +3,9 @@ import SwiftUI
 
 /// Privacy, as promises: one line each, and every line opens its proof.
 ///
-/// The full audit — every file, connection and permission, measured on this
-/// phone — is one level down in `PrivacyDetailsView`. It used to be this page,
-/// and it was thorough, honest and written for whoever wrote the code: Swift
-/// file names, preference keys, CDN and Bonjour. Most people want the three
-/// answers (who can see it, what leaves, what can I delete) and want to know
-/// the proof exists; the curious can open it.
-///
-/// The hero says "personal". "Nothing leaves your phone" would be the cleaner
-/// line, and two sections below it would say what does leave — brain downloads
-/// and, while the switch is on, anonymous usage counts. A page whose argument
-/// is that every sentence can be checked cannot open with one that fails.
+/// The current brain determines where a request is processed. Files are
+/// measured separately: today's choice doesn't say where yesterday's questions
+/// were answered.
 struct PrivacyView: View {
     @Environment(AppModel.self) private var model
     @Environment(ToastCenter.self) private var toasts
@@ -67,12 +59,14 @@ struct PrivacyView: View {
         VStack(alignment: .leading, spacing: PDSpacing.s) {
             IconTile(symbol: "lock.shield")
                 .accessibilityHidden(true)
-            Text("Nothing personal leaves your phone.")
+            Text(model.isUsingPrivateCloudCompute ? "Apple Private Cloud Compute is selected." : "On-device processing")
                 .font(.system(.title2, weight: .semibold))
                 .foregroundStyle(Color.pd.ink)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
-            Text("Pocketd thinks on this iPhone. Here's what that means.")
+            Text(model.isUsingPrivateCloudCompute
+                 ? "When this brain writes a reply, brief or routine result, iOS sends the prompt and relevant conversation or day details to Apple's private servers."
+                 : "Built into iPhone and downloaded brains process your questions and day details here. They don't switch to the cloud.")
                 .font(Font.pd.secondary)
                 .foregroundStyle(Color.pd.inkSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -101,7 +95,11 @@ struct PrivacyView: View {
     // MARK: - What leaves the phone
 
     private var whatLeaves: some View {
-        YouSection("What leaves the phone") {
+        YouSection("What leaves the phone", footnote: "Pocketd Pro purchases and restores go through Apple's App Store.") {
+            if model.isUsingPrivateCloudCompute || model.cloudStatus.isListed {
+                promiseRow(StoredDataAudit.cloudRequests)
+                RowDivider()
+            }
             promiseRow(StoredDataAudit.brainDownloads)
             RowDivider()
             usageCountsSwitch
@@ -203,7 +201,7 @@ struct PrivacyView: View {
             NavRow(
                 symbol: "doc.text.magnifyingglass",
                 title: "See the details",
-                detail: "Every file, connection and permission, measured on this iPhone"
+                detail: "Files on this iPhone, permissions and the services Pocketd uses"
             ) {
                 details = DetailsRequest(focus: nil)
             }
@@ -231,20 +229,9 @@ struct PrivacyView: View {
     private func message(for action: Pending) -> String {
         switch action {
         case .conversations:
-            let summary = audit.conversations
-            let what = summary.readableCount > 0
-                ? "\(Format.counted(summary.readableCount, "conversation")), \(pdBytes(summary.byteCount))."
-                : "\(pdBytes(summary.byteCount)) of conversation files."
-            return "\(what) Nothing was ever uploaded, so there is no copy anywhere to bring back."
+            audit.conversations.deletionMessage
         case .everything:
-            var sentences = DeletionNarrative.confirmation(plan: audit.deletionPlan(model))
-            // Said only when it is true: a phone that answers with the
-            // built-in brain loses nothing it needs to answer.
-            if audit.deletionPlan(model).included.contains(where: { $0.name == DeletionPlan.EntryName.models }),
-               !model.isUsingBuiltInBrain {
-                sentences.insert("Pocketd will need a brain again before it can answer.", at: 1)
-            }
-            return sentences.joined(separator: " ")
+            audit.deletionConfirmation(model)
         }
     }
 

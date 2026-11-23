@@ -252,6 +252,9 @@ public enum DirectorySweep {
 /// Only `.systemManaged` kinds may be given that sentence, which is what
 /// `Disposal.isSystemOwned` is for.
 public enum DeletionNarrative {
+    /// Deletion applies to the saved files, regardless of which brain answered.
+    public static let localDeletionNotice = "This removes the saved files from this iPhone. Pocketd can't undo it."
+
     public static func sentences(
         plan: DeletionPlan,
         measured: Bool,
@@ -305,11 +308,9 @@ public enum DeletionNarrative {
         return sentences
     }
 
-    /// What the confirmation dialog says: what goes, what stays and why, and
-    /// that there is nothing to restore from. The footer on the details page
-    /// says the rest — what iOS keeps, what this page cannot name — and the
-    /// two are built from the one plan, so the dialog cannot quote a number the
-    /// button does not free.
+    /// What the confirmation dialog says: what goes, what stays and why. The
+    /// footer on the details page says the rest — what iOS keeps, what this
+    /// page cannot name. Both quote the same plan.
     public static func confirmation(plan: DeletionPlan) -> [String] {
         var sentences: [String] = []
         if plan.included.isEmpty {
@@ -321,7 +322,7 @@ public enum DeletionNarrative {
             guard let reason = entry.skippedBecause else { continue }
             sentences.append("It leaves \(entry.name) — \(formattedByteCount(entry.byteCount)) — because \(reason).")
         }
-        sentences.append("Nothing was ever uploaded, so there is no copy anywhere to bring back.")
+        if !plan.isEmpty { sentences.append(localDeletionNotice) }
         return sentences
     }
 

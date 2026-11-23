@@ -44,7 +44,16 @@ struct YouView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: PDSpacing.xl) {
                     header.pdStaggerIn(0)
-                    AbilitiesSection().pdStaggerIn(1).id("abilities")
+                    VStack(alignment: .leading, spacing: PDSpacing.s) {
+                        AbilitiesSection()
+                        if model.isUsingPrivateCloudCompute {
+                            Text(Intro.Copy.connectCloudLine)
+                                .font(Font.pd.footnote)
+                                .foregroundStyle(Color.pd.inkSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .pdStaggerIn(1).id("abilities")
                     brainSection.pdStaggerIn(2).id("brain")
                     privacySection.pdStaggerIn(3).id("privacy")
                     laptopSection.pdStaggerIn(4).id("devices")
@@ -147,6 +156,7 @@ struct YouView: View {
             NavRow(symbol: "brain", title: row.title, detail: row.detail) {
                 navigator.push(.brain)
             }
+            .accessibilityIdentifier("settings.brain.open")
         }
     }
 
@@ -159,7 +169,8 @@ struct YouView: View {
             usingBuiltIn: model.isUsingBuiltInBrain,
             builtInAvailability: model.builtInAvailability,
             downloadName: downloadName,
-            waitingReadsYourDay: waitingDownload?.dayAccess().readsYourDay ?? true
+            waitingReadsYourDay: waitingDownload?.dayAccess().readsYourDay ?? true,
+            selectedCloud: model.isUsingPrivateCloudCompute ? model.cloudStatus : nil
         )
     }
 
@@ -172,7 +183,9 @@ struct YouView: View {
             model.visibleTransfers.first(where: \.isActive)?.id,
             waitingDownload?.id,
         ]
-        guard let id = ids.compactMap({ $0 }).first(where: { $0 != ModelRecord.builtInID }) else { return nil }
+        guard let id = ids.compactMap({ $0 }).first(where: {
+            $0 != ModelRecord.builtInID && $0 != ModelRecord.privateCloudComputeID
+        }) else { return nil }
         return model.catalog.first { $0.id == id }?.displayName
     }
 
@@ -192,10 +205,7 @@ struct YouView: View {
 
     private var privacySection: some View {
         YouSection("Privacy") {
-            // The Privacy page's own promise, word for word: brain downloads
-            // and (if allowed) anonymous usage counts do leave, so "nothing"
-            // would be the one untrue line on this page.
-            NavRow(symbol: "lock", title: "Privacy", detail: "Nothing personal leaves your phone") {
+            NavRow(symbol: "lock", title: "Privacy", detail: "What Pocketd keeps and shares") {
                 navigator.push(.privacy)
             }
         }
@@ -290,7 +300,7 @@ private struct NameSheet: View {
                     .pdHero()
                     .foregroundStyle(Color.pd.ink)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Only for the greeting. It stays on this iPhone.")
+                Text(model.isUsingPrivateCloudCompute ? Intro.Copy.nameUseWithCloud : "Optional. Pocketd uses this name to greet you in your brief.")
                     .pdSubtitle()
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -380,7 +390,7 @@ struct AboutSheet: View {
                         .font(Font.pd.titleDetail)
                         .foregroundStyle(Color.pd.ink)
                         .accessibilityAddTraits(.isHeader)
-                    Text("Your day, read from your phone, in plain words. Nothing leaves it.")
+                    Text("Your day, read from your phone, in plain words.")
                         .pdSubtitle()
                         .fixedSize(horizontal: false, vertical: true)
                 }

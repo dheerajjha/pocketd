@@ -290,7 +290,7 @@ struct StoredDataAuditRulesTests {
         #expect(sentences.joined(separator: " ").contains("nothing here left") == false)
     }
 
-    @Test("the confirmation quotes the same plan, skips included, and promises no backup")
+    @Test("the confirmation quotes the plan and describes deletion from this phone")
     func confirmationMatchesThePlan() {
         let plan = DeletionPlan.deleteEverything(
             installedModelBytes: 2_000_000, orphanBytes: 0, conversationBytes: 4_000,
@@ -302,13 +302,15 @@ struct StoredDataAuditRulesTests {
         #expect(dialog.contains(formattedByteCount(plan.byteCount)))
         #expect(dialog.contains("\(DeletionPlan.EntryName.models) and \(DeletionPlan.EntryName.conversations)"))
         #expect(dialog.contains("It leaves every unfinished download"))
-        #expect(dialog.hasSuffix("no copy anywhere to bring back."))
+        #expect(dialog.contains("from this iPhone"))
+        #expect(dialog.contains("can't undo"))
+        #expect(!dialog.contains("uploaded"), "Local deletion doesn't say how earlier requests were processed")
 
         let empty = DeletionPlan.deleteEverything(
             installedModelBytes: 0, orphanBytes: 0, conversationBytes: 0, scheduledTaskBytes: 0,
             partialDownloadBytes: 0, networkCacheBytes: 0, downloadInFlight: false
         )
-        #expect(DeletionNarrative.confirmation(plan: empty).first == "There is nothing here left for this screen to delete.")
+        #expect(DeletionNarrative.confirmation(plan: empty) == ["There is nothing here left for this screen to delete."])
     }
 
     @Test("the footer quotes the plan's own number and names its own parts")
@@ -404,12 +406,12 @@ struct StoredDataAuditRulesTests {
         for key in DeclaredPermissions.voiceKeys {
             let reason = try #require(info[key] as? String, "\(key) must be declared")
             #expect(reason.isEmpty == false)
-            // The unusual claim these strings make, and the one App Review
-            // will check against the code: the recogniser runs on the device.
-            #expect(
-                reason.lowercased().contains("device") || reason.lowercased().contains("anywhere"),
-                "\(key) should say where the audio goes"
-            )
+            // Scope the location to speech, not to the text the selected brain receives.
+            let local = ["on this iphone", "on this phone", "on this device", "on the device", "on-device", "locally"]
+            #expect(reason.lowercased().split(separator: ".").contains { sentence in
+                (sentence.contains("audio") || sentence.contains("voice") || sentence.contains("speech"))
+                    && local.contains { sentence.contains($0) }
+            }, "\(key) should say that speech is processed on the phone")
         }
 
         // Two rows, not one. One button causes both prompts, but iOS keeps two
@@ -536,6 +538,37 @@ struct StoredDataAuditRulesTests {
         }
     }
 
+    @Test("the public guide, policy and in-app audit distinguish cloud prompts from local dictation and laptop requests")
+    func processingDisclosures() throws {
+        guard let root = repositoryRoot() else { return }
+        for name in ["README.md", "docs/index.html", "App/Sources/State/StoredDataAudit.swift"] {
+            let text = try String(contentsOf: root.appendingPathComponent(name), encoding: .utf8)
+            // Read each passage as text, ignoring HTML, Markdown emphasis and line wrapping.
+            let passages = text.components(separatedBy: "\n\n").map {
+                $0.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+                    .replacingOccurrences(of: "*", with: "")
+                    .lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            }
+            for claim in ["nothing you ask is sent anywhere", "nothing personal leaves your phone",
+                          "nothing you say and nothing it reads ever leaves the phone", "inference does not call out"] {
+                #expect(!passages.contains { $0.contains(claim) }, "\(name) still says \(claim)")
+            }
+            #expect(passages.contains { p in
+                p.contains("apple private cloud compute") && p.contains("only") && (p.contains("select") || p.contains("choose"))
+                    && p.contains("prompt") && p.contains("private servers")
+                    && (p.contains("conversation history") || p.contains("earlier messages"))
+                    && ["calendar", "reminders", "health", "brief", "routine"].allSatisfy { p.contains($0) }
+            }, "\(name) must explain when Apple can receive earlier messages and connected day details")
+            #expect(passages.contains { p in
+                p.contains("audio") && p.contains("text") && (p.contains("on the phone") || p.contains("on this iphone"))
+            }, "\(name) must distinguish on-device speech recognition from processing the resulting text")
+            #expect(passages.contains { $0.contains("availability") && $0.contains("before") && $0.contains("prompt") },
+                    "\(name) must distinguish the OS availability check from sending a prompt")
+            #expect(passages.contains { $0.contains("paired") && $0.contains("downloaded") },
+                    "\(name) must distinguish the paired-device model from the one chosen in the app")
+        }
+    }
+
     // MARK: - The manifest filed with Apple
 
     /// Apple's complete vocabulary for `NSPrivacyCollectedDataType`,
@@ -593,25 +626,6 @@ struct StoredDataAuditRulesTests {
         "NSPrivacyCollectedDataTypePurposeOther",
     ]
 
-    /// Types `AnalyticsSchema.forbiddenProperties` makes unsendable, so
-    /// declaring one would be a false statement in the other direction.
-    private static let unsendableDataTypes: Set<String> = [
-        "NSPrivacyCollectedDataTypeHealth",
-        "NSPrivacyCollectedDataTypeFitness",
-        "NSPrivacyCollectedDataTypeContacts",
-        "NSPrivacyCollectedDataTypeName",
-        "NSPrivacyCollectedDataTypeEmailAddress",
-        "NSPrivacyCollectedDataTypePhoneNumber",
-        "NSPrivacyCollectedDataTypePhysicalAddress",
-        "NSPrivacyCollectedDataTypePreciseLocation",
-        "NSPrivacyCollectedDataTypeCoarseLocation",
-        "NSPrivacyCollectedDataTypeSensitiveInfo",
-        "NSPrivacyCollectedDataTypeEmailsOrTextMessages",
-        "NSPrivacyCollectedDataTypeOtherUserContent",
-        "NSPrivacyCollectedDataTypeSearchHistory",
-        "NSPrivacyCollectedDataTypeBrowsingHistory",
-    ]
-
     @Test("the manifest filed with Apple declares the events the app actually sends")
     func privacyManifestMatchesTheTaxonomy() throws {
         guard let root = repositoryRoot() else { return }
@@ -623,30 +637,26 @@ struct StoredDataAuditRulesTests {
             "App/Resources/PrivacyInfo.xcprivacy must be readable; it is filed with Apple"
         )
         let collected = manifest["NSPrivacyCollectedDataTypes"] as? [[String: Any]] ?? []
-        let declared = Set(collected.compactMap { $0["NSPrivacyCollectedDataType"] as? String })
-
-        // The rejection this file's own header warns about, in its collection
-        // form: an app that transmits usage events while this array is empty is
-        // caught at review, days after the build passed.
+        // The taxonomy describes usage counts, not the context iOS can send
+        // for a cloud answer. Check its entire set of types for this purpose.
+        let analyticsPurpose = "NSPrivacyCollectedDataTypePurposeAnalytics"
+        let analytics = collected.filter {
+            ($0["NSPrivacyCollectedDataTypePurposes"] as? [String])?.contains(analyticsPurpose) == true
+        }
         if AnalyticsSchema.allowedProperties.isEmpty == false {
-            #expect(
-                declared.contains("NSPrivacyCollectedDataTypeProductInteraction"),
-                "AnalyticsSchema defines \(AnalyticsSchema.allowedProperties.count) events, so Product Interaction has to be declared"
-            )
+            let types = Set(analytics.compactMap { $0["NSPrivacyCollectedDataType"] as? String })
+            #expect(types == ["NSPrivacyCollectedDataTypeProductInteraction", "NSPrivacyCollectedDataTypeDeviceID",
+                              "NSPrivacyCollectedDataTypePurchaseHistory"],
+                    "Usage counts cover interactions, installation ID and purchase outcomes, not prompts or connected data")
         }
 
         for entry in collected {
             let type = try #require(entry["NSPrivacyCollectedDataType"] as? String)
             #expect(Self.realCollectedDataTypes.contains(type), "\(type) is not one of Apple's data types")
-            #expect(
-                Self.unsendableDataTypes.contains(type) == false,
-                "\(type) is declared, but AnalyticsSchema.forbiddenProperties makes it unsendable"
-            )
-
             // Linked and Tracking are required booleans. A missing key is not a
             // false one; the manifest is simply incomplete and review reads it
             // that way.
-            #expect(entry["NSPrivacyCollectedDataTypeLinked"] as? Bool != nil, "\(type) does not say whether it is linked to identity")
+            let linked = try #require(entry["NSPrivacyCollectedDataTypeLinked"] as? Bool, "\(type) does not say whether it is linked to identity")
             let tracking = try #require(entry["NSPrivacyCollectedDataTypeTracking"] as? Bool, "\(type) does not say whether it is used for tracking")
 
             // The consistency rule Apple enforces between the two keys. Setting
@@ -660,6 +670,12 @@ struct StoredDataAuditRulesTests {
             #expect(purposes.isEmpty == false, "\(type) is declared with no purpose")
             for purpose in purposes {
                 #expect(Self.realPurposes.contains(purpose), "\(purpose) is not one of Apple's purposes")
+                #expect(purpose != "NSPrivacyCollectedDataTypePurposeThirdPartyAdvertising"
+                        && purpose != "NSPrivacyCollectedDataTypePurposeDeveloperAdvertising",
+                        "Pocketd doesn't collect data for advertising")
+            }
+            if purposes.contains(analyticsPurpose) {
+                #expect(!linked && !tracking, "Usage counts aren't linked to identity or used for tracking")
             }
         }
 

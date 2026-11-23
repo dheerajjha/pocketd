@@ -3,142 +3,133 @@ import SwiftUI
 
 /// Screen two: how Pocketd thinks.
 ///
-/// Both brains are first-class choices. Where Apple Intelligence is ready the
-/// screen offers "Built into iPhone" — nothing to download, recommended and
-/// selected — beside a private download that works on any iPhone. Where it is
-/// not, the screen is the one recommended download, with its size, its time
-/// and a word about the connection, and the download starts on Continue. Only
-/// brains that can read your day are offered: the old "Quick" option was a
-/// brain that answered "what's on today?" by inventing a day.
-///
-/// What the rows say, which one starts selected and what Continue does are all
-/// `Intro.BrainPlan`'s, read fresh from the phone every time this screen draws.
-/// That is the fix for the walkthrough's worst intro bug: Back to this screen
-/// after the download had finished offered "Download and continue · 386 MB"
-/// again, and tapping it fetched the whole file a second time. A brain that is
-/// on the phone now says "Ready", and Continue moves on.
-///
-/// The only screen of the intro that names a size, and — with the readiness
-/// line at the end — the only place outside You › Brain that says "brain".
+/// The local choices come first. Where Apple offers private cloud processing,
+/// its row explains what leaves the phone before either of the two taps
+/// needed to use it. A row tap alone never changes the brain.
 struct OnboardingBrainStep: View {
     @Environment(AppModel.self) private var model
 
-    /// Held by the flow, not by this screen: `.id(step)` destroys this view's
-    /// own state on the way out, and a choice that Back and Next silently undo
-    /// is worse than no choice. `nil` until somebody taps a row, so the plan's
-    /// pre-selection — which can change while Apple's availability is still
-    /// being read — is followed until then.
+    /// The flow remembers the draft; Continue applies the displayed option,
+    /// never whichever option might be recommended after a status refresh.
     @Binding var selection: Intro.BrainPlan.Option?
 
     var onContinue: () -> Void
 
     @State private var reach = OnboardingReach()
+    @State private var applying: Task<Void, Never>?
+    @State private var confirmationNotice: String?
 
     var body: some View {
         let plan = model.introBrainPlan
-        let selected = selection ?? plan.preselected
-
-        Group {
-            switch plan.layout {
-            case .choice: choice(plan, selected: selected)
-            case .downloadOnly: downloadOnly(plan)
-            case .nothingFits: nothingFits
-            }
-        }
-        // The first launch reads Apple's availability in the background, and
-        // a quick tap on Get started can land here before it has. Asking again
-        // costs nothing when it has already been read.
-        .task { await model.refreshBuiltInAvailability() }
-    }
-
-    private func proceed(_ plan: Intro.BrainPlan, selected: Intro.BrainPlan.Option?) {
-        model.applyIntroBrain(plan.action(for: selected))
-        onContinue()
-    }
-
-    // MARK: - Both options
-
-    private func choice(_ plan: Intro.BrainPlan, selected: Intro.BrainPlan.Option?) -> some View {
-        OnboardingPage(
-            ornament: .icon("brain"),
-            headline: Intro.Copy.brainTitle,
-            secondary: Intro.Copy.brainLine,
-            primary: .init(plan.primaryTitle(for: selected)) { proceed(plan, selected: selected) }
+        let selected = plan.selection(forDraft: selection)
+        let heading = header(for: plan)
+        return OnboardingPage(
+            ornament: .icon(heading.symbol),
+            headline: heading.title,
+            secondary: heading.detail,
+            primer: confirmationNotice,
+            primary: .init(
+                plan.primaryTitle(for: selected), isEnabled: plan.action(for: selected) != nil,
+                isLoading: applying != nil, identifier: "intro.brain.continue"
+            ) { proceed(with: selected) }
         ) {
             VStack(alignment: .leading, spacing: PDSpacing.s) {
                 if let builtIn = plan.builtIn {
-                    BrainOptionCard(
-                        title: BuiltInBrainOffer.title,
-                        isRecommended: plan.recommended == .builtIn,
-                        isSelected: selected == .builtIn,
-                        status: builtInStatus(builtIn, inUse: plan.inUse == .builtIn)
-                    ) { select(.builtIn) }
+                    option(.builtIn, title: BuiltInBrainOffer.title, in: plan, selected: selected) {
+                        if plan.cloud.isListed { detailLine(Intro.Copy.localProcessing) }
+                        builtInStatus(builtIn, inUse: plan.inUse == .builtIn)
+                    }
                 }
                 if let download = plan.download {
-                    BrainOptionCard(
-                        title: Intro.Copy.downloadTitle,
-                        isRecommended: plan.recommended == .download,
-                        isSelected: selected == .download,
-                        status: downloadStatus(download, inUse: plan.inUse == .download, alongsideBuiltIn: true)
-                    ) { select(.download) }
-                }
-                if selected == .download, case let .offer(record)? = plan.download, reach.isOnMobileData {
-                    mobileDataNote(record)
-                }
-            }
-        }
-    }
-
-    private func select(_ option: Intro.BrainPlan.Option) {
-        guard selection != option else { return }
-        Haptics.tap()
-        selection = option
-    }
-
-    // MARK: - The download alone
-
-    /// No built-in option on this phone. One brain, no choice to make, so no
-    /// radio buttons — the card says what is coming and Continue starts it.
-    private func downloadOnly(_ plan: Intro.BrainPlan) -> some View {
-        let download = plan.download
-        let isHere: Bool = if case .onPhone? = download { true } else { false }
-        let isArriving: Bool = if case .arriving? = download { true } else { false }
-        return OnboardingPage(
-            ornament: .icon(isHere ? "checkmark" : "arrow.down"),
-            headline: isHere ? Intro.Copy.hasBrainTitle : (isArriving ? Intro.Copy.gettingBrainTitle : Intro.Copy.getBrainTitle),
-            secondary: isHere ? Intro.Copy.hasBrainLine : Intro.Copy.gettingBrainLine,
-            primary: .init(plan.primaryTitle(for: .download)) { proceed(plan, selected: .download) }
-        ) {
-            if let download {
-                VStack(alignment: .leading, spacing: PDSpacing.s) {
-                    PDCard(warm: true) {
-                        VStack(alignment: .leading, spacing: PDSpacing.xs) {
-                            Text(Intro.Copy.downloadTitle)
-                                .font(Font.pd.rowTitle)
-                                .foregroundStyle(Color.pd.ink)
-                            downloadStatus(download, inUse: plan.inUse == .download, alongsideBuiltIn: false)
-                        }
+                    option(.download, title: Intro.Copy.downloadTitle, in: plan, selected: selected) {
+                        if plan.cloud.isListed { detailLine(Intro.Copy.localProcessing) }
+                        downloadStatus(download, inUse: plan.inUse == .download, alongsideBuiltIn: plan.builtIn != nil)
                     }
-                    .accessibilityElement(children: .combine)
-
-                    if case let .offer(record) = download, reach.isOnMobileData {
+                    if case let .offer(record) = download, reach.isOnMobileData,
+                       selected == .download || plan.layout == .downloadOnly {
                         mobileDataNote(record)
                     }
                 }
+                if plan.cloud.isListed {
+                    option(.privateCloudCompute, title: AppleCloudStatus.title, in: plan, selected: selected) {
+                        detailLine(AppleCloudStatus.detail)
+                        detailLine(plan.inUse == .privateCloudCompute
+                                   ? "Current choice · \(plan.cloud.statusLine)" : plan.cloud.statusLine)
+                    }
+                } else if plan.inUse == .privateCloudCompute {
+                    // Not an offer: a previously chosen cloud brain is still
+                    // the preference while Apple's service is getting ready.
+                    PDCard(warm: true) {
+                        VStack(alignment: .leading, spacing: PDSpacing.xs) {
+                            Text("Current choice")
+                                .font(Font.pd.rowTitle)
+                                .foregroundStyle(Color.pd.ink)
+                            detailLine(plan.cloud.statusLine)
+                                .accessibilityIdentifier("intro.brain.savedCloud.status")
+                            if selected != .privateCloudCompute {
+                                TextLink("Keep current choice") {
+                                    selection = nil
+                                    confirmationNotice = nil
+                                }
+                            }
+                        }
+                    }
+                }
             }
+        }
+        .task { _ = await model.refreshBuiltInAvailability() }
+        .task { await model.watchCloudStatus() }
+        .onDisappear { applying?.cancel() }
+    }
+
+    private func header(for plan: Intro.BrainPlan) -> (symbol: String, title: String, detail: String) {
+        switch plan.layout {
+        case .choice:
+            ("brain", Intro.Copy.brainTitle, plan.cloud.isListed ? Intro.Copy.brainLineWithCloud
+                : (plan.inUse == .privateCloudCompute ? Intro.Copy.pausedCloudLine : Intro.Copy.brainLine))
+        case .downloadOnly:
+            switch plan.download {
+            case .onPhone?: ("checkmark", Intro.Copy.hasBrainTitle, Intro.Copy.hasBrainLine)
+            case .arriving?: ("arrow.down", Intro.Copy.gettingBrainTitle, Intro.Copy.gettingBrainLine)
+            default: ("arrow.down", Intro.Copy.getBrainTitle, Intro.Copy.gettingBrainLine)
+            }
+        case .nothingFits:
+            ("brain", Intro.Copy.nothingFitsTitle, Intro.Copy.nothingFitsLine)
         }
     }
 
-    // MARK: - Nothing fits
-
-    private var nothingFits: some View {
-        OnboardingPage(
-            ornament: .icon("brain"),
-            headline: Intro.Copy.nothingFitsTitle,
-            secondary: Intro.Copy.nothingFitsLine,
-            primary: .init("Continue", run: onContinue)
+    private func option<Status: View>(
+        _ option: Intro.BrainPlan.Option, title: String, in plan: Intro.BrainPlan,
+        selected: Intro.BrainPlan.Option?, @ViewBuilder status: () -> Status
+    ) -> some View {
+        BrainOptionCard(
+            title: title, isRecommended: plan.layout == .choice && plan.recommended == option,
+            isSelected: selected == option, showsRadio: plan.layout != .downloadOnly || selected == nil, status: status()
         ) {
-            EmptyView()
+            guard applying == nil, model.introBrainPlan.canSelect(option) else { return }
+            Haptics.tap()
+            confirmationNotice = nil
+            selection = option
+        }
+        .disabled(!plan.canSelect(option) || applying != nil)
+        .accessibilityIdentifier(option == .privateCloudCompute ? "intro.brain.cloud" : "intro.brain.\(option.rawValue)")
+    }
+
+    private func proceed(with selected: Intro.BrainPlan.Option?) {
+        guard applying == nil else { return }
+        applying = Task {
+            let applied = await model.applyIntroBrain(selected)
+            guard !Task.isCancelled else { return }
+            applying = nil
+            if applied {
+                selection = nil // The confirmed BrainChoice now survives Back and relaunch.
+                onContinue()
+            } else if selected == .privateCloudCompute, model.isUsingPrivateCloudCompute,
+                      case let .failed(reason) = model.brainStatus {
+                confirmationNotice = reason
+            } else {
+                confirmationNotice = "That choice isn’t available right now. Review your options before continuing."
+            }
         }
     }
 
@@ -240,6 +231,9 @@ private struct BrainOptionCard<Status: View>: View {
     let title: String
     let isRecommended: Bool
     let isSelected: Bool
+    /// An already selected download on a phone with no other option keeps
+    /// the original plain card; Continue starts it without a second tap.
+    let showsRadio: Bool
     /// The grey lines under the title: what it costs, or where it stands.
     let status: Status
     let action: () -> Void
@@ -247,10 +241,12 @@ private struct BrainOptionCard<Status: View>: View {
     var body: some View {
         Button(action: action) {
             HStack(alignment: .firstTextBaseline, spacing: PDSpacing.s) {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(Font.pd.lead)
-                    .foregroundStyle(isSelected ? Color.pd.accentWarm : Color.pd.inkTertiary)
-                    .accessibilityHidden(true)
+                if showsRadio {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(Font.pd.lead)
+                        .foregroundStyle(isSelected ? Color.pd.accentWarm : Color.pd.inkTertiary)
+                        .accessibilityHidden(true)
+                }
 
                 VStack(alignment: .leading, spacing: PDSpacing.xxs) {
                     // Side by side while the title fits whole; the badge goes
@@ -274,12 +270,12 @@ private struct BrainOptionCard<Status: View>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .pdCardSurface(
                 fill: .pd.cardWarm,
-                stroke: isSelected ? .pd.accentWarm : .pd.cardStrokeWarm
+                stroke: showsRadio && isSelected ? .pd.accentWarm : .pd.cardStrokeWarm
             )
             .overlay {
                 // A second hairline inside the first, for the selected card
                 // only: the edge has to say "this one" in grayscale too.
-                if isSelected {
+                if showsRadio && isSelected {
                     RoundedRectangle(cornerRadius: PDRadius.card, style: .continuous)
                         .strokeBorder(Color.pd.accentWarm, lineWidth: 2)
                 }

@@ -578,7 +578,11 @@ final class AppModel {
         // The phone's brain, which is Apple's model or this same LlamaEngine.
         // The server below is built on `engine` alone, so other devices are
         // only ever served a downloaded brain.
+        #if DEBUG && targetEnvironment(simulator)
+        let phoneBrain = PhoneBrain(downloaded: engine, cloud: CloudUITestSupport.makeEngine())
+        #else
         let phoneBrain = PhoneBrain(downloaded: engine)
+        #endif
         self.phoneBrain = phoneBrain
         self.brainChoice = BrainChoice.load()
         self.builtInAvailability = Self.rememberedBuiltInAvailability()
@@ -784,6 +788,8 @@ final class AppModel {
             reminders: reminderToolsEnabled,
             health: healthToolsEnabled
         )
+        await phoneBrain.cloud.updateAbilities(calendar: calendarToolsEnabled, reminders: reminderToolsEnabled, health: healthToolsEnabled)
+        if brainChoice == .privateCloudCompute { await refreshCloudStatus(reconcile: false) }
         // A chosen download that is on the phone is put in charge without
         // asking Apple's model anything: that answer cannot change the
         // outcome, and its first read took seconds on the simulator. Every
@@ -843,7 +849,9 @@ final class AppModel {
             // Apple Intelligence may have been switched on in Settings, or
             // Apple's model may have finished arriving, while the app was away
             // — and a question may be waiting for exactly that.
-            if await refreshBuiltInAvailability() { await applyEffectiveBrain() }
+            let builtInChanged = await refreshBuiltInAvailability()
+            let cloudChanged = brainChoice == .privateCloudCompute ? await refreshCloudStatus(reconcile: false) : false
+            if builtInChanged || cloudChanged { await applyEffectiveBrain() }
             // After the model is back, and not before: a prompt task swept
             // first would find nothing resident and file a `.noModelLoaded` run
             // against a phone that had the weights on disk the whole time.
@@ -915,6 +923,13 @@ final class AppModel {
     /// What the user chose, as they chose it; `nil` until they have. Read
     /// `effectiveBrain` for what is answering today. See `BrainChoice`.
     var brainChoice: BrainChoice?
+
+    /// A late readiness read must never win over a newer user selection.
+    @ObservationIgnored var brainChoiceIntent = UUID()
+    @ObservationIgnored var cloudStatusRead = UUID()
+    /// Never persist cloud readiness: the signature, device, account quota or
+    /// region can change. Only the explicit choice persists across launches.
+    var cloudStatus: AppleCloudStatus = .unavailable
 
     /// Whether Apple's model can answer on this phone. Read off the main
     /// thread at launch and on every return to the app — the first read on

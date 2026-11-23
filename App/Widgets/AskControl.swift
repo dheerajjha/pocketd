@@ -18,6 +18,6 @@ struct AskPocketdControl: ControlWidget {
             }
         }
         .displayName("Ask Pocketd")
-        .description("Ask your on-device assistant from anywhere.")
+        .description("Open a Pocketd conversation from anywhere.")
     }
 }

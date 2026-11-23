@@ -451,7 +451,7 @@ private func searchMessage(for error: any Error) -> String {
     if let error = error as? URLError {
         switch error.code {
         case .notConnectedToInternet, .networkConnectionLost:
-            return "This iPhone is offline. Searching needs the internet; running a brain doesn't."
+            return "This iPhone is offline. Searching needs the internet; your downloaded brains still work."
         case .timedOut:
             return "Hugging Face took too long to answer. Try again."
         default:

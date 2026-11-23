@@ -43,6 +43,9 @@ struct AskView: View {
             .padding(.bottom, PDSpacing.xs)
         }
         .pdCanvas()
+        .task(id: model.isUsingPrivateCloudCompute) {
+            if model.isUsingPrivateCloudCompute { await model.watchCloudStatus() }
+        }
         .task {
             #if DEBUG
             // Every card shape on screen at once, without waiting on a brain

@@ -19,6 +19,7 @@ struct IntroTests {
     private func plan(
         chosen: BrainChoice? = nil,
         builtIn: BuiltInBrainAvailability = .available,
+        cloud: AppleCloudStatus = .unavailable,
         installed: [ModelRecord] = [],
         arriving: [ModelRecord] = [],
         recommendation: ModelRecord?? = .none
@@ -26,6 +27,7 @@ struct IntroTests {
         Intro.BrainPlan.make(
             chosen: chosen,
             builtIn: builtIn,
+            cloud: cloud,
             installed: installed,
             arriving: arriving,
             recommendation: recommendation ?? qwen
@@ -48,7 +50,7 @@ struct IntroTests {
 
     // MARK: First run
 
-    @Test("Built-in ready: both options, built-in recommended and selected")
+    @Test("Built-in ready: both local options, built-in recommended and selected")
     func firstRunWithAppleIntelligence() {
         let plan = plan()
         #expect(plan.layout == .choice)
@@ -56,7 +58,7 @@ struct IntroTests {
         #expect(plan.download == .offer(qwen))
         #expect(plan.inUse == nil)
         #expect(plan.recommended == .builtIn)
-        #expect(plan.preselected == .builtIn)
+        #expect(plan.selection(forDraft: nil) == .builtIn)
         #expect(plan.action(for: .builtIn) == .useBuiltIn)
         #expect(plan.action(for: .download) == .download(qwen))
         #expect(plan.primaryTitle(for: .download) == "Download and continue")
@@ -83,7 +85,8 @@ struct IntroTests {
         #expect(plan.preselected == .download)
         #expect(plan.recommended == .download)
         #expect(plan.action(for: .download) == .download(qwen))
-        #expect(plan.action(for: .builtIn) == .nothing)
+        #expect(plan.action(for: .builtIn) == nil)
+        #expect(plan.primaryTitle(for: plan.selection(forDraft: nil)) == "Download and continue")
     }
 
     @Test("Nothing to offer: said once, Continue carries on")
@@ -101,6 +104,95 @@ struct IntroTests {
         #expect(plan.layout == .choice)
         #expect(plan.download == nil)
         #expect(plan.preselected == .builtIn)
+        #expect(plan.action(for: .builtIn) == .useBuiltIn)
+    }
+
+    // MARK: Explicit cloud selection
+
+    @Test("A cloud-capable phone defaults to local; cloud requires a different row to be tapped",
+          arguments: [AppleCloudStatus.available, .approachingLimit])
+    func firstRunWithCloud(_ cloud: AppleCloudStatus) {
+        let fresh = plan(cloud: cloud)
+        #expect(fresh.layout == .choice)
+        #expect(fresh.recommended == .builtIn)
+        #expect(fresh.selection(forDraft: nil) == .builtIn)
+        #expect(fresh.action(for: fresh.selection(forDraft: nil)) == .useBuiltIn)
+        #expect(fresh.action(for: .privateCloudCompute) == .usePrivateCloudCompute)
+        #expect(fresh.action(for: .download) == .download(qwen))
+
+        let localDownload = plan(builtIn: .notEligible, cloud: cloud)
+        #expect(localDownload.recommended == .download)
+        #expect(localDownload.selection(forDraft: nil) == .download)
+        #expect(localDownload.action(for: localDownload.selection(forDraft: nil)) == .download(qwen))
+
+        let cloudAlone = plan(builtIn: .notEligible, cloud: cloud, recommendation: .some(nil))
+        #expect(cloudAlone.layout == .choice)
+        #expect(cloudAlone.recommended == nil)
+        #expect(cloudAlone.selection(forDraft: nil) == nil)
+        #expect(cloudAlone.action(for: nil) == nil)
+    }
+
+    @Test("An interrupted intro can restore a highlight without authorizing cloud processing")
+    func restoreDraftThenConfirmedChoice() throws {
+        let suite = "pocketd.intro.test.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        defaults.set(Intro.BrainPlan.Option.privateCloudCompute.rawValue, forKey: Intro.BrainPlan.draftKey)
+        let draft = defaults.string(forKey: Intro.BrainPlan.draftKey).flatMap(Intro.BrainPlan.Option.init(rawValue:))
+        let before = plan(chosen: BrainChoice.load(from: defaults), cloud: .available)
+        #expect(before.selection(forDraft: draft) == .privateCloudCompute)
+        #expect(before.inUse == nil)
+        #expect(BrainChoice.load(from: defaults) == nil)
+        #expect(before.action(for: draft) == .usePrivateCloudCompute)
+
+        BrainChoice.privateCloudCompute.save(to: defaults)
+        defaults.removeObject(forKey: Intro.BrainPlan.draftKey)
+        let after = plan(chosen: BrainChoice.load(from: defaults), cloud: .available)
+        #expect(after.selection(forDraft: nil) == .privateCloudCompute)
+        #expect(after.action(for: .privateCloudCompute) == .nothing)
+        #expect(after.action(for: .builtIn) == .useBuiltIn)
+    }
+
+    @Test("A prior cloud tap cannot apply if eligibility or the daily allowance changes before Continue",
+          arguments: [AppleCloudStatus.unavailable, .notReady, .limitReached(reset: nil)])
+    func staleCloudTap(_ statusAtTap: AppleCloudStatus) {
+        let displayed = plan(chosen: .builtIn, cloud: .available).selection(forDraft: .privateCloudCompute)
+        #expect(displayed == .privateCloudCompute)
+        let now = plan(chosen: .builtIn, cloud: statusAtTap)
+        #expect(now.selection(forDraft: displayed) == nil)
+        #expect(now.action(for: displayed) == nil)
+        #expect(now.action(for: .builtIn) == .nothing)
+
+        // Conversely a vanished local row never turns into a confirmation of cloud.
+        let lostLocal = plan(chosen: .privateCloudCompute, builtIn: .notEligible, cloud: .available)
+        #expect(lostLocal.selection(forDraft: .builtIn) == nil)
+        #expect(lostLocal.action(for: .builtIn) == nil)
+    }
+
+    @Test("A temporary block preserves a saved cloud choice but cannot enroll a new person",
+          arguments: [AppleCloudStatus.notReady, .limitReached(reset: nil)])
+    func cloudSavedButBlocked(_ cloud: AppleCloudStatus) {
+        let saved = plan(chosen: .privateCloudCompute, cloud: cloud, installed: [qwen])
+        #expect(saved.selection(forDraft: nil) == .privateCloudCompute)
+        #expect(saved.recommended == nil)
+        #expect(saved.action(for: .privateCloudCompute) == .nothing)
+        #expect(saved.action(for: .builtIn) == .useBuiltIn)
+        #expect(saved.action(for: .download) == .useDownloaded(id: qwen.id))
+
+        let fresh = plan(builtIn: .notEligible, cloud: cloud, recommendation: .some(nil))
+        #expect(fresh.selection(forDraft: .privateCloudCompute) == nil)
+        #expect(fresh.action(for: .privateCloudCompute) == nil)
+        #expect(fresh.action(for: nil) == .nothing) // no usable options; setup can finish
+    }
+
+    @Test("Unsupported hardware never offers even a restored cloud choice")
+    func restoredOnUnsupportedPhone() {
+        let restored = plan(chosen: .privateCloudCompute, builtIn: .notEligible, cloud: .unavailable)
+        #expect(restored.layout == .downloadOnly)
+        #expect(restored.preselected == .download)
+        #expect(restored.action(for: .privateCloudCompute) == nil)
+        #expect(restored.action(for: .download) == .download(qwen))
     }
 
     // MARK: Back, and never fetching twice
@@ -131,6 +223,7 @@ struct IntroTests {
         let plan = plan(chosen: .downloaded(id: qwen.id), builtIn: .notEligible)
         #expect(plan.download == .offer(qwen))
         #expect(plan.inUse == nil)
+        #expect(plan.preselected == .download)
         #expect(plan.action(for: .download) == .download(qwen))
     }
 
@@ -314,14 +407,15 @@ struct IntroTests {
         typealias C = Intro.Copy
         return [
             C.meetTitle, C.meetLine, C.usageCounts, C.getStarted,
-            C.brainTitle, C.brainLine, C.recommended, C.downloadTitle, C.downloadWorksAnywhere,
+            C.brainTitle, C.brainLine, C.brainLineWithCloud, C.pausedCloudLine, C.localProcessing,
+            C.recommended, C.downloadTitle, C.downloadWorksAnywhere,
             C.gettingBrainTitle, C.gettingBrainLine, C.hasBrainTitle, C.hasBrainLine, C.onPhoneDetail,
             C.downloadInBackground, C.mobileData(size: "1.1 GB"),
             C.nothingFitsTitle, C.nothingFitsLine, C.builtInGettingReady, C.ready,
-            C.connectTitle, C.connectLine,
+            C.connectTitle, C.connectLine, C.connectCloudLine,
             C.morningTitle, C.morningLine, C.exampleLabel, C.exampleFallback, C.morningPrimer,
             C.setItUp, C.notNow,
-            C.allSetTitle, C.allSetLine, C.nameQuestion, C.namePlaceholder, C.openPocketd,
+            C.allSetTitle, C.allSetLine, C.nameQuestion, C.nameUseWithCloud, C.namePlaceholder, C.openPocketd,
         ]
         + C.promises.map(\.text)
         + [Ability.calendar, .reminders, .health].map(C.sourceDetail(for:))

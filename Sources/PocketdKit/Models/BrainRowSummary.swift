@@ -21,21 +21,35 @@ public struct BrainRowSummary: Sendable, Equatable {
     /// because the row is the way to the fix.
     public static let cannotReadYourDay = "Can't read your day — switch?"
 
+    /// A live allowance is about Apple’s service. If the chosen brain did
+    /// not actually start, don't use "Ready" as the phone's status.
+    public static func cloudDetail(_ cloud: AppleCloudStatus, brain: BrainStatus) -> String {
+        if cloud.canChoose, case let .failed(reason) = brain { return reason }
+        if cloud == .available, brain == .loading { return "Getting ready" }
+        return cloud.statusLine
+    }
+
     /// - Parameters:
     ///   - status: `AppModel.brainStatus`.
-    ///   - usingBuiltIn: whether the brain answering the phone is Apple's.
+    ///   - usingBuiltIn: whether the brain answering the phone is Apple's on-device brain.
     ///   - builtInAvailability: Apple's model on this phone, for its line.
     ///   - downloadName: the download answering, loading, arriving or waiting
     ///     on disk, by its display name.
     ///   - waitingReadsYourDay: for a download on disk and not in memory,
     ///     whether it reads the day (it loads by itself when needed).
+    ///   - selectedCloud: Apple's live status only when the person chose cloud
+    ///     processing. A local download held for the server doesn't outrank it.
     public static func make(
         status: BrainStatus,
         usingBuiltIn: Bool,
         builtInAvailability: BuiltInBrainAvailability,
         downloadName: String?,
-        waitingReadsYourDay: Bool = true
+        waitingReadsYourDay: Bool = true,
+        selectedCloud: AppleCloudStatus? = nil
     ) -> BrainRowSummary {
+        if let selectedCloud, selectedCloud != .unavailable {
+            return BrainRowSummary(title: AppleCloudStatus.title, detail: cloudDetail(selectedCloud, brain: status))
+        }
         if usingBuiltIn {
             return BrainRowSummary(
                 title: BuiltInBrainOffer.title,

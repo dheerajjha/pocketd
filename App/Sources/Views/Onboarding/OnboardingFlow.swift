@@ -8,8 +8,8 @@ import UserNotifications
 ///
 /// 1. **Meet Pocketd** — what it is, three promises, and the one sentence
 ///    about anonymous usage counts.
-/// 2. **Choose how Pocketd thinks** — built into iPhone, or a private
-///    download; the recommended one is already selected.
+/// 2. **Choose how Pocketd thinks** — pick an option available on this phone,
+///    then Continue to use it.
 /// 3. **Connect your day** — Calendar, Reminders and Health, each optional,
 ///    each asked from its own row.
 /// 4. **Get your day every morning** — a time and a switch, or "Not now".
@@ -24,9 +24,6 @@ import UserNotifications
 /// a Continue that never waits on anything), and whatever was skipped is
 /// offered again in context by Today's Off tiles. A replay from You has a Close
 /// on every screen, because somebody looking again has nothing to finish.
-///
-/// A complete run is nine taps of Pocketd's own, plus whatever iOS's sheets
-/// ask and the name.
 ///
 /// The screens are `Intro.Screen` rather than an `Int`, so that inserting one
 /// is a compiler error in the one switch below rather than an off-by-one in
@@ -50,7 +47,9 @@ struct OnboardingFlow: View {
     // it also destroys that screen's own `@State` on the way out. A choice kept
     // on the screen that made it is silently reverted by Back and Next, so
     // anything somebody chose or typed belongs to the flow.
-    @State private var brainSelection: Intro.BrainPlan.Option?
+    // A tap alone only highlights a row, even if the intro is interrupted and
+    // relaunched. Only Continue writes the brain that actually answers.
+    @AppStorage(Intro.BrainPlan.draftKey) private var brainDraft: String?
     @State private var briefTime = RoutineTemplate.morningBrief.defaultTime
     @State private var briefWeekdaysOnly = true
     @State private var name = ""
@@ -109,6 +108,7 @@ struct OnboardingFlow: View {
         HStack(spacing: PDSpacing.m) {
             if index > 0 {
                 CircleIconButton(symbol: "chevron.left", label: "Back") { back() }
+                    .accessibilityIdentifier("intro.back")
             }
             ProgressStripe(fraction: Double(index + 1) / Double(Self.order.count))
                 .accessibilityLabel("Step \(index + 1) of \(Self.order.count)")
@@ -142,7 +142,10 @@ struct OnboardingFlow: View {
         case .meet:
             OnboardingMeetStep(onContinue: advance)
         case .brain:
-            OnboardingBrainStep(selection: $brainSelection, onContinue: advance)
+            OnboardingBrainStep(selection: Binding(
+                get: { brainDraft.flatMap(Intro.BrainPlan.Option.init(rawValue:)) },
+                set: { brainDraft = $0?.rawValue }
+            ), onContinue: { if screen == .brain { advance() } })
         case .connect:
             OnboardingConnectStep(onContinue: advance)
         case .everyMorning:
@@ -174,6 +177,7 @@ struct OnboardingFlow: View {
 
     /// Closes a replay where it was opened, under You.
     private func close() {
+        brainDraft = nil
         model.leaveIntroReplay()
         finish(.you)
     }
@@ -182,6 +186,7 @@ struct OnboardingFlow: View {
     /// event, flips the flag and lands on Today.
     private func open() {
         Haptics.success()
+        brainDraft = nil
         model.finishIntro(name: name)
         finish(.today)
     }

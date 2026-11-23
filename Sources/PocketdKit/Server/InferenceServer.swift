@@ -218,7 +218,10 @@ public actor InferenceServer {
 
     // MARK: - Shared request plumbing
 
-    func models() async -> [ModelRecord] { await modelsProvider() }
+    func models() async -> [ModelRecord] {
+        // The phone's selection is never an offer to spend its Apple cloud quota from the LAN.
+        await modelsProvider().filter { !BrainChoice(residentID: $0.id).isAppleManaged }
+    }
 
     func currentEngine() -> any InferenceEngine { engine }
 

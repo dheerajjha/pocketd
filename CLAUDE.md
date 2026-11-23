@@ -30,6 +30,9 @@ generated from `project.yml` by XcodeGen) adds llama.cpp through LocalLLMClient 
 - An interrupted scheduled prompt stays due. A cancelled stream can end without throwing, even after emitting words; neither that prefix nor an empty result is a completed run.
 - Releasing the Ask mic ends audio input. Only the final result for that dictation may automatically send its draft. If finalization fails or times out, keep the words editable instead.
 
+## Apple Private Cloud Compute
+- Only an explicit phone selection may send a request to PCC. Preserve the local defaults, a separate cloud model ID, and downloaded-only LAN serving. Recheck the signed build, Apple's actual readiness, and the per-user quota rather than guessing from the device name or a previous launch. See `docs/apple-private-cloud-compute.md` for device and signing verification.
+
 ## Upload-time rule
 App Intent, App Shortcut and Control strings must not name Apple products (iPhone, iPad, Apple Watch, Siri). Nothing
 fails locally; Apple rejects the build during processing (ITMS-90626). Before an upload, `grep -i` the built app's

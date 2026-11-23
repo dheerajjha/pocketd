@@ -7,7 +7,7 @@ import UserNotifications
 /// Every decision is `Intro`'s, in the Kit, where it is tested; this file only
 /// gathers the inputs from the app's state and calls the one door each action
 /// already has — `connect(_:from:)` for a source, `useBuiltInBrain()` /
-/// `useDownloadedBrain(id:)` / `download(_:)` for the brain,
+/// `usePrivateCloudCompute()` / `useDownloadedBrain(id:)` / `download(_:)` for the brain,
 /// `setUpMorningBrief(at:weekdaysOnly:)` for the routine. Nothing here keeps a
 /// second copy of where anything stands, which is what lets Back and a replayed
 /// intro show the phone as it is rather than as somebody last tapped it.
@@ -30,6 +30,7 @@ extension AppModel {
         return Intro.BrainPlan.make(
             chosen: chosen,
             builtIn: IntroOverride.builtIn ?? builtInAvailability,
+            cloud: cloudStatus,
             installed: installed,
             arriving: transfers.values
                 .filter(\.isActive)
@@ -39,40 +40,41 @@ extension AppModel {
         )
     }
 
-    /// Does what Continue on the brain screen means, without holding the intro
-    /// up: a download arrives in the background and a downloaded brain loads in
-    /// the background, so the caller moves on as soon as this returns.
-    func applyIntroBrain(_ action: Intro.BrainPlan.Action) {
+    /// Validate the option the person saw at the tap. A newly unavailable
+    /// row means stay on the screen, not advance with a different choice.
+    func applyIntroBrain(_ selection: Intro.BrainPlan.Option?) async -> Bool {
+        guard !Task.isCancelled, let action = introBrainPlan.action(for: selection) else { return false }
         switch action {
         case .nothing:
-            return
+            if selection == .privateCloudCompute, cloudStatus.canChoose, loadedModelID != ModelRecord.privateCloudComputeID {
+                return await usePrivateCloudCompute()
+            }
+            // Confirming an existing local choice also supersedes an older
+            // cloud tap that may still be checking the allowance.
+            if selection == .builtIn || selection == .download { brainChoiceIntent = UUID() }
+            return true
         case .useBuiltIn:
-            Task { await useBuiltInBrain() }
+            await useBuiltInBrain()
+        case .usePrivateCloudCompute:
+            return await usePrivateCloudCompute()
         case let .useDownloaded(id):
             if installed.contains(where: { $0.id == id }) {
-                Task { await useDownloadedBrain(id: id) }
+                await useDownloadedBrain(id: id)
             } else {
-                // Already on its way: the choice is all there is to record.
                 chooseIntroDownload(id)
             }
         case let .download(record):
             chooseIntroDownload(record.id)
             download(record)
         }
+        return true
     }
 
-    /// Records a download as the phone's brain before it has landed.
-    ///
-    /// `useDownloadedBrain(id:)` needs the file on the phone, and the intro
-    /// starts the download a second before it moves on — so without this the
-    /// choice of "Private download" on a phone with Apple Intelligence was
-    /// recorded nowhere. Recorded here, `effectiveBrain` stays on Apple's model
-    /// until the file arrives (the phone can answer meanwhile) and picks the
-    /// download up from then on. Putting it in charge the moment it lands is
-    /// asked of `download(_:)` (hand-off to A3).
+    /// A chosen download takes over when it arrives. While it downloads, an
+    /// on-device brain may stand in, but a cloud brain just deselected must
+    /// stop receiving requests before the person connects another source.
     func chooseIntroDownload(_ id: String) {
-        brainChoice = .downloaded(id: id)
-        brainChoice?.save()
+        selectPendingDownload(id)
     }
 
     /// The live transfer for a row on the brain screen, for its percentage.
@@ -162,7 +164,12 @@ extension AppModel {
 
     /// Whether Pocketd can answer yet, as the last screen's one line.
     var introReadiness: Intro.Readiness {
-        .of(brainStatus, downloadStopped: introStoppedDownload != nil)
+        if isUsingPrivateCloudCompute {
+            if cloudStatus.canChoose, case let .failed(reason) = brainStatus { return .failed(reason: reason) }
+            if brainStatus == .loading { return .gettingReady(minutes: nil) }
+            return .privateCloudCompute(cloudStatus)
+        }
+        return .of(brainStatus, downloadStopped: introStoppedDownload != nil)
     }
 
     /// A download for the phone's brain that stopped part-way, so the last

@@ -140,8 +140,8 @@ extension AppModel {
     /// means none is in memory yet; the first request loads the first
     /// download on the phone (`resolveModel`).
     var servedModelID: String? {
-        if let id = downloadedResidentID { return id }
-        guard let id = loadedModelID, id != ModelRecord.builtInID else { return nil }
+        if let id = downloadedResidentID, !BrainChoice(residentID: id).isAppleManaged { return id }
+        guard let id = loadedModelID, !BrainChoice(residentID: id).isAppleManaged else { return nil }
         return id
     }
 

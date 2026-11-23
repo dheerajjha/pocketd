@@ -2,14 +2,12 @@ import PocketdKit
 import SwiftUI
 import UIKit
 
-/// Brain: how Pocketd thinks, as one choice between two good options.
+/// Brain: where Pocketd answers for this phone.
 ///
-/// Built into iPhone — Apple Intelligence, nothing to download — and a private
-/// download that works on any iPhone. One card each, one button each, and the
-/// one in use says so. This page used to be eight brains in four sections with
-/// amber warnings on most of them, and three different recommendations; now
-/// the recommendation is one (`BrainRecommendation`), it always reads the day,
-/// and everything else is one tap further down under More brains.
+/// Built into iPhone and private downloads answer locally. Apple's separate
+/// cloud option is offered only on eligible phones. One card each, one button
+/// each, and the current choice says so. The one recommended download reads
+/// the day; the rest of the catalogue is under More brains.
 ///
 /// Loading is not a step anybody takes. Choosing a brain puts it in memory;
 /// the app lets it go and brings it back on its own. There is no Unload here
@@ -18,12 +16,19 @@ struct BrainView: View {
     @Environment(AppModel.self) private var model
     @Environment(Navigator.self) private var navigator
     @Environment(\.openURL) private var openURL
+    @State private var choosingCloud: Task<Void, Never>?
 
     var body: some View {
         YouDetailScreen(
             title: "Brain",
-            subtitle: "Pocketd thinks on this iPhone. Nothing you ask leaves it."
+            subtitle: model.cloudStatus.isListed ? Intro.Copy.brainLineWithCloud
+                : (model.isUsingPrivateCloudCompute ? Intro.Copy.pausedCloudLine : Intro.Copy.brainLine)
         ) {
+            if model.isUsingPrivateCloudCompute, model.cloudStatus == .notReady {
+                // A saved preference, not an offer to use an unlisted service.
+                BrainCard(identifier: "brain.savedCloud", symbol: "icloud", title: "Current choice",
+                          detail: model.cloudStatus.statusLine, accessory: .selected("Selected"))
+            }
             if let current = otherDownloadInUse {
                 inUseCard(current)
             }
@@ -31,6 +36,7 @@ struct BrainView: View {
                 builtInCard
             }
             downloadCard
+            if model.cloudStatus.isListed { cloudCard }
             builtInNote
             PDCard(padding: PDSpacing.m) {
                 NavRow(symbol: "square.stack", title: "More brains") {
@@ -38,23 +44,66 @@ struct BrainView: View {
                 }
             }
         }
+        .task { await model.watchCloudStatus() }
+        .onDisappear { choosingCloud?.cancel() }
     }
 
     // MARK: - Built into iPhone
 
     private var builtInCard: some View {
         let offer = model.builtInOffer
-        let inUse = model.isUsingBuiltInBrain
+        let inUse = model.isUsingBuiltInBrain && choosingCloud == nil
+            && (model.brainChoice != .privateCloudCompute || model.loadedModelID == ModelRecord.builtInID)
         return BrainCard(
+            identifier: "brain.builtIn",
             symbol: "sparkles",
             title: BuiltInBrainOffer.title,
             detail: offer.detail ?? BuiltInBrainOffer.readyDetail,
+            note: model.cloudStatus.isListed ? Intro.Copy.localProcessing : nil,
             accessory: inUse
-                ? .inUse
+                ? .selected("In use")
                 : .action("Use this", symbol: BrainCardAccessory.useSymbol) {
                     Task { await model.useBuiltInBrain() }
                 }
         )
+    }
+
+    // MARK: - Apple Private Cloud Compute
+
+    private var cloudCard: some View {
+        BrainCard(
+            identifier: "brain.cloud",
+            symbol: "icloud",
+            title: AppleCloudStatus.title,
+            detail: AppleCloudStatus.detail,
+            note: model.isUsingPrivateCloudCompute
+                ? BrainRowSummary.cloudDetail(model.cloudStatus, brain: model.brainStatus) : model.cloudStatus.statusLine,
+            accessory: cloudAccessory
+        ) {
+            if choosingCloud == nil, model.isUsingPrivateCloudCompute, model.cloudStatus.canChoose,
+               case .failed = model.brainStatus {
+                PillButton(title: "Try again", symbol: "arrow.clockwise", action: chooseCloud)
+                    .accessibilityIdentifier("brain.cloud.use")
+            }
+        }
+    }
+
+    private var cloudAccessory: BrainCardAccessory {
+        if choosingCloud != nil { return .status("Checking availability…") }
+        if model.brainChoice == .privateCloudCompute {
+            let answering = model.cloudStatus.canChoose && model.loadedModelID == ModelRecord.privateCloudComputeID
+            return .selected(answering ? "In use" : "Selected")
+        }
+        guard model.cloudStatus.canChoose else { return .none }
+        return .action("Use this", symbol: BrainCardAccessory.useSymbol, chooseCloud)
+    }
+
+    private func chooseCloud() {
+        guard choosingCloud == nil, model.cloudStatus.isListed, model.cloudStatus.canChoose else { return }
+        choosingCloud = Task {
+            await model.usePrivateCloudCompute()
+            choosingCloud = nil
+        }
     }
 
     /// The one quiet line for a phone that could run Apple's model but cannot
@@ -100,6 +149,7 @@ struct BrainView: View {
     private var downloadCard: some View {
         if let record = downloadSubject {
             BrainCard(
+                identifier: "brain.download",
                 symbol: "arrow.down.circle",
                 title: "Private download",
                 detail: "\(downloadPromise) · \(pdBytes(record.totalDownloadBytes))",
@@ -112,9 +162,11 @@ struct BrainView: View {
             // Nothing that reads the day fits this phone. Said once, plainly;
             // a chat-only brain is never offered as the consolation.
             BrainCard(
+                identifier: "brain.download",
                 symbol: "arrow.down.circle",
                 title: "Private download",
-                detail: "None of Pocketd's brains fit on this iPhone yet.",
+                detail: model.cloudStatus.isListed
+                    ? "None of the private downloads fit on this iPhone yet." : "None of Pocketd's brains fit on this iPhone yet.",
                 accessory: .none
             )
         }
@@ -133,15 +185,23 @@ struct BrainView: View {
     /// "Works on any iPhone, even with Apple Intelligence off" only where
     /// Apple Intelligence is the other card; otherwise the plain promise.
     private var downloadPromise: String {
-        model.builtInOffer.isListed
+        if model.cloudStatus.isListed { return "Runs on this iPhone, even without internet" }
+        return model.builtInOffer.isListed
             ? "Works on any iPhone, even with Apple Intelligence off"
             : "Downloads once, then works with no signal"
     }
 
     private func accessory(for record: ModelRecord) -> BrainCardAccessory {
-        let inUse = !model.isUsingBuiltInBrain && model.effectiveBrain == .downloaded(id: record.id)
+        let inUse = model.isUsingDownload(record.id) && choosingCloud == nil
         if model.loadingModelID == record.id { return .status("Getting ready") }
-        if let transfer = model.transfer(for: record.id), transfer.isActive || transfer.state == .stopping { return .none }
+        if let transfer = model.transfer(for: record.id), transfer.isActive || transfer.state == .stopping {
+            if transfer.isActive, model.brainChoice == .privateCloudCompute || choosingCloud != nil {
+                return .action("Use this download", symbol: BrainCardAccessory.useSymbol) {
+                    model.selectPendingDownload(record.id)
+                }
+            }
+            return .none
+        }
         if model.isUnavailable(record) {
             return .action("Check again", symbol: "arrow.clockwise") {
                 Task { await model.checkModelAvailability() }
@@ -152,7 +212,7 @@ struct BrainView: View {
                 Task { await model.useDownloadedBrain(id: record.id) }
             }
         }
-        if inUse { return .inUse }
+        if inUse { return .selected("In use") }
         if model.isInstalled(record) {
             return .action("Use this", symbol: BrainCardAccessory.useSymbol) {
                 Task { await model.useDownloadedBrain(id: record.id) }
@@ -162,11 +222,21 @@ struct BrainView: View {
         case .waiting?, .running?, .stopping?:
             return .none
         case .paused?:
-            return .action("Resume", symbol: "arrow.down") { model.download(record) }
+            return downloadAction("Resume", symbol: "arrow.down", record: record)
         case .failed?:
-            return .action("Try again", symbol: "arrow.clockwise") { model.download(record) }
+            return downloadAction("Try again", symbol: "arrow.clockwise", record: record)
         case .finished?, nil:
-            return .action("Download", symbol: "arrow.down") { model.download(record) }
+            return downloadAction("Download", symbol: "arrow.down", record: record)
+        }
+    }
+
+    private func downloadAction(_ title: String, symbol: String, record: ModelRecord) -> BrainCardAccessory {
+        guard model.brainChoice == .privateCloudCompute || choosingCloud != nil else {
+            return .action(title, symbol: symbol) { model.download(record) }
+        }
+        return .action("\(title) and use", symbol: symbol) {
+            model.selectPendingDownload(record.id)
+            model.download(record)
         }
     }
 
@@ -182,6 +252,7 @@ struct BrainView: View {
 
     private func inUseCard(_ record: ModelRecord) -> some View {
         BrainCard(
+            identifier: "brain.currentDownload",
             symbol: "bubble.left",
             title: record.displayName,
             detail: readsYourDay(record) ? DayAccess.readsYourDay.label : "Chat only — can't read your day",
@@ -224,8 +295,8 @@ enum BrainCardAccessory {
     /// use" for the one that is.
     static let useSymbol = "arrow.left.arrow.right"
 
-    /// ✓ In use. Words, not a button: there is nothing to do to it.
-    case inUse
+    /// ✓ In use, or Selected when a saved choice cannot answer right now.
+    case selected(String)
     /// A state with no action — "Getting ready".
     case status(String)
     /// One small pill.
@@ -241,6 +312,7 @@ enum BrainCardAccessory {
 /// it, "Apple Intelligence · Nothing to download · Ready" broke into three
 /// short lines on a phone held at the default text size.
 struct BrainCard<Footer: View>: View {
+    let identifier: String
     let symbol: String
     let title: String
     let detail: String
@@ -260,11 +332,13 @@ struct BrainCard<Footer: View>: View {
                             .font(Font.pd.secondary)
                             .foregroundStyle(Color.pd.inkSecondary)
                             .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("\(identifier).detail")
                         if let note {
                             Text(pdSeparated(note))
                                 .font(Font.pd.footnote)
                                 .foregroundStyle(Color.pd.inkSecondary)
                                 .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("\(identifier).status")
                         }
                     }
                     if case let .action(title, symbol, action) = accessory {
@@ -272,6 +346,8 @@ struct BrainCard<Footer: View>: View {
                             // The pill's 44pt target overhangs the words
                             // above rather than pushing the card taller.
                             .padding(.vertical, -PDSpacing.xxs)
+                            .accessibilityLabel("\(title), \(self.title)")
+                            .accessibilityIdentifier("\(identifier).use")
                     }
                     footer
                 }
@@ -279,6 +355,7 @@ struct BrainCard<Footer: View>: View {
             }
         }
         .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("\(identifier).card")
     }
 
     private var titleText: some View {
@@ -287,22 +364,26 @@ struct BrainCard<Footer: View>: View {
             .foregroundStyle(Color.pd.ink)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("\(identifier).title")
     }
 
     @ViewBuilder
     private var titleLine: some View {
         switch accessory {
-        case .inUse:
+        case let .selected(label):
             AccessoryRowLayout(spacing: PDSpacing.s) {
                 titleText
                 HStack(spacing: PDSpacing.xxs) {
                     Image(systemName: "checkmark")
                         .font(Font.pd.tick)
-                    Text("In use")
+                        .accessibilityHidden(true)
+                    Text(label)
                         .font(Font.pd.secondary.weight(.semibold))
                 }
                 .foregroundStyle(Color.pd.positive)
                 .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isSelected)
+                .accessibilityIdentifier("\(identifier).selection")
             }
         case let .status(text):
             AccessoryRowLayout(spacing: PDSpacing.s) {
@@ -318,8 +399,8 @@ struct BrainCard<Footer: View>: View {
 }
 
 extension BrainCard where Footer == EmptyView {
-    init(symbol: String, title: String, detail: String, note: String? = nil, accessory: BrainCardAccessory) {
-        self.init(symbol: symbol, title: title, detail: detail, note: note, accessory: accessory) { EmptyView() }
+    init(identifier: String, symbol: String, title: String, detail: String, note: String? = nil, accessory: BrainCardAccessory) {
+        self.init(identifier: identifier, symbol: symbol, title: title, detail: detail, note: note, accessory: accessory) { EmptyView() }
     }
 }
 
@@ -453,7 +534,7 @@ struct MoreBrainsView: View {
     var body: some View {
         YouDetailScreen(
             title: "More brains",
-            subtitle: "Every one runs on this iPhone. Only some can read your day."
+            subtitle: "Every download runs on this iPhone. Only some can read your day."
         ) {
             if !installed.isEmpty {
                 YouSection("On this iPhone") {
@@ -537,7 +618,7 @@ struct MoreBrainsView: View {
     }
 
     private func isInUse(_ record: ModelRecord) -> Bool {
-        !model.isUsingBuiltInBrain && model.effectiveBrain == .downloaded(id: record.id)
+        model.isUsingDownload(record.id)
     }
 }
 
@@ -591,7 +672,7 @@ private struct BrainRow: View {
     }
 
     private var isInUse: Bool {
-        !model.isUsingBuiltInBrain && model.effectiveBrain == .downloaded(id: record.id)
+        model.isUsingDownload(record.id)
     }
 
     @ViewBuilder

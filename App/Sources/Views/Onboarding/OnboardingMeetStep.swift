@@ -6,11 +6,9 @@ import SwiftUI
 /// The orb rather than an icon tile because there is no ability to name yet —
 /// what is being introduced is the thing itself.
 ///
-/// The usage-counts sentence is here, on the first screen, because the old
-/// welcome said "No cloud" while anonymous usage counts were on by default and
-/// mentioned nowhere in the intro. Both are true; saying only one of them was
-/// the problem. It is one grey line, it says what is never counted, and it
-/// says where the switch is.
+/// The promises qualify what stays local before the person has chosen a
+/// brain. The usage-counts sentence says what is never counted and where
+/// the switch is.
 struct OnboardingMeetStep: View {
     var onContinue: () -> Void
 
@@ -19,7 +17,7 @@ struct OnboardingMeetStep: View {
             ornament: .orb,
             headline: Intro.Copy.meetTitle,
             secondary: Intro.Copy.meetLine,
-            primary: .init(Intro.Copy.getStarted, run: onContinue)
+            primary: .init(Intro.Copy.getStarted, identifier: "intro.meet.start", run: onContinue)
         ) {
             VStack(alignment: .leading, spacing: PDSpacing.xl) {
                 VStack(alignment: .leading, spacing: PDSpacing.m) {

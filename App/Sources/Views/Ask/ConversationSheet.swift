@@ -14,10 +14,8 @@ import SwiftUI
 /// onto, and the native bar is what gives ✕, History and New chat their
 /// system look and their 44pt targets.
 ///
-/// No title in the bar. Three controls and the conversation under them say
-/// what this is; a word in the middle of the bar would be the one thing on the
-/// screen nobody reads. The title is kept for VoiceOver, which announces the
-/// screen it lands on.
+/// Local conversations need no visible title. For a cloud conversation, the
+/// bar names the provider at the point where the person actually sends words.
 ///
 /// Toasts are its own. The app's toast layer is drawn on the root view, which
 /// is underneath this sheet — an "Undo" raised from in here would appear behind
@@ -51,6 +49,16 @@ struct ConversationSheet: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
+        if model.isUsingPrivateCloudCompute {
+            ToolbarItem(placement: .principal) {
+                Text(AppleCloudStatus.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.pd.inkSecondary)
+                    .multilineTextAlignment(.center)
+                    .accessibilityLabel("Selected: Apple Private Cloud Compute")
+                    .accessibilityIdentifier("ask.cloud.provider")
+            }
+        }
         ToolbarItem(placement: .topBarLeading) {
             Button {
                 dismiss()

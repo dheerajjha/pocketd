@@ -41,8 +41,8 @@ struct OnboardingConnectStep: View {
         OnboardingPage(
             ornament: .icon("calendar"),
             headline: Intro.Copy.connectTitle,
-            secondary: Intro.Copy.connectLine,
-            primary: .init("Continue", run: onContinue)
+            secondary: model.isUsingPrivateCloudCompute ? Intro.Copy.connectCloudLine : Intro.Copy.connectLine,
+            primary: .init("Continue", identifier: "intro.connect.continue", run: onContinue)
         ) {
             PDCard(warm: true) {
                 VStack(alignment: .leading, spacing: PDSpacing.m) {

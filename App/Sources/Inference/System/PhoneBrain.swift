@@ -2,6 +2,17 @@ import Foundation
 import LocalLLMClient
 import PocketdKit
 
+/// The same Apple tool surface on two explicitly different transports. The LAN
+/// listener is intentionally constructed with `LlamaEngine`, never this protocol.
+protocol PhoneAppleInference: InferenceEngine {
+    var toolGate: ToolGate.Decision { get async }
+    var capabilityPlan: CapabilityBudget.Plan? { get async }
+    func generate(_ request: GenerationRequest, toolsAllowed: Bool) async throws -> AsyncThrowingStream<GenerationEvent, any Error>
+    func updateAbilities(calendar: Bool, reminders: Bool, health: Bool) async
+}
+
+extension SystemModelEngine: PhoneAppleInference {}
+
 /// The engine behind the phone's own questions — the conversation, the brief
 /// and routines — which is whichever brain the user chose.
 ///
@@ -9,21 +20,23 @@ import PocketdKit
 /// call sites are not all in one place: `ScheduleRunner` is handed its engine
 /// once, at launch, and the chat and the brief each hold their own reference.
 /// Forwarding here means a switch takes effect for all three at the same
-/// moment, and none of them has to learn that two brains exist.
+/// moment, and none of them reimplements provider dispatch.
 ///
 /// The server is not on this path. `InferenceServer` keeps `LlamaEngine`, so
 /// other devices are served a downloaded brain whatever the phone is using, and
-/// Apple's model never answers a network request.
+/// neither Apple model answers a LAN request.
 actor PhoneBrain: InferenceEngine {
     /// The downloaded brain. Also the server's engine, and the built-in
     /// brain's fallback for a question Apple's model declines.
     let downloaded: LlamaEngine
     let builtIn: SystemModelEngine
+    let cloud: any PhoneAppleInference
     private var choice: BrainChoice?
 
-    init(downloaded: LlamaEngine, builtIn: SystemModelEngine? = nil) {
+    init(downloaded: LlamaEngine, builtIn: SystemModelEngine? = nil, cloud: (any PhoneAppleInference)? = nil) {
         self.downloaded = downloaded
         self.builtIn = builtIn ?? SystemModelEngine(fallback: downloaded)
+        self.cloud = cloud ?? SystemModelEngine(privateCloudCompute: true)
     }
 
     nonisolated var backendName: String { "phone" }
@@ -37,14 +50,24 @@ actor PhoneBrain: InferenceEngine {
     /// brain the user just left would arrive under the one they picked.
     func use(_ newChoice: BrainChoice?) async {
         guard newChoice != choice else { return }
-        if choice == .builtIn { await builtIn.unload() }
+        let previous = appleEngine
         choice = newChoice
+        if let previous { await previous.unload() }
     }
 
     var current: BrainChoice? { choice }
 
+    private var appleEngine: (any PhoneAppleInference)? {
+        switch choice {
+        case .builtIn: builtIn
+        case .privateCloudCompute: cloud
+        case .downloaded, nil: nil
+        }
+    }
+
     private var active: any InferenceEngine {
-        choice == .builtIn ? builtIn : downloaded
+        if let appleEngine { return appleEngine }
+        return downloaded
     }
 
     // MARK: - InferenceEngine
@@ -62,7 +85,10 @@ actor PhoneBrain: InferenceEngine {
     /// Routed by the record, not by the choice: the built-in record can only
     /// ever be loaded into Apple's engine, and a GGUF only into llama.cpp.
     func load(model: ModelRecord) async throws {
-        if model.isBuiltInBrain {
+        if model.id == ModelRecord.privateCloudComputeID {
+            guard choice == .privateCloudCompute else { throw InferenceError.noModelLoaded }
+            try await cloud.load(model: model)
+        } else if model.isBuiltInBrain {
             try await builtIn.load(model: model)
         } else {
             try await downloaded.load(model: model)
@@ -72,7 +98,8 @@ actor PhoneBrain: InferenceEngine {
     func unload() async { await active.unload() }
 
     func generate(_ request: GenerationRequest) async throws -> AsyncThrowingStream<GenerationEvent, any Error> {
-        try await active.generate(request)
+        try BrainChoice.validateCloudRoute(request, selected: choice)
+        return try await active.generate(request)
     }
 
     /// For a prompt that already carries every fact it may use — the daily
@@ -81,7 +108,8 @@ actor PhoneBrain: InferenceEngine {
     /// answers exactly as `generate` would, because its tools are frozen into
     /// the loaded client and cannot be withheld per request.
     func generateWithoutTools(_ request: GenerationRequest) async throws -> AsyncThrowingStream<GenerationEvent, any Error> {
-        if choice == .builtIn { return try await builtIn.generate(request, toolsAllowed: false) }
+        try BrainChoice.validateCloudRoute(request, selected: choice)
+        if let appleEngine { return try await appleEngine.generate(request, toolsAllowed: false) }
         return try await downloaded.generate(request)
     }
 
@@ -91,7 +119,8 @@ actor PhoneBrain: InferenceEngine {
     /// can; a downloaded one says what its chat template allows.
     var toolGate: ToolGate.Decision {
         get async {
-            choice == .builtIn ? await builtIn.toolGate : await downloaded.toolGate
+            if let appleEngine { return await appleEngine.toolGate }
+            return await downloaded.toolGate
         }
     }
 
@@ -99,7 +128,8 @@ actor PhoneBrain: InferenceEngine {
     /// brain trims history instead.
     var capabilityPlan: CapabilityBudget.Plan? {
         get async {
-            choice == .builtIn ? await builtIn.capabilityPlan : await downloaded.capabilityPlan
+            if let appleEngine { return await appleEngine.capabilityPlan }
+            return await downloaded.capabilityPlan
         }
     }
 
@@ -117,5 +147,6 @@ actor PhoneBrain: InferenceEngine {
     ) async {
         await downloaded.updateTools(registrations, exempt: exempt)
         await builtIn.updateAbilities(calendar: calendar, reminders: reminders, health: health)
+        await cloud.updateAbilities(calendar: calendar, reminders: reminders, health: health)
     }
 }

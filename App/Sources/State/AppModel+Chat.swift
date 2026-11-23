@@ -181,9 +181,10 @@ extension AppModel {
             origin: .onDeviceChat
         )
 
-        // `phoneBrain`, not `engine`: the brain the user chose answers — Apple's
-        // model or a download — while the server keeps the download.
+        // The origin identifies the phone UI, not where inference happens.
+        // PhoneBrain dispatches only to the provider the person selected.
         generationTask = Task { [phoneBrain] in
+            var observedCloudLimit = false
             do {
                 // One review-worthy answer per generation. See the guard below.
                 var notedUsefulAnswer = false
@@ -247,6 +248,12 @@ extension AppModel {
                     self.discardEmptyReply()
                     self.generationError = Self.replyFailureSentence(for: error)
                     self.replyFailureRemedy = Self.remedy(for: error)
+                    if case let InferenceError.privateCloud(.limitReached(reset), _) = error,
+                       self.isUsingPrivateCloudCompute {
+                        self.cloudStatusRead = UUID()
+                        self.cloudStatus = .limitReached(reset: reset)
+                        observedCloudLimit = true
+                    }
                 }
             }
             await MainActor.run {
@@ -268,8 +275,10 @@ extension AppModel {
                     // nothing; never keep an empty assistant turn in history.
                     if cleaned.isEmpty, reply.cards.isEmpty {
                         self.discardEmptyReply()
-                        self.generationError = "That one didn't work."
-                        self.replyFailureRemedy = .tryAgain
+                        if self.generationError == nil {
+                            self.generationError = "That one didn't work."
+                            self.replyFailureRemedy = .tryAgain
+                        }
                     }
                 }
                 self.inFlightTarget = nil
@@ -282,6 +291,9 @@ extension AppModel {
                 // the one being left, and writing it again here is how a
                 // conversation acquires the tail of another one's answer.
                 if self.currentConversationID == target.conversation { self.scheduleConversationSave() }
+            }
+            if !observedCloudLimit, request.modelID == ModelRecord.privateCloudComputeID, self.isUsingPrivateCloudCompute {
+                await self.refreshCloudStatus()
             }
         }
     }
@@ -373,12 +385,24 @@ extension AppModel {
         case tryAgain
         /// Apple Intelligence is off, and only Settings turns it on.
         case openSettings
+        case chooseLocalBrain
     }
 
     /// The remedy for an error, from its type — never from its words. `nil`
     /// where there is nothing to do but read the sentence: Pocketd declining,
     /// a language it does not speak yet, a picture it cannot see.
     static func remedy(for error: any Error) -> ReplyRemedy? {
+        if case let InferenceError.privateCloud(failure, afterWrite) = error {
+            // An interrupted explanation does not roll back a change already
+            // made on the phone. Don't offer a button that repeats that write.
+            guard !afterWrite else { return nil }
+            switch failure {
+            case .unavailable, .notReady, .network, .serviceUnavailable, .limitReached, .unsupportedLanguage: return .chooseLocalBrain
+            case .busy, .timedOut, .other: return .tryAgain
+            case .refused: return nil
+            case .contextExceeded: return .startNewChat
+            }
+        }
         if let failure = error as? InferenceError, failure.suggestsNewConversation { return .startNewChat }
         if let sentence = SystemModelFailure.screenSentence(for: error) {
             switch sentence {
@@ -523,7 +547,8 @@ extension AppModel {
             replyFailure: generationError,
             offer: pendingToolOffer,
             questionWaiting: waitingQuestion != nil,
-            dismissed: dismissedNotices
+            dismissed: dismissedNotices,
+            selectedCloud: isUsingPrivateCloudCompute ? cloudStatus : nil
         ))
     }
 
@@ -536,7 +561,7 @@ extension AppModel {
             switch notice {
             case .replyFailed: generationError = nil
             case .offer: pendingToolOffer = nil
-            case .gettingReady, .chooseBrain, .brainFailed, .cannotReadYourDay: break
+            case .gettingReady, .chooseBrain, .brainFailed, .cannotReadYourDay, .appleCloud: break
             }
         case let .forever(key):
             dismissedNotices.insert(key)
@@ -556,8 +581,22 @@ extension AppModel {
     func askWhenReady(_ question: String) {
         let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        waitingQuestion = text
         if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { draft = text }
+        if isUsingPrivateCloudCompute && !cloudStatus.canChoose {
+            // Don't queue a request to send hours later when a quota resets.
+            // A new tap can, however, discover that the limit has already lifted.
+            waitingQuestion = nil
+            let conversation = currentConversationID, intent = brainChoiceIntent
+            Task {
+                await refreshCloudStatus()
+                guard intent == brainChoiceIntent, isUsingPrivateCloudCompute, cloudStatus.canChoose,
+                      brainStatus.canAnswer, !isGenerating, currentConversationID == conversation,
+                      draft.trimmingCharacters(in: .whitespacesAndNewlines) == text else { return }
+                send()
+            }
+            return
+        }
+        waitingQuestion = text
         loadDownloadedBrainIfIdle()
     }
 

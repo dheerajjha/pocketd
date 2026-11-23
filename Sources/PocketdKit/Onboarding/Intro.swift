@@ -20,7 +20,7 @@ public extension Intro {
     enum Screen: Int, Sendable, CaseIterable, Comparable {
         /// "Meet Pocketd." The promises and the usage-counts sentence.
         case meet
-        /// "Choose how Pocketd thinks." Built into iPhone or a private download.
+        /// "Choose how Pocketd thinks." The processing choices this phone can offer.
         case brain
         /// "Connect your day." Calendar, Reminders and Health on one screen.
         case connect
@@ -57,11 +57,8 @@ public extension Intro {
     /// What the brain screen offers, which row starts selected, and what
     /// Continue does.
     ///
-    /// Both brains are first-class choices (the owner's decision): Apple's,
-    /// built into the phone, and a private download that works on any iPhone.
-    /// Where the built-in one is ready it is recommended and pre-selected;
-    /// where it cannot be offered the screen is the download alone, never a
-    /// disabled row.
+    /// Recommendations and fresh defaults are local. Only a person's own
+    /// choice can put a check beside the row that sends a request off the phone.
     ///
     /// The rule this type exists for is the walkthrough's re-download: going
     /// Back to this screen after the download had finished offered "Download
@@ -69,11 +66,14 @@ public extension Intro {
     /// second time. A brain that is on the phone is described as on the phone
     /// — whatever was recommended — and Continue never fetches it.
     struct BrainPlan: Sendable, Equatable {
+        public static let draftKey = "pd.intro.brainDraft"
 
-        /// The two rows.
-        public enum Option: Sendable, Hashable {
+        /// The raw value can remember a highlighted row across an interrupted
+        /// intro. It is not the persisted `BrainChoice` used for inference.
+        public enum Option: String, Sendable, Hashable {
             case builtIn
             case download
+            case privateCloudCompute
         }
 
         /// The built-in row, when the phone can offer it.
@@ -103,7 +103,7 @@ public extension Intro {
 
         /// How the screen is laid out.
         public enum Layout: Sendable, Equatable {
-            /// The built-in row, with the download beside it when one fits.
+            /// A built-in or cloud option, with the download when one fits.
             case choice
             /// No built-in option on this phone: the one recommended download.
             case downloadOnly
@@ -116,6 +116,7 @@ public extension Intro {
             /// The selected brain is the one already set. Move on.
             case nothing
             case useBuiltIn
+            case usePrivateCloudCompute
             /// Choose a download that is here or already arriving.
             case useDownloaded(id: String)
             /// Fetch it, and choose it.
@@ -124,6 +125,7 @@ public extension Intro {
 
         public var builtIn: BuiltIn?
         public var download: Download?
+        public var cloud: AppleCloudStatus
         /// The brain already set on this phone. Its row says "Ready" (or how
         /// far it has got), and choosing it again does nothing.
         public var inUse: Option?
@@ -131,11 +133,12 @@ public extension Intro {
         /// brain in use is the answer, and a badge on the other row would read
         /// as advice to switch.
         public var recommended: Option?
-        /// The row selected when the screen opens.
+        /// An existing choice, otherwise the local default. Cloud is never a
+        /// fresh default, even when it is the only brain that can answer.
         public var preselected: Option?
 
         public var layout: Layout {
-            if builtIn != nil { return .choice }
+            if builtIn != nil || cloud.isListed || inUse == .privateCloudCompute { return .choice }
             if download != nil { return .downloadOnly }
             return .nothingFits
         }
@@ -154,6 +157,7 @@ public extension Intro {
         public static func make(
             chosen: BrainChoice?,
             builtIn availability: BuiltInBrainAvailability,
+            cloud: AppleCloudStatus = .unavailable,
             installed: [ModelRecord],
             arriving: [ModelRecord],
             recommendation: ModelRecord?
@@ -196,6 +200,10 @@ public extension Intro {
             switch chosen {
             case .builtIn:
                 inUse = builtIn == nil ? nil : .builtIn
+            case .privateCloudCompute:
+                // A daily limit or temporary outage doesn't revoke a choice.
+                // An unsupported runtime still must not advertise this row.
+                inUse = cloud.isListed || cloud == .notReady ? .privateCloudCompute : nil
             case let .downloaded(id):
                 switch download {
                 case let .onPhone(record)?, let .arriving(record)?:
@@ -214,26 +222,49 @@ public extension Intro {
                 switch BrainChoice.recommended(builtIn: availability, download: recommendation) {
                 case .builtIn?: recommended = builtIn == nil ? nil : .builtIn
                 case .downloaded?: recommended = download == nil ? nil : .download
-                case nil: recommended = nil
+                case .privateCloudCompute?, nil: recommended = nil
                 }
             }
 
-            let fallback: Option? = download != nil ? .download : (builtIn != nil ? .builtIn : nil)
+            let chosenDownload = chosenID != nil && chosenID == download?.record.id
+            let localFallback: Option? = download != nil ? .download : (builtIn != nil ? .builtIn : nil)
             return BrainPlan(
                 builtIn: builtIn,
                 download: download,
+                cloud: cloud,
                 inUse: inUse,
                 recommended: recommended,
-                preselected: inUse ?? recommended ?? fallback
+                preselected: inUse ?? (chosenDownload ? .download : nil) ?? recommended ?? localFallback
             )
         }
 
-        /// What Continue does with `selection`.
-        public func action(for selection: Option?) -> Action {
-            guard let selection, selection != inUse else { return .nothing }
+        public func canSelect(_ option: Option) -> Bool {
+            switch option {
+            case .builtIn: builtIn != nil
+            case .download: download != nil
+            case .privateCloudCompute: (cloud.isListed && cloud.canChoose) || inUse == .privateCloudCompute
+            }
+        }
+
+        public func selection(forDraft draft: Option?) -> Option? {
+            // If the tapped row vanishes, leave the choice open. In particular
+            // never substitute a saved cloud choice for a tap on a local row.
+            (draft ?? preselected).flatMap { canSelect($0) ? $0 : nil }
+        }
+
+        /// `nil` keeps the person on this screen; `.nothing` moves on without
+        /// changing their brain. An unavailable choice and a saved one differ.
+        public func action(for selection: Option?) -> Action? {
+            guard let selection else {
+                return builtIn == nil && download == nil && !canSelect(.privateCloudCompute) ? .nothing : nil
+            }
+            guard canSelect(selection) else { return nil }
+            if selection == inUse { return .nothing }
             switch selection {
             case .builtIn:
-                return builtIn == nil ? .nothing : .useBuiltIn
+                return .useBuiltIn
+            case .privateCloudCompute:
+                return .usePrivateCloudCompute
             case .download:
                 switch download {
                 case let .offer(record)?:
@@ -241,13 +272,14 @@ public extension Intro {
                 case let .arriving(record)?, let .onPhone(record)?:
                     return .useDownloaded(id: record.id)
                 case nil:
-                    return .nothing
+                    return nil
                 }
             }
         }
 
         public func primaryTitle(for selection: Option?) -> String {
             if case .download = action(for: selection) { return Intro.Copy.downloadAndContinue }
+            if selection == nil, layout == .downloadOnly, case .offer? = download { return Intro.Copy.downloadAndContinue }
             return "Continue"
         }
     }
@@ -423,6 +455,8 @@ public extension Intro {
     /// the brain is ready" in the sentence under it. One state, one sentence.
     enum Readiness: Sendable, Equatable {
         case ready
+        /// Apple's current allowance/readiness, not the state of a local download.
+        case privateCloudCompute(AppleCloudStatus)
         /// Downloading, loading, or Apple still fetching its model. Minutes
         /// once the rate is known.
         case gettingReady(minutes: Int?)
@@ -462,6 +496,8 @@ public extension Intro {
             switch self {
             case .ready:
                 return "Ready."
+            case let .privateCloudCompute(status):
+                return status == .notReady ? status.statusLine : "\(AppleCloudStatus.title) · \(status.statusLine)"
             case let .gettingReady(minutes?) where minutes > 1:
                 return "Pocketd is getting ready — about \(minutes) minutes."
             case .gettingReady(minutes: 1?):
@@ -500,9 +536,9 @@ public extension Intro {
         public static let meetTitle = "Meet Pocketd."
         public static let meetLine = "Your day, from your phone, in plain words."
         public static let promises: [(symbol: String, text: String)] = [
-            ("person.crop.circle.badge.xmark", "No account"),
-            ("lock", "Nothing you ask leaves this phone"),
-            ("wifi.slash", "Works with no signal"),
+            ("person.crop.circle.badge.xmark", "No Pocketd account"),
+            ("lock", "Local answers keep your questions on this iPhone"),
+            ("wifi.slash", "Local brains work with no signal"),
         ]
         public static let usageCounts =
             "Pocketd counts anonymous app usage — never what you ask or read. You can turn it off in You › Privacy."
@@ -510,7 +546,10 @@ public extension Intro {
 
         // 2 · Choose how Pocketd thinks
         public static let brainTitle = "Choose how Pocketd thinks."
-        public static let brainLine = "Pocketd thinks on this iPhone. Nothing you ask leaves it."
+        public static let brainLine = "With a local brain, what you ask stays on this iPhone."
+        public static let brainLineWithCloud = "Local brains answer on this iPhone. Chats, briefs and routines in Apple’s private cloud share a daily allowance per person."
+        public static let pausedCloudLine = "You can keep your current choice for later or switch to a local brain."
+        public static let localProcessing = "Runs on this iPhone."
         public static let recommended = "Recommended"
         public static let downloadTitle = "Private download"
         public static let downloadWorksAnywhere = "Works even with Apple Intelligence off."
@@ -518,7 +557,7 @@ public extension Intro {
         public static let getBrainTitle = "Get Pocketd ready."
         public static let downloadAndContinue = "Download and continue"
         public static let gettingBrainLine =
-            "Pocketd thinks on this iPhone, so its brain is one download. After that, Pocketd works with no signal."
+            "This brain runs on this iPhone. Download it once, and Pocketd works with no signal."
         public static let hasBrainTitle = "Pocketd has its brain."
         public static let hasBrainLine = "The brain is already on this iPhone, so there is nothing to download."
         public static let onPhoneDetail = "On this iPhone, nothing to download"
@@ -537,6 +576,8 @@ public extension Intro {
         public static let connectTitle = "Connect your day."
         public static let connectLine =
             "Pocketd reads these on this iPhone to write your brief and answer you. Each one is optional."
+        public static let connectCloudLine =
+            "With Apple Private Cloud Compute selected, Apple may process details from these sources for chats, briefs and routines. Each connection is optional."
 
         // 4 · Get your day every morning
         public static let morningTitle = "Get your day every morning."
@@ -553,6 +594,7 @@ public extension Intro {
         public static let allSetTitle = "You're all set."
         public static let allSetLine = "Anything you skipped is one tap away on Today."
         public static let nameQuestion = "What should Pocketd call you?"
+        public static let nameUseWithCloud = "If you enter a name, Apple may process it in its private cloud to write the greeting in your brief."
         public static let namePlaceholder = "Your first name"
         public static let openPocketd = "Open Pocketd"
 
