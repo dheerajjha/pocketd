@@ -86,12 +86,7 @@ struct MixpanelAnalytics: AnalyticsSink {
         // from the same vendor. The private option is already the default, so
         // the safe edit to this call is no edit.
 
-        // The one setting that could not be fixed by leaving a property off an
-        // event. Location is derived server-side from the IP the request
-        // arrives on, so it is not a super property that `properties(of:)`
-        // could strip on the way past: this line is the only place it can be
-        // declined at all, and the SDK's default is on.
-        instance.useIPAddressForGeoLocation = false
+        // Keep IP-based location estimates on (SDK default), per Ranju's 23 Nov 2026 decision.
     }()
 
     init() {
