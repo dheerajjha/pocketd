@@ -38,12 +38,17 @@ final class SystemToolRun: @unchecked Sendable {
     private weak var session: LanguageModelSession?
     private var calls = 0
     private var readsReturned = false
+    private let rejectDuplicateWrites: Bool
+    private var admittedWrites = Set<String>()
+    private var writeStarted = false
     private var wroteSomething = false
     private var stopped = false
 
-    init(origin: RequestOrigin, userText: String? = nil, emit: @escaping @Sendable (GenerationEvent) -> Void) {
+    init(origin: RequestOrigin, userText: String? = nil, rejectDuplicateWrites: Bool = false,
+         emit: @escaping @Sendable (GenerationEvent) -> Void) {
         self.origin = origin
         self.userText = userText
+        self.rejectDuplicateWrites = rejectDuplicateWrites
         self.emit = emit
     }
 
@@ -66,6 +71,10 @@ final class SystemToolRun: @unchecked Sendable {
     /// Whether this answer changed anything. Repeating a question that already
     /// filed a reminder is how the user ends up with two.
     var anyWriteMade: Bool { lock.withLock { wroteSomething } }
+
+    /// A disconnect can arrive while EventKit is still saving. The error must
+    /// not invite the user to repeat that change as if nothing had happened.
+    var anyWriteStarted: Bool { lock.withLock { writeStarted } }
 
     /// Which round of tool calls is running, from the session's transcript.
     ///
@@ -105,15 +114,24 @@ final class SystemToolRun: @unchecked Sendable {
     ) async -> String {
         let isWrite = change != nil
         let round = currentRound()
+        let json = Self.json(arguments)
         let verdict: SystemToolPolicy.Verdict = lock.withLock {
             calls += 1
-            return SystemToolPolicy.decide(
+            let verdict = SystemToolPolicy.decide(
                 change: change,
                 round: round,
                 callNumber: calls,
                 readsReturned: readsReturned,
                 stopped: stopped || Task.isCancelled
             )
+            // One cloud response may issue parallel calls in the same round.
+            // Claim each distinct write before either call can enter EventKit:
+            // two identical lookups for an existing reminder can both miss.
+            if verdict == .run, isWrite, rejectDuplicateWrites,
+               !admittedWrites.insert(name + ":" + json).inserted {
+                return .refuse("This change was already requested in this answer. Use the first call's result; do not repeat the change.")
+            }
+            return verdict
         }
         if case let .refuse(sentence) = verdict {
             DiagnosticLog.record(.failure(area: .tools, code: "fm.toolRefused.\(name)"))
@@ -123,7 +141,6 @@ final class SystemToolRun: @unchecked Sendable {
         // Announced before the work, as LlamaEngine does: the conversation
         // shows "checking…" until the next token arrives.
         emit(.toolCallStarted(name: name))
-        let json = Self.json(arguments)
         #if DEBUG
         // The model's words, exactly as it sent them. A reminder at the wrong
         // time is either what the model wrote or how the body read it, and
@@ -145,6 +162,12 @@ final class SystemToolRun: @unchecked Sendable {
         let userText = self.userText
         let data: [String: any Sendable]
         if isWrite {
+            let mayStart = lock.withLock {
+                guard !stopped, !Task.isCancelled else { return false }
+                writeStarted = true
+                return true
+            }
+            guard mayStart else { return SystemToolPolicy.stoppedRefusal }
             // A change is never abandoned part-way: EventKit may still save it
             // after a timeout said it had not happened, and an answer that
             // denies a reminder the list then shows is worse than a slow one.
@@ -211,20 +234,23 @@ final class SystemToolRun: @unchecked Sendable {
         _ deadline: Duration,
         _ operation: @escaping @Sendable () async -> T
     ) async -> T? {
-        let once = Once()
-        return await withCheckedContinuation { (continuation: CheckedContinuation<T?, Never>) in
-            let work = Task {
-                let value = await operation()
-                if once.claim() { continuation.resume(returning: value) }
-            }
-            Task {
-                try? await Task.sleep(for: deadline)
-                if once.claim() {
-                    continuation.resume(returning: nil)
-                    work.cancel()
-                }
-            }
+        guard !Task.isCancelled else { return nil }
+        let (result, reply) = AsyncStream<T>.makeStream(bufferingPolicy: .bufferingOldest(1))
+        let work = Task {
+            guard !Task.isCancelled else { return }
+            reply.yield(await operation())
+            reply.finish()
         }
+        let timer = Task {
+            try await Task.sleep(for: deadline)
+            reply.finish()
+        }
+        defer { reply.finish(); work.cancel(); timer.cancel() }
+        // A cancelled reader stops waiting immediately, even if an OS read is
+        // ignoring cancellation. Such a read cannot start another tool or send
+        // its result to a model after this stream has ended.
+        var iterator = result.makeAsyncIterator()
+        return await iterator.next()
     }
 
     /// The trimmed text, or nothing, so an empty field never reaches a body
@@ -243,20 +269,6 @@ final class SystemToolRun: @unchecked Sendable {
             case .health: SystemHealthTool(run: run)
             case .alarms, .timers: nil
             }
-        }
-    }
-}
-
-/// True for exactly one caller, for resuming a continuation exactly once.
-final class Once: @unchecked Sendable {
-    private let lock = NSLock()
-    private var claimed = false
-
-    func claim() -> Bool {
-        lock.withLock {
-            guard !claimed else { return false }
-            claimed = true
-            return true
         }
     }
 }

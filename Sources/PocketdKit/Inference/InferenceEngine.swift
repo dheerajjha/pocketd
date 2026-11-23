@@ -93,6 +93,7 @@ public enum InferenceError: Error, Sendable, Equatable {
     case contextExhausted
     case cancelled
     case backend(String)
+    case privateCloud(AppleCloudFailure, afterWrite: Bool = false)
 }
 
 /// One plain sentence per failure, for the person holding the phone.
@@ -122,6 +123,8 @@ extension InferenceError: LocalizedError {
             "This conversation got too long. Start a new chat to keep going."
         case .cancelled:
             "Stopped."
+        case let .privateCloud(failure, afterWrite):
+            failure.sentence(afterWrite: afterWrite)
         case let .backend(detail):
             // The built-in brain's failures are already written for the
             // screen, as a closed, tested set; anything else here is an
@@ -142,6 +145,7 @@ extension InferenceError: LocalizedError {
         case .contextExhausted: "prompt exceeds the context window"
         case .cancelled: "cancelled"
         case let .backend(detail): detail
+        case let .privateCloud(failure, _): failure.diagnosticCode
         }
     }
 

@@ -4,18 +4,16 @@ import PocketdKit
 import FoundationModels
 #endif
 
-/// `InferenceEngine` backed by Apple's on-device model — the brain the app calls
-/// "Built into iPhone" and the user knows as Apple Intelligence.
+/// `InferenceEngine` for one Apple brain: on-device by default, or Private
+/// Cloud Compute when explicitly selected. An instance never switches between them.
 ///
 /// It answers the phone's own questions only: the conversation, the daily brief
 /// and routines. The LAN server keeps serving a downloaded brain through
 /// `LlamaEngine`; Apple's model is not ours to lend to other devices, so a
 /// request with a network origin is refused here outright.
 ///
-/// Available as a type on every iOS this app supports, so `AppModel` can hold
-/// one unconditionally; everything that touches FoundationModels sits behind
-/// `#available(iOS 26.0, *)`, and on an older phone the engine simply reports
-/// `.notEligible` and never has a model resident.
+/// `AppModel` can hold this type on every supported iOS. On-device sessions
+/// require iOS 26; PCC sessions also require iOS 27 and a signed capability.
 ///
 /// Built to be indistinguishable from `LlamaEngine` to whoever reads the
 /// stream: tokens as `.token`, a tool announced with `.toolCallStarted` before
@@ -33,16 +31,19 @@ import FoundationModels
 ///   tool loop and will make a second round — measured, see
 ///   `SystemToolPolicy` — so the "no change after a lookup" property LlamaEngine
 ///   gets from its one-round loop is enforced per call instead.
-/// - **The window is 4,096 tokens** (read at runtime; Apple says it may grow),
-///   for instructions, schemas, history, tool output and answer together. The
-///   plan trims history to fit, with Apple's own count on iOS 26.4 and later.
+/// - The plan trims history to the selected model's window, with Apple's own
+///   count on-device where available, and PCC's reported size for cloud requests.
 /// - **Apple's model can decline** benign personal text — its filter trips on
 ///   diary words like "Kill the old server" (measured). After a lookup has
 ///   drawn its card, the card stands as the answer. Before anything was said
 ///   or changed, the same request goes to the downloaded brain if one is
-///   loaded (`setFallback`), and otherwise ends in one plain sentence.
+///   loaded (`setFallback`), and otherwise ends in one plain sentence. This
+///   recovery is on-device only. PCC errors end the request without a replay.
 actor SystemModelEngine: InferenceEngine {
-    nonisolated var backendName: String { "Apple Foundation Models" }
+    private let privateCloudCompute: Bool
+    nonisolated var backendName: String { privateCloudCompute ? AppleCloudStatus.title : "Apple Foundation Models" }
+    private nonisolated var modelID: String { privateCloudCompute ? ModelRecord.privateCloudComputeID : ModelRecord.builtInID }
+    private var cloudContextSize = ModelRecord.privateCloudCompute.contextLength
 
     /// Whether the phone chose this brain and it has been "loaded". Apple's
     /// model is the OS's to keep in memory, so this is a promise to answer, not
@@ -72,10 +73,11 @@ actor SystemModelEngine: InferenceEngine {
     /// Every answer handed out and not yet ended, so that unloading stops them.
     private var running: [UUID: Task<Void, Never>] = [:]
 
-    /// - Parameter fallback: The downloaded brain a declined question goes to;
-    ///   see `setFallback`.
-    init(fallback: (any InferenceEngine)? = nil) {
-        self.fallback = fallback
+    /// - Parameter fallback: The download a declined on-device question can
+    ///   use. Cloud requests have no fallback, even if one is supplied.
+    init(fallback: (any InferenceEngine)? = nil, privateCloudCompute: Bool = false) {
+        self.privateCloudCompute = privateCloudCompute
+        self.fallback = privateCloudCompute ? nil : fallback
     }
 
     // MARK: - Availability
@@ -155,7 +157,7 @@ actor SystemModelEngine: InferenceEngine {
     /// it reports a loaded model — loading 1–2 GB of weights to answer one
     /// question the user can simply re-ask is not a trade this makes for them.
     func setFallback(_ engine: (any InferenceEngine)?) {
-        fallback = engine
+        if !privateCloudCompute { fallback = engine }
     }
 
     /// Mirrors `LlamaEngine.toolGate`, which `AppModel` reads to decide
@@ -170,18 +172,35 @@ actor SystemModelEngine: InferenceEngine {
     // MARK: - Residency
 
     func loadedModel() -> ModelRecord? {
-        resident && Self.availability == .available ? .builtIn : nil
+        guard resident else { return nil }
+        if privateCloudCompute {
+            guard AppleCloudFailure(blocking: Self.cloudStatus) == nil else { return nil }
+            var record = ModelRecord.privateCloudCompute
+            record.contextLength = cloudContextSize
+            return record
+        }
+        return Self.availability == .available ? .builtIn : nil
     }
 
-    /// Takes the built-in record and nothing else.
+    /// Takes only the record belonging to this instance. Selecting PCC never
+    /// prewarms a session: a request is the first reason to contact it.
     ///
-    /// Succeeds while Apple Intelligence is off or still downloading: the
+    /// An on-device load succeeds while Apple Intelligence is off or downloading: the
     /// choice is kept and the engine starts answering the moment the model can,
     /// with each request in between failing in a sentence that says why. Only
     /// a phone that can never run it is refused, so a choice restored from a
     /// backup onto an older iPhone does not pretend to stick.
     func load(model: ModelRecord) async throws {
-        guard model.isBuiltInBrain else { throw InferenceError.modelNotFound(model.id) }
+        guard model.id == modelID else { throw InferenceError.modelNotFound(model.id) }
+        if privateCloudCompute {
+            if let failure = AppleCloudFailure(blocking: Self.cloudStatus) {
+                DiagnosticLog.record(.modelLoad(id: model.id, contextTokens: 0, outcome: .failed, milliseconds: 0))
+                throw InferenceError.privateCloud(failure)
+            }
+            resident = true
+            DiagnosticLog.record(.modelLoad(id: model.id, contextTokens: cloudContextSize, outcome: .ok, milliseconds: 0))
+            return
+        }
         let availability = Self.availability
         guard availability != .notEligible else {
             DiagnosticLog.record(.modelLoad(id: model.id, contextTokens: 0, outcome: .failed, milliseconds: 0))
@@ -208,17 +227,26 @@ actor SystemModelEngine: InferenceEngine {
         ))
     }
 
+    func interrupt() async {
+        cancelRequests()
+    }
+
     /// Stops whatever is being written, then forgets the choice. Nothing to
     /// free: the OS owns the model's memory.
     func unload() async {
-        for task in running.values { task.cancel() }
+        cancelRequests()
         resident = false
         warm = nil
+    }
+
+    private func cancelRequests() {
+        for task in running.values { task.cancel() }
     }
 
     // MARK: - The gate
 
     private func acquire(_ token: UUID) async throws {
+        try Task.checkCancellation()
         guard holder != nil else {
             holder = token
             return
@@ -238,22 +266,22 @@ actor SystemModelEngine: InferenceEngine {
         } onCancel: {
             Task { await self.abandon(token) }
         }
-        holder = token
     }
 
-    /// Idempotent, so both the run's `defer` and the stream's `onTermination`
-    /// can call it.
+    /// Reserve the slot for the resumed waiter before releasing the actor.
+    /// Otherwise a third request can acquire the apparently free slot first.
     private func release(_ token: UUID) {
         running[token] = nil
         guard holder == token else { return }
-        holder = nil
         while let next = waitOrder.first {
             waitOrder.removeFirst()
             if let continuation = waiters.removeValue(forKey: next) {
+                holder = next
                 continuation.resume()
                 return
             }
         }
+        holder = nil
     }
 
     private func abandon(_ token: UUID) {
@@ -277,6 +305,7 @@ actor SystemModelEngine: InferenceEngine {
         _ request: GenerationRequest,
         toolsAllowed: Bool
     ) async throws -> AsyncThrowingStream<GenerationEvent, any Error> {
+        try Task.checkCancellation()
         let (stream, continuation) = AsyncThrowingStream<GenerationEvent, any Error>.makeStream()
         let token = UUID()
         let task = Task { [weak self] in
@@ -288,9 +317,8 @@ actor SystemModelEngine: InferenceEngine {
         // terminates it, which lands here: the session's own stream ends the
         // moment its task is cancelled (measured: no throw, under a
         // millisecond), so Stop frees the engine at once.
-        continuation.onTermination = { [weak self] _ in
-            task.cancel()
-            Task { await self?.release(token) }
+        continuation.onTermination = { reason in
+            if case .cancelled = reason { task.cancel() }
         }
         return stream
     }
@@ -301,32 +329,43 @@ actor SystemModelEngine: InferenceEngine {
         token: UUID,
         continuation: AsyncThrowingStream<GenerationEvent, any Error>.Continuation
     ) async {
+        defer { release(token) }
+        // Never through the server. A stale local or wildcard request must
+        // not even touch PCC readiness when its caller switches brains.
+        if case .network = request.origin {
+            continuation.finish(throwing: InferenceError.modelNotFound(modelID))
+            return
+        }
+        if privateCloudCompute, request.modelID != modelID {
+            continuation.finish(throwing: InferenceError.modelMismatch(requested: request.modelID, loaded: modelID))
+            return
+        }
         do {
             try await acquire(token)
+            try Task.checkCancellation()
         } catch {
             continuation.finish(throwing: InferenceError.cancelled)
             return
         }
-        defer { release(token) }
 
-        // Never through the server. `InferenceServer` is built on LlamaEngine
-        // and cannot reach this, so this is the second lock on the same door.
-        if case .network = request.origin {
-            continuation.finish(throwing: InferenceError.modelNotFound(ModelRecord.builtInID))
-            return
-        }
         guard resident else {
-            continuation.finish(throwing: InferenceError.noModelLoaded)
+            if privateCloudCompute, let failure = AppleCloudFailure(blocking: Self.cloudStatus) {
+                continuation.finish(throwing: InferenceError.privateCloud(failure))
+            } else {
+                continuation.finish(throwing: InferenceError.noModelLoaded)
+            }
             return
         }
-        let availability = Self.availability
-        guard availability == .available else {
-            continuation.finish(throwing: SystemModelFailure.unavailable(availability))
-            return
-        }
-        guard request.modelID.isEmpty || request.modelID == ModelRecord.builtInID else {
-            continuation.finish(throwing: InferenceError.modelMismatch(requested: request.modelID, loaded: ModelRecord.builtInID))
-            return
+        if !privateCloudCompute {
+            let availability = Self.availability
+            guard availability == .available else {
+                continuation.finish(throwing: SystemModelFailure.unavailable(availability))
+                return
+            }
+            guard request.modelID.isEmpty || request.modelID == modelID else {
+                continuation.finish(throwing: InferenceError.modelMismatch(requested: request.modelID, loaded: modelID))
+                return
+            }
         }
         guard !request.messages.contains(where: { !$0.images.isEmpty }) else {
             continuation.finish(throwing: SystemModelFailure.pictures.error)
@@ -335,28 +374,49 @@ actor SystemModelEngine: InferenceEngine {
 
         #if canImport(FoundationModels)
         if #available(iOS 26.0, *) {
+            let model: AppleRequestModel
+            if privateCloudCompute {
+                guard #available(iOS 27.0, *) else {
+                    continuation.finish(throwing: InferenceError.privateCloud(.unavailable))
+                    return
+                }
+                do {
+                    model = try await AppleCloudTransport.prepare()
+                    cloudContextSize = model.budget.contextTokens
+                } catch let failure {
+                    if case let .privateCloud(reason, _) = failure {
+                        DiagnosticLog.record(.failure(area: .model, code: reason.diagnosticCode))
+                    }
+                    continuation.finish(throwing: failure)
+                    return
+                }
+            } else {
+                model = AppleRequestModel(onDevice: SystemLanguageModel.default)
+            }
             // A question about the user's own day is answered from reads made
             // here, never left to the model to look up or to remember: a few
             // turns into a conversation it stopped looking and made the day
             // up (QA S1-1). Changes, and everything else, keep the tool path.
             var abilities = enabled
-            #if DEBUG
+            #if DEBUG && targetEnvironment(simulator)
             // Under `-pocketd.demoHealth` Today shows the demo day's Health as
             // connected; the conversation reads the same day (`SystemReads`),
             // so it counts Health as on too, and the two agree in a capture.
             if DemoDay.isRequested { abilities.insert(.health) }
             #endif
             let outcome: SystemModelAnswer.Outcome
+            let answer = SystemModelAnswer(model: model)
             if toolsAllowed, let reads = SystemModelReads.plan(for: request, enabled: abilities) {
-                outcome = await SystemModelAnswer.answer(from: reads, for: request, into: continuation)
+                outcome = await answer.answer(from: reads, for: request, into: continuation)
             } else {
-                outcome = await SystemModelAnswer.write(request, enabled: toolsAllowed ? abilities : [], into: continuation)
+                outcome = await answer.write(request, enabled: toolsAllowed ? abilities : [], into: continuation)
             }
             guard case let .declined(failure) = outcome else { return }
-            if let fallback, await fallback.loadedModel() != nil {
-                await relay(request, to: fallback, into: continuation)
+            if !privateCloudCompute, let fallback, let record = await fallback.loadedModel(),
+               !record.isBuiltInBrain, record.id != ModelRecord.privateCloudComputeID, !Task.isCancelled {
+                await relay(request, to: fallback, modelID: record.id, into: continuation)
             } else {
-                continuation.finish(throwing: failure.error)
+                continuation.finish(throwing: Task.isCancelled ? InferenceError.cancelled : failure.error)
             }
             return
         }
@@ -372,11 +432,13 @@ actor SystemModelEngine: InferenceEngine {
     private func relay(
         _ request: GenerationRequest,
         to fallback: any InferenceEngine,
+        modelID: String,
         into continuation: AsyncThrowingStream<GenerationEvent, any Error>.Continuation
     ) async {
         var forwarded = request
-        // Empty means "whatever is resident", which is the brain being asked.
-        forwarded.modelID = ""
+        // Pin the checked download. A switch while awaiting generate must not
+        // turn a local fallback into implicit permission to use the cloud.
+        forwarded.modelID = modelID
         DiagnosticLog.record(.failure(area: .model, code: "fm.fallbackToDownloaded"))
         do {
             for try await event in try await fallback.generate(forwarded) {
@@ -396,7 +458,8 @@ actor SystemModelEngine: InferenceEngine {
 /// Everything that names a FoundationModels type, kept out of the actor so the
 /// actor's stored properties never have to.
 @available(iOS 26.0, *)
-enum SystemModelAnswer {
+struct SystemModelAnswer {
+    let model: AppleRequestModel
     typealias Continuation = AsyncThrowingStream<GenerationEvent, any Error>.Continuation
 
     enum Outcome {
@@ -408,7 +471,7 @@ enum SystemModelAnswer {
         case declined(SystemModelFailure)
     }
 
-    static func write(
+    fileprivate func write(
         _ request: GenerationRequest,
         enabled: Set<CapabilityGroup>,
         into continuation: Continuation
@@ -417,11 +480,9 @@ enum SystemModelAnswer {
         // Apple's filter trips unpredictably — the same question passed three
         // runs out of four on the simulator — so the probe proves the decline
         // path by asking for one, once, here.
-        if SystemModelProbe.takeForcedDecline() { return .declined(.guardrail) }
+        if !model.isCloud, SystemModelProbe.takeForcedDecline() { return .declined(.guardrail) }
         #endif
         let started = ContinuousClock.now
-        let model = SystemLanguageModel.default
-        let budget = SystemModelBudget(contextTokens: SystemModelEngine.contextTokens)
         // A change runs on its own: no replayed history to imitate, only the
         // tool its verb needs, and its words held back until a write has
         // actually run — see `SystemModelWrites`.
@@ -430,10 +491,11 @@ enum SystemModelAnswer {
 
         let plan: SystemModelPlan
         do {
-            plan = try await self.plan(for: request, enabled: enabled, budget: budget, model: model)
+            plan = try await Self.plan(for: request, enabled: enabled, budget: model.budget, model: model.onDevice)
         } catch {
             if (error as? InferenceError) == .contextExhausted {
-                DiagnosticLog.record(.failure(area: .model, code: SystemModelFailure.contextExceeded.diagnosticCode))
+                DiagnosticLog.record(.failure(area: .model, code: model.isCloud
+                    ? AppleCloudFailure.contextExceeded.diagnosticCode : SystemModelFailure.contextExceeded.diagnosticCode))
             }
             continuation.finish(throwing: error)
             return .done
@@ -449,7 +511,7 @@ enum SystemModelAnswer {
     /// is asked, with tools off and no history, to answer from those facts
     /// alone (`SystemModelReads.plan(answering:)`). See `SystemModelReads` for
     /// the fabrication this replaced.
-    static func answer(
+    fileprivate func answer(
         from reads: [SystemModelReads.Read],
         for request: GenerationRequest,
         into continuation: Continuation
@@ -457,7 +519,17 @@ enum SystemModelAnswer {
         let started = ContinuousClock.now
         var facts: [String] = []
         var drewCard = false
+        func factsPlan() -> SystemModelPlan {
+            SystemModelReads.plan(answering: request, facts: facts, reads: reads, budget: model.budget)
+        }
+        // Read-first plans have no history to trim. Reject an oversized cloud
+        // question before a read, then check its actual facts before sending.
+        if model.isCloud, !fitsReadPlan(factsPlan()) {
+            continuation.finish(throwing: InferenceError.contextExhausted)
+            return .done
+        }
         for read in reads {
+            if Task.isCancelled { break }
             guard let call = SystemReads.call(for: read) else {
                 if case let .switchedOff(group) = read { facts.append(SystemModelReads.switchedOffFact(group)) }
                 continue
@@ -470,10 +542,12 @@ enum SystemModelAnswer {
             guard let data = await SystemToolRun.withDeadline(SystemToolRun.readDeadline, {
                 await ToolContext.$origin.withValue(origin) { await body(origin) }
             }) else {
+                if Task.isCancelled { break }
                 DiagnosticLog.record(.toolCall(name: call.name, outcome: .failed, milliseconds: Int(Date().timeIntervalSince(readStarted) * 1000)))
                 facts.append("Nothing came back from the \(call.name) read in time, so say you couldn't check it just now.")
                 continue
             }
+            if Task.isCancelled { break }
             DiagnosticLog.record(.toolCall(
                 name: call.name,
                 outcome: SystemToolRun.outcome(of: data),
@@ -490,9 +564,17 @@ enum SystemModelAnswer {
             continuation.finish()
             return .done
         }
-        let budget = SystemModelBudget(contextTokens: SystemModelEngine.contextTokens)
-        let plan = SystemModelReads.plan(answering: request, facts: facts, reads: reads, budget: budget)
+        let plan = factsPlan()
+        if model.isCloud, !fitsReadPlan(plan) {
+            continuation.finish(throwing: InferenceError.contextExhausted)
+            return .done
+        }
         return await stream(plan, for: request, cardsAlreadyShown: drewCard, started: started, into: continuation)
+    }
+
+    private func fitsReadPlan(_ plan: SystemModelPlan) -> Bool {
+        ContextGuard.estimateTokens(plan.instructions) + ContextGuard.estimateTokens(plan.prompt)
+            + plan.responseTokens + model.budget.marginTokens <= model.budget.contextTokens
     }
 
     /// One session over one plan, streamed: the tool loop when the plan has
@@ -505,7 +587,7 @@ enum SystemModelAnswer {
     /// - Parameter screensChange: The turn asks for a change. Nothing the
     ///   model writes is shown until the turn is over, and then only if a
     ///   write tool actually ran (`SystemModelWrites.screen`).
-    static func stream(
+    private func stream(
         _ initialPlan: SystemModelPlan,
         for request: GenerationRequest,
         cardsAlreadyShown: Bool,
@@ -513,32 +595,68 @@ enum SystemModelAnswer {
         started: ContinuousClock.Instant,
         into continuation: Continuation
     ) async -> Outcome {
-        let model = SystemLanguageModel.default
         var plan = initialPlan
         var retried = false
         while true {
+            guard !Task.isCancelled else {
+                continuation.finish(throwing: InferenceError.cancelled)
+                return .done
+            }
+            // Gathering personal facts can take seconds. Don't dispatch if the
+            // service or its quota changed between preflight and this session.
+            if model.isCloud, let failure = AppleCloudFailure(blocking: SystemModelEngine.cloudStatus) {
+                continuation.finish(throwing: InferenceError.privateCloud(failure))
+                return .done
+            }
             let shown = CardsShown()
-            let run = SystemToolRun(origin: request.origin, userText: ToolContext.userText(of: request)) { event in
+            let run = SystemToolRun(origin: request.origin, userText: ToolContext.userText(of: request),
+                                    rejectDuplicateWrites: model.isCloud) { event in
                 if case let .answerCard(card) = event { shown.append(card) }
                 continuation.yield(event)
             }
             let tools = SystemToolRun.tools(for: plan.tools, run: run)
-            let session = LanguageModelSession(model: model, tools: tools, transcript: transcript(for: plan, tools: tools))
-            run.attach(session)
+            let binding = model.makeSession(tools, Self.transcript(for: plan, tools: tools))
+            run.attach(binding.session)
             var text = StreamedText(stops: request.options.stopSequences)
+            var measuredUsage: TokenUsage?
 
             do {
-                let stream = session.streamResponse(to: plan.prompt, options: options(for: request, plan: plan))
-                for try await snapshot in stream {
-                    if Task.isCancelled { break }
-                    if let delta = text.take(snapshot.content), !screensChange { continuation.yield(.token(delta)) }
-                    if text.halted { break }
-                }
+                try await withTaskCancellationHandler {
+                    try Task.checkCancellation()
+                    let stream = binding.session.streamResponse(to: plan.prompt, options: Self.options(for: request, plan: plan))
+                    #if DEBUG
+                    AppleCloudTransportProbe.didStartResponse?(binding.modelType)
+                    #endif
+                    for try await snapshot in stream {
+                        if Task.isCancelled { break }
+                        // PCC can produce a reasoning entry before its answer.
+                        // Only response content ever reaches a token or write screen.
+                        if model.isCloud, #available(iOS 27.0, *) {
+                            measuredUsage = TokenUsage(promptTokens: snapshot.usage.input.totalTokenCount,
+                                                       completionTokens: snapshot.usage.output.totalTokenCount)
+                            guard Self.isAnswerEntry(snapshot.transcriptEntries.last) else { continue }
+                        }
+                        if let delta = text.take(snapshot.content), !screensChange { continuation.yield(.token(delta)) }
+                        if text.halted { break }
+                    }
+                } onCancel: { run.stop() }
             } catch {
                 run.stop()
                 if Task.isCancelled || error is CancellationError {
-                    finish(.cancelled, text: &text, plan: plan, started: started, into: continuation,
-                           screening: screensChange ? (request, run.anyWriteMade) : nil)
+                    Self.finish(.cancelled, text: &text, plan: plan, started: started, into: continuation,
+                                usage: measuredUsage, screening: screensChange ? (request, run.anyWriteMade) : nil)
+                    return .done
+                }
+                if model.isCloud, #available(iOS 27.0, *) {
+                    // No retry, no fallback. Cards and any writes already made
+                    // are real even when their narration failed or was refused.
+                    let failure = AppleCloudTransport.inferenceError(for: error, afterWrite: run.anyWriteStarted)
+                    if case let .privateCloud(reason, _) = failure {
+                        DiagnosticLog.record(.failure(area: .model, code: reason.diagnosticCode))
+                    } else if failure == .contextExhausted {
+                        DiagnosticLog.record(.failure(area: .model, code: AppleCloudFailure.contextExceeded.diagnosticCode))
+                    }
+                    continuation.finish(throwing: failure)
                     return .done
                 }
                 let failure = SystemModelEngine.failure(for: error)
@@ -563,17 +681,17 @@ enum SystemModelAnswer {
                     // the card stands on its own, as it does when LlamaEngine's
                     // narration turns out to be nothing but an echo.
                     if cardsAlreadyShown || !shown.all.isEmpty {
-                        finish(.stop, text: &text, plan: plan, started: started, into: continuation,
+                        Self.finish(.stop, text: &text, plan: plan, started: started, into: continuation,
                                screening: screensChange ? (request, run.anyWriteMade) : nil)
                         return .done
                     }
-                    if text.sentNothing, !run.anyWriteMade {
+                    if text.sentNothing, !run.anyWriteStarted {
                         return .declined(failure)
                     }
                 }
                 DiagnosticLog.record(.generation(
-                    promptTokens: promptTokens(plan), outputTokens: estimateTokens(text.produced),
-                    milliseconds: elapsed(since: started),
+                    promptTokens: Self.promptTokens(plan), outputTokens: Self.estimateTokens(text.produced),
+                    milliseconds: Self.elapsed(since: started),
                     stop: failure == .contextExceeded ? .contextExhausted : .failed
                 ))
                 continuation.finish(throwing: failure.error)
@@ -587,12 +705,19 @@ enum SystemModelAnswer {
             } else if text.halted {
                 reason = .stop
             } else {
-                reason = estimateTokens(text.produced) >= plan.responseTokens ? .length : .stop
+                let output = measuredUsage?.completionTokens ?? Self.estimateTokens(text.produced)
+                reason = output >= plan.responseTokens ? .length : .stop
             }
-            finish(reason, text: &text, plan: plan, started: started, into: continuation,
-                   screening: screensChange ? (request, run.anyWriteMade) : nil)
+            Self.finish(reason, text: &text, plan: plan, started: started, into: continuation,
+                        usage: measuredUsage, screening: screensChange ? (request, run.anyWriteMade) : nil)
             return .done
         }
+    }
+
+    @available(iOS 27.0, *)
+    static func isAnswerEntry(_ entry: Transcript.Entry?) -> Bool {
+        if case .response? = entry { return true }
+        return false
     }
 
     /// - Parameter screening: For a change turn, the request and whether a
@@ -604,6 +729,7 @@ enum SystemModelAnswer {
         plan: SystemModelPlan,
         started: ContinuousClock.Instant,
         into continuation: Continuation,
+        usage measured: TokenUsage? = nil,
         screening: (request: GenerationRequest, wrote: Bool)? = nil
     ) {
         if let screening {
@@ -615,18 +741,16 @@ enum SystemModelAnswer {
                     DiagnosticLog.record(.failure(area: .tools, code: "fm.unbackedChangeClaim"))
                 }
             }
-        } else if let rest = text.flush() {
+        } else if reason != .cancelled, let rest = text.flush() {
             continuation.yield(.token(rest))
         }
+        let usage = measured ?? TokenUsage(promptTokens: promptTokens(plan), completionTokens: estimateTokens(text.produced))
         DiagnosticLog.record(.generation(
-            promptTokens: promptTokens(plan), outputTokens: estimateTokens(text.produced),
+            promptTokens: usage.promptTokens, outputTokens: usage.completionTokens,
             milliseconds: elapsed(since: started),
             stop: reason == .cancelled ? .cancelled : .completed
         ))
-        continuation.yield(.finished(
-            reason: reason,
-            usage: TokenUsage(promptTokens: promptTokens(plan), completionTokens: estimateTokens(text.produced))
-        ))
+        continuation.yield(.finished(reason: reason, usage: usage))
         continuation.finish()
     }
 
@@ -643,9 +767,9 @@ enum SystemModelAnswer {
         for request: GenerationRequest,
         enabled: Set<CapabilityGroup>,
         budget: SystemModelBudget,
-        model: SystemLanguageModel
+        model: SystemLanguageModel?
     ) async throws -> SystemModelPlan {
-        if #available(iOS 26.4, *) {
+        if #available(iOS 26.4, *), let model {
             let optimistic = try SystemModelPlan.make(
                 for: request, enabled: enabled, budget: budget, estimate: optimisticEstimate
             )

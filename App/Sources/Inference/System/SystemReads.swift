@@ -35,13 +35,13 @@ enum SystemReads {
         }
     }
 
-    /// The health body, or — in a Debug build under `-pocketd.demoHealth` —
+    /// The health body, or — on a Debug simulator under `-pocketd.demoHealth` —
     /// the same arithmetic over the demo day Today's tiles are drawn from, so
     /// a capture of the conversation agrees with a capture of Today (QA S3-10).
     /// A simulator has no Health, and this app never writes to Health to fill
     /// one.
     static func health(focus: HealthFocus, origin: RequestOrigin) async -> [String: any Sendable] {
-        #if DEBUG
+        #if DEBUG && targetEnvironment(simulator)
         if DemoDay.isRequested {
             return await HealthSummary.payload(focus: focus, origin: origin) { focus, _ in
                 demoReadout(for: focus, now: Date(), calendar: .current)
@@ -51,7 +51,7 @@ enum SystemReads {
         return await ToolBodies.health(focus: focus, origin: origin)
     }
 
-    #if DEBUG
+    #if DEBUG && targetEnvironment(simulator)
     /// The demo day as a Health read would return it: last night's 6h 36m
     /// against the fortnight `DemoDay` keeps, today's 4,120 steps so far, a
     /// resting heart rate of 58 against a usual 61. Nothing else is invented;
