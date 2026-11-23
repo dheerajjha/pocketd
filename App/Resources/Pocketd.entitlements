@@ -2,6 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Managed by Apple for this App ID. Only the host app uses the cloud model. -->
+	<key>com.apple.developer.private-cloud-compute</key>
+	<true/>
 	<!-- Raises the jetsam ceiling from roughly 45% to roughly 58% of physical
 	     RAM, which is the difference between a 4B model loading and being
 	     killed on a 6 GB device. Requires the Increased Memory Limit

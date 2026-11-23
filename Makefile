@@ -1,4 +1,4 @@
-.PHONY: test verify app build-sim smoke catalogue device-install clean
+.PHONY: test verify app build-sim smoke catalogue device-install device-install-pcc verify-pcc-signing clean
 
 # The package is the part that CI can check in seconds without a simulator.
 test:
@@ -78,6 +78,17 @@ BUNDLE_ID ?=
 # device installs had the same trap. Override it with VERSION= to match a
 # specific upload.
 VERSION ?= $(shell date +%s)
+DEVICE_ENTITLEMENTS ?= $(CURDIR)/App/Resources/Pocketd-NoMemoryLimit.entitlements
+VERIFY_PCC ?= NO
+
+# Uses the regular, entitled host target. Xcode needs an Apple-authorized
+# development profile for this App ID, and the phone must support Apple Intelligence.
+device-install-pcc: DEVICE_ENTITLEMENTS = $(CURDIR)/App/Resources/Pocketd.entitlements
+device-install-pcc: VERIFY_PCC = YES
+device-install-pcc: device-install
+
+verify-pcc-signing:
+	/usr/bin/python3 scripts/pcc-signing.py verify "$(APP)"
 
 device-install: app
 	xcodebuild -project Pocketd.xcodeproj -scheme Pocketd \
@@ -87,8 +98,9 @@ device-install: app
 		-allowProvisioningUpdates \
 		$(if $(BUNDLE_ID),POCKETD_BUNDLE_ID=$(BUNDLE_ID),) \
 		CURRENT_PROJECT_VERSION=$(VERSION) \
-		POCKETD_ENTITLEMENTS='$(PWD)/App/Resources/Pocketd-NoMemoryLimit.entitlements' \
+		POCKETD_ENTITLEMENTS='$(DEVICE_ENTITLEMENTS)' \
 		build
+	@if [ "$(VERIFY_PCC)" = YES ]; then /usr/bin/python3 scripts/pcc-signing.py verify .build/device/Build/Products/Release-iphoneos/Pocketd.app; fi
 	xcrun devicectl device install app --device $(DEVICE) \
 		.build/device/Build/Products/Release-iphoneos/Pocketd.app
 

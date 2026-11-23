@@ -90,6 +90,16 @@ targets:
       # product from App Store Connect.
       - path: App/Resources/Pocketd.storekit
         buildPhase: none
+    postBuildScripts:
+      - name: Record Apple cloud signing capability
+        basedOnDependencyAnalysis: false
+        script: /usr/bin/python3 "$SRCROOT/scripts/pcc-signing.py" stamp
+        inputFiles:
+          - $(CODE_SIGN_ENTITLEMENTS)
+          - $(POCKETD_PCC_PROFILE_INPUT)
+          - $(SRCROOT)/scripts/pcc-signing.py
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/PocketdCloudSigning.plist
     info:
       path: App/Resources/Info.plist
       properties:
@@ -171,18 +181,18 @@ targets:
         # place a user is most entitled to a straight answer, and it is the
         # string App Review reads first.
         # The wording says where the data goes because that is the honest and
-        # unusual part of this app: the reading happens on this phone, and no
-        # request leaves the device to answer. Short on purpose: this is the
+        # important distinction between the default local brains and Apple's
+        # explicitly selected Private Cloud Compute. Short on purpose: this is the
         # first sentence of the app most people read closely, and it arrives in
         # the middle of the intro, under a primer that already said why.
         NSCalendarsFullAccessUsageDescription: >-
           Pocketd reads your calendar to tell you what's next, and adds events
-          when you ask. Your events stay on this iPhone, and other devices can't
-          read them.
+          when you ask. If you choose Apple Private Cloud Compute, Apple processes
+          relevant event details for your answers and briefs.
         NSRemindersFullAccessUsageDescription: >-
           Pocketd reads your reminders to tell you what's due, and adds or ticks
-          them off when you ask. They stay on this iPhone, and other devices
-          can't read them.
+          them off when you ask. If you choose Apple Private Cloud Compute, Apple
+          processes relevant reminder details for your answers and briefs.
         # Both are required, and the app crashes on requestAuthorization if
         # either is missing — not a warning, a termination. The write string is
         # present because HealthKit demands it whenever the framework is linked,
@@ -190,7 +200,8 @@ targets:
         # share set passed to requestAuthorization is empty.
         NSHealthShareUsageDescription: >-
           Pocketd reads your sleep, activity and heart data to compare today with
-          your usual. It stays on this iPhone, and other devices can't read it.
+          your usual. If you choose Apple Private Cloud Compute, Apple processes
+          relevant health summaries for your answers and briefs.
         NSHealthUpdateUsageDescription: >-
           Pocketd does not write to Health. This permission is requested only
           because iOS requires the description to be present whenever an app
@@ -210,8 +221,8 @@ targets:
           Pocketd turns your voice into text on this iPhone so you can ask by
           speaking. Audio is processed on the device and never uploaded.
         NSMicrophoneUsageDescription: >-
-          Pocketd listens only while the microphone is on, to hear your
-          question. Nothing is recorded or sent anywhere.
+          Pocketd listens while the microphone is on to turn your question into
+          text. Your microphone audio is processed on this iPhone and is never uploaded.
         # Required to advertise over Bonjour. Without these exact service types
         # publish fails silently and the phone is discoverable by nothing.
         NSBonjourServices:
@@ -219,7 +230,8 @@ targets:
           - _ollama._tcp
         NSLocalNetworkUsageDescription: >-
           When you turn on Use from your laptop, Pocketd answers your other
-          devices over your Wi-Fi. Nothing leaves your local network.
+          devices over your Wi-Fi. Their questions are answered by a downloaded
+          brain on this iPhone, not by Apple Private Cloud Compute.
         # Background refresh, and an honest account of what it buys.
         #
         # Without `fetch` here, BGTaskScheduler refuses the app outright:
@@ -300,6 +312,12 @@ targets:
         # over this indirection and makes the override below a no-op.
         POCKETD_ENTITLEMENTS: $(SRCROOT)/App/Resources/Pocketd.entitlements
         CODE_SIGN_ENTITLEMENTS: $(POCKETD_ENTITLEMENTS)
+        # Unsigned builds and ordinary ad-hoc simulators have no profile. The
+        # harmless input keeps the dependency graph valid and the cloud path off.
+        POCKETD_PCC_PROFILE_NO: $(SRCROOT)/App/Resources/Pocketd-NoMemoryLimit.entitlements
+        POCKETD_PCC_PROFILE_YES: $(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/embedded.mobileprovision
+        POCKETD_PCC_PROFILE_INPUT: $(POCKETD_PCC_PROFILE_NO)
+        "POCKETD_PCC_PROFILE_INPUT[sdk=iphoneos*]": $(POCKETD_PCC_PROFILE_$(CODE_SIGNING_ALLOWED))
         SWIFT_STRICT_CONCURRENCY: complete
         # LocalLLMClientLlama is built with .interoperabilityMode(.Cxx), and a
         # target that links it has to agree. Without this the llama.cpp headers
