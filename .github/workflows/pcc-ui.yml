@@ -27,11 +27,16 @@ jobs:
           overwrite: true
 
   simulator:
-    # Start with a fresh host: no llama.cpp compiler processes or build cache
-    # competing with the simulator's installation and XCTest services.
+    # The first-launch cases must see an empty container; only the download
+    # case starts with GGUF weights. Each job gets a fresh hosted Mac.
+    name: ${{ matrix.suite }} (iOS simulator)
     needs: build
     runs-on: xcode-27
     timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [shortcut, picker, download]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,13 +45,39 @@ jobs:
         with:
           name: pcc-products-${{ github.sha }}
           path: ${{ runner.temp }}
-      - name: Test Shortcut handoff and processing choices with separate QA installs
-        run: python3 scripts/test-pcc-ui.py --from-build "$RUNNER_TEMP/pcc-products.tar.gz" --output "$RUNNER_TEMP/pcc-ui-evidence"
-      - name: Keep both result bundles, counts, signing receipt and screenshots
+      - name: Run and count this suite
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: python3 scripts/test-pcc-ui.py --from-build "$RUNNER_TEMP/pcc-products.tar.gz" --suite "$SUITE" --output "$RUNNER_TEMP/pcc-ui-evidence"
+      - name: Keep this result bundle, counts, signing receipt and screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pcc-ui-${{ github.run_id }}-${{ github.run_attempt }}
+          name: pcc-part-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.suite }}
           path: ${{ runner.temp }}/pcc-ui-evidence
+          retention-days: 14
+          if-no-files-found: warn
+
+  evidence:
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    needs: [build, simulator]
+    # Count from the original xcresults on a host with no simulator running.
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pcc-part-${{ github.run_id }}-${{ github.run_attempt }}-*
+          path: ${{ runner.temp }}/pcc-parts
+      - name: Verify all nine cases and collect the picker screenshots
+        if: ${{ !cancelled() }}
+        run: python3 scripts/collect-pcc-ui.py "$RUNNER_TEMP/pcc-parts" "$RUNNER_TEMP/pcc-proof" "$GITHUB_SHA"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pcc-ui-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pcc-proof
           retention-days: 14
           if-no-files-found: warn

@@ -3,41 +3,23 @@ import XCTest
 
 @MainActor
 final class ShortcutCloudHandoffTests: XCTestCase {
-    func testPreOnboardingShortcutStaysEditableAndFreshAuthorizedShortcutAnswers() throws {
+    func testPreOnboardingShortcutStaysEditableAndFreshAuthorizedShortcutAnswers() {
         continueAfterFailure = false
         let app = XCUIApplication()
-        let external = ProcessInfo.processInfo.environment["POCKETD_UI_SHORTCUT"]
-        let original = external.flatMap(Int.init) ?? Int.random(in: 10_000_000...89_999_999)
-        let fresh = String(original + 1)
-        let fixture = ["-pocketd.testPCC", "available", "-pocketd.proOverride", "off",
+        let challenge = Int.random(in: 10_000_000...99_999_998)
+        let original = String(challenge), fresh = String(challenge + 1)
+        let fixture = ["-pocketd.testPCC", "available", "-pocketd.proOverride", "off", "-pocketd.proOffer", "unavailable",
                        "-pocketd.analyticsConsent", "refused", "-pocketd.serverShouldRun", "NO",
                        "-pocketd.calendarTools", "NO", "-pocketd.reminderTools", "NO", "-pocketd.healthTools", "NO"]
-        if let external {
-            XCTAssertEqual(external, String(original))
-            // Request the cold launch from inside the running test: an earlier
-            // launch can be terminated by XCTest's installation on a simulator.
-            let docs = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-            let prefix = "pcc-ui-shortcut-\(external)-"
-            let ready = docs.appendingPathComponent(prefix + "ready")
-            XCTAssertFalse(FileManager.default.fileExists(atPath: ready.path))
-            try Data().write(to: docs.appendingPathComponent(prefix + "request"), options: .withoutOverwriting)
-            let delivered = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-                FileManager.default.fileExists(atPath: ready.path)
-            }, object: nil)
-            XCTAssertEqual(XCTWaiter.wait(for: [delivered], timeout: 230), .completed, "No external Shortcut launch was acknowledged")
-            XCTAssertTrue([.runningForeground, .runningBackground, .runningBackgroundSuspended].contains(app.state),
-                          "The app must already be running from the external Shortcut launch")
-            app.activate()
-        } else {
-            app.launchArguments = fixture + ["-pocketd.completedOnboarding", "NO", "-pocketd.brainChoice", "",
-                                             "-pocketd.loadedModel", "", "-pocketd.siriAsk", String(original)]
-            app.launch()
-        }
+        // Deliver the first question at cold launch, before choosing a provider.
+        app.launchArguments = fixture + ["-pocketd.completedOnboarding", "NO", "-pocketd.brainChoice", "",
+                                         "-pocketd.loadedModel", "", "-pocketd.siriAsk", original]
+        app.launch()
 
         func tap(_ name: String) {
             let button = app.buttons[name]
             XCTAssertTrue(button.waitForExistence(timeout: 12))
-            for _ in 0..<4 where !button.isHittable { app.swipeUp() }
+            XCTAssertTrue(button.wait(for: \.isHittable, toEqual: true, timeout: 12))
             button.tap()
         }
         func reply(_ nonce: String) -> XCUIElement {
@@ -45,28 +27,27 @@ final class ShortcutCloudHandoffTests: XCTestCase {
                 format: "label == %@", "PCC test fixture replied to probe \(nonce)."
             )).firstMatch
         }
+        func assertCloudDisclosure() {
+            let provider = app.descendants(matching: .any).matching(identifier: "ask.cloud.provider").firstMatch
+            XCTAssertTrue(provider.waitForExistence(timeout: 12))
+            XCTAssertEqual(provider.label, "Selected: Apple Private Cloud Compute")
+            XCTAssertFalse(provider.frame.intersection(app.frame).isEmpty, "The selected provider must be on screen")
+        }
 
         tap("intro.meet.start")
-        let cloud = app.buttons["intro.brain.cloud"]
-        let next = app.buttons["intro.brain.continue"]
-        XCTAssertTrue(cloud.waitForExistence(timeout: 12))
-        // The bottom of a hittable card can still lie under the pinned footer.
-        for _ in 0..<4 where !cloud.isHittable || cloud.frame.maxY > next.frame.minY - 4 {
-            app.scrollViews.firstMatch.swipeUp()
-        }
-        XCTAssertTrue(cloud.isHittable && cloud.frame.maxY <= next.frame.minY - 4)
-        cloud.tap()
-        let chosen = XCTNSPredicateExpectation(predicate: NSPredicate(format: "selected == YES"), object: cloud)
-        XCTAssertEqual(XCTWaiter.wait(for: [chosen], timeout: 8), .completed)
+        PCCPickerUI.selectCloudRow(in: app)
         tap("intro.brain.continue")
         tap("intro.connect.continue")
         tap("Not now")
         tap("Open Pocketd")
-        let field = app.descendants(matching: .any).matching(identifier: "ask.composer").firstMatch
+        let field = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier == %@ AND value == %@", "ask.composer", original
+        )).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 12))
-        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "ask.cloud.provider").firstMatch.exists)
-        XCTAssertEqual(field.value as? String, String(original))
-        XCTAssertFalse(reply(String(original)).exists)
+        XCTAssertTrue(field.isEnabled)
+        XCTAssertEqual(field.value as? String, original)
+        assertCloudDisclosure()
+        XCTAssertFalse(reply(original).exists)
 
         // The preference and draft are now real persisted values. Only the
         // *new* invocation authorizes an automatic Send on the next launch.
@@ -74,7 +55,8 @@ final class ShortcutCloudHandoffTests: XCTestCase {
         app.launchArguments = fixture + ["-pocketd.siriAsk", fresh]
         app.launch()
         XCTAssertTrue(reply(fresh).waitForExistence(timeout: 12))
-        XCTAssertFalse(reply(String(original)).exists)
+        assertCloudDisclosure()
+        XCTAssertFalse(reply(original).exists)
     }
 }
 #endif

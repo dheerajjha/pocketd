@@ -12,7 +12,7 @@ The cloud option requires **iOS 27 or later**, a device and region where Apple I
 
 For a live test, leave Xcode's simulated model and quota overrides off. Select the cloud option yourself, open Ask, and look for **Apple Private Cloud Compute** above the conversation before sending a fresh question. Development IPAs install on devices included in the signing profile.
 
-For repeatable UI checks, run the manual **Private Cloud Compute UI** workflow in GitHub Actions. It covers both pickers, persisted choices, an older Shortcut, quota and connectivity with a labelled simulator fixture. Its screenshots and result bundles show the actual app screens; fixture replies do not use Apple's service or consume quota.
+For repeatable UI checks, run the manual [**Private Cloud Compute UI** workflow](https://github.com/dheerajjha/pocketd/actions/workflows/pcc-ui.yml). It tests both pickers, persisted choices, an older Shortcut, quota and connectivity with a labelled simulator fixture. A separate simulator starts with real offline GGUF weights to check switching back to a downloaded model. Each suite retains its XCTest result; the combined artifact contains the counts and three screenshots. Fixture replies do not use Apple's service or consume quota.
 
 For transport diagnostics only, an entitled Debug build can be compiled with `-D POCKETD_LIVE_PCC_PROBE` and launched with `-pocketd.verifyLivePCC <new UUID>`. That build starts a separate diagnostic entry point, sends at most one synthetic question without personal tools, and records the native model binding and result in `Library/Application Support/PCCLiveQA`. It does not open your chat history or change your saved brain.
 
