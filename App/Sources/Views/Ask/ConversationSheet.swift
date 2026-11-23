@@ -14,8 +14,8 @@ import SwiftUI
 /// onto, and the native bar is what gives ✕, History and New chat their
 /// system look and their 44pt targets.
 ///
-/// Local conversations need no visible title. For a cloud conversation, the
-/// bar names the provider at the point where the person actually sends words.
+/// A cloud conversation names its provider above the transcript so it stays
+/// readable even when the toolbar hides its title or moves to the side.
 ///
 /// Toasts are its own. The app's toast layer is drawn on the root view, which
 /// is underneath this sheet — an "Undo" raised from in here would appear behind
@@ -30,6 +30,7 @@ struct ConversationSheet: View {
     var body: some View {
         NavigationStack {
             AskView()
+                .safeAreaInset(edge: .top, spacing: 0) { providerDisclosure }
                 .navigationTitle("Conversation")
                 .navigationBarTitleDisplayMode(.inline)
                 .hiddenConversationTitle()
@@ -47,18 +48,25 @@ struct ConversationSheet: View {
         .presentationBackground(Color.pd.canvas)
     }
 
+    @ViewBuilder
+    private var providerDisclosure: some View {
+        if model.isUsingPrivateCloudCompute {
+            Text(AppleCloudStatus.title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.pd.inkSecondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, PDSpacing.gutter)
+                .padding(.vertical, PDSpacing.xxs)
+                .frame(maxWidth: .infinity)
+                .background(Color.pd.canvas)
+                .accessibilityLabel("Selected: \(AppleCloudStatus.title)")
+                .accessibilityIdentifier("ask.cloud.provider")
+        }
+    }
+
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        if model.isUsingPrivateCloudCompute {
-            ToolbarItem(placement: .principal) {
-                Text(AppleCloudStatus.title)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color.pd.inkSecondary)
-                    .multilineTextAlignment(.center)
-                    .accessibilityLabel("Selected: Apple Private Cloud Compute")
-                    .accessibilityIdentifier("ask.cloud.provider")
-            }
-        }
         ToolbarItem(placement: .topBarLeading) {
             Button {
                 dismiss()
