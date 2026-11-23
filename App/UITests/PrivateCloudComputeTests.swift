@@ -20,8 +20,8 @@ final class PrivateCloudComputeTests: XCTestCase {
         XCTAssertTrue(option.label.localizedCaseInsensitiveContains("internet"))
         let next = app.buttons["intro.brain.continue"]
         let onDevice = app.buttons["intro.brain.builtIn"]
-        let localDefaults = [onDevice, app.buttons["intro.brain.download"]].filter { $0.exists && $0.isSelected }
-        XCTAssertEqual(localDefaults.count, 1, "The existing local default must remain selected")
+        let localOptions = [onDevice, app.buttons["intro.brain.download"]]
+        XCTAssertEqual(localOptions.filter { $0.exists && $0.isSelected }.count, 1, "The existing local default must remain selected")
         XCTAssertTrue(next.isEnabled, "Continue must still work without tapping the local default")
         // Walk the default path itself where it requires no network. A download
         // default is checked above, but fetching its weights is not part of this test.
@@ -34,10 +34,16 @@ final class PrivateCloudComputeTests: XCTestCase {
             XCTAssertFalse(option.isSelected)
         }
 
-        tap(option, scrolling: app)
-        XCTAssertTrue(option.isSelected)
-        revealForCapture(option, in: app, top: app.buttons["intro.back"].frame.maxY, bottom: next.frame.minY)
-        XCTAssertTrue(option.isSelected)
+        // An off-screen card can be reported hittable under the fixed footer.
+        // Bring it wholly into the scrollable area before choosing it once.
+        let top = app.buttons["intro.back"].frame.maxY + 8
+        let bottom = next.frame.minY - 12
+        revealCard(option, in: app, top: top, bottom: bottom)
+        XCTAssertTrue(option.isEnabled && option.isHittable)
+        option.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(option.wait(for: \.isSelected, toEqual: true, timeout: 12), "The visible cloud card did not become selected")
+        XCTAssertFalse(localOptions.contains { $0.exists && $0.isSelected }, "Cloud must be the only selected row")
+        revealCard(option, in: app, top: top, bottom: bottom)
         attach(app, "01-onboarding-cloud-selected")
         tap(next)
         appears(app.staticTexts["Connect your day."])
@@ -47,8 +53,9 @@ final class PrivateCloudComputeTests: XCTestCase {
 
         openBrain(app)
         selected(cloud, in: app)
-        revealForCapture(element(cloud + ".card", in: app), in: app,
-                         top: app.navigationBars.firstMatch.frame.maxY, bottom: app.frame.maxY - 24)
+        let bar = app.navigationBars.firstMatch
+        revealCard(element(cloud + ".card", in: app), in: app,
+                   top: bar.exists ? bar.frame.maxY : app.scrollViews.firstMatch.frame.minY, bottom: app.frame.maxY - 24)
         selected(cloud, in: app)
         attach(app, "02-settings-cloud-selected")
         todayFromBrain(app)
@@ -78,7 +85,7 @@ final class PrivateCloudComputeTests: XCTestCase {
         if let local {
             tap(restarted.buttons["More brains"], scrolling: restarted)
             tap(restarted.buttons["Use \(local)"], scrolling: restarted)
-            back(restarted)
+            back(restarted, to: element(download + ".title", in: restarted))
             let id = "brain.currentDownload"
             selected(id, in: restarted)
             XCTAssertEqual(element(id + ".title", in: restarted).label, local)
@@ -99,8 +106,8 @@ final class PrivateCloudComputeTests: XCTestCase {
             // real phone engine reports it resident. A saved preference is not enough.
             appears(text(containing: "pcc-ui-local-fixture", in: restored))
             attach(restored, "Actual resident GGUF after restart")
-            back(restored)
-            back(restored)
+            back(restored, to: details)
+            back(restored, to: element(download + ".title", in: restored))
         }
         todayFromBrain(restored)
         tap(restored.buttons["Ask about your day"])
@@ -124,7 +131,7 @@ final class PrivateCloudComputeTests: XCTestCase {
         XCTAssertFalse(element(cloud + ".card", in: app).exists)
         XCTAssertFalse(app.buttons[cloud + ".use"].exists)
 
-        back(app)
+        back(app, to: app.buttons["settings.brain.open"])
         tap(app.buttons["Replay intro"], scrolling: app)
         tap(app.buttons["intro.meet.start"])
         appears(app.buttons["intro.brain.download"])
@@ -254,18 +261,19 @@ final class PrivateCloudComputeTests: XCTestCase {
             format: "identifier == %@ AND label == %@", id + ".selection", label
         )).firstMatch
         appears(badge)
-        XCTAssertTrue(badge.isSelected)
+        XCTAssertTrue(badge.wait(for: \.isSelected, toEqual: true, timeout: 12))
     }
 
-    private func back(_ app: XCUIApplication) {
-        tap(app.navigationBars.buttons.element(boundBy: 0))
+    private func back(_ app: XCUIApplication, to destination: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
+        // On iPhone Duo, UIKit puts BackButton in the side Toolbar, a sibling
+        // of NavigationBar. Its identifier is independent of that layout.
+        tap(app.buttons["BackButton"], file: file, line: line)
+        appears(destination, file: file, line: line)
     }
 
     private func todayFromBrain(_ app: XCUIApplication) {
-        back(app)
-        appears(app.buttons["settings.brain.open"])
-        back(app)
-        appears(app.buttons["Ask about your day"])
+        back(app, to: app.buttons["settings.brain.open"])
+        back(app, to: app.buttons["Ask about your day"])
     }
 
     /// A fresh conversation per assertion, plus a new challenge. Restoring a
@@ -276,11 +284,20 @@ final class PrivateCloudComputeTests: XCTestCase {
         appears(field)
         appears(element("ask.cloud.provider", in: app))
         let new = app.buttons["New conversation"]
-        if new.isEnabled { tap(new) }
+        if new.isEnabled {
+            tap(new)
+            XCTAssertTrue(new.wait(for: \.isEnabled, toEqual: false, timeout: 12), "The new conversation did not open")
+        }
         let nonce = String(Int.random(in: 10_000_000...99_999_999))
         XCTAssertFalse(reply(nonce, in: app).exists)
         tap(field)
+        // A draft-only chat can be restored with New conversation disabled
+        // (notably after a quota block). Replace it instead of appending a probe.
+        if let draft = field.value as? String, !draft.isEmpty, draft != field.placeholderValue {
+            field.typeKey("a", modifierFlags: .command)
+        }
         field.typeText(nonce)
+        XCTAssertEqual(field.value as? String, nonce, "Send only this scenario's challenge")
         tap(app.buttons["ask.send"])
         return nonce
     }
@@ -305,26 +322,32 @@ final class PrivateCloudComputeTests: XCTestCase {
         XCTAssertTrue(element.waitForExistence(timeout: 12), "Missing \(element)", file: file, line: line)
     }
 
-    /// Hittable can mean only a sliver of a card is visible. Frame the whole
-    /// card between the actual navigation bar and pinned footer before capture.
-    private func revealForCapture(_ card: XCUIElement, in app: XCUIApplication, top: CGFloat, bottom: CGFloat) {
+    /// Drag inside the card's content column, clear of the Duo's side toolbar.
+    /// A card must fit between the fixed controls, not just intersect the window.
+    private func revealCard(_ card: XCUIElement, in app: XCUIApplication, top: CGFloat, bottom: CGFloat) {
         appears(card)
         let viewport = app.frame
-        for _ in 0..<4 {
+        let scroll = app.scrollViews.firstMatch
+        appears(scroll)
+        let top = max(top, scroll.frame.minY), bottom = min(bottom, scroll.frame.maxY)
+        XCTAssertGreaterThan(bottom, top)
+        for _ in 0..<6 {
             let frame = card.frame
-            if !frame.isEmpty, frame.minY >= top - 2, frame.maxY <= bottom + 2 { return }
-            let up = frame.maxY > bottom
-            let distance = min(max(50, up ? frame.maxY - bottom + 12 : top - frame.minY + 12), (bottom - top) / 2)
+            if frame.height >= 44, frame.minY >= top - 2, frame.maxY <= bottom + 2 { return }
+            let up = frame.isEmpty || frame.maxY > bottom
+            let maximum = (bottom - top) / 2
+            let distance = frame.isEmpty ? maximum : min(max(50, up ? frame.maxY - bottom + 12 : top - frame.minY + 12), maximum)
             let delta = up ? distance : -distance
             let middle = (top + bottom) / 2 - viewport.minY
+            let x = frame.isEmpty ? scroll.frame.midX : frame.midX
             func point(_ y: CGFloat) -> XCUICoordinate {
-                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: y / viewport.height))
+                app.coordinate(withNormalizedOffset: CGVector(dx: (x - viewport.minX) / viewport.width, dy: y / viewport.height))
             }
             point(middle + delta / 2).press(forDuration: 0.05, thenDragTo: point(middle - delta / 2),
                                            withVelocity: .slow, thenHoldForDuration: 0.1)
         }
         let frame = card.frame
-        XCTAssertTrue(!frame.isEmpty && frame.minY >= top - 2 && frame.maxY <= bottom + 2,
+        XCTAssertTrue(frame.height >= 44 && frame.minY >= top - 2 && frame.maxY <= bottom + 2,
                       "Selected card is clipped: \(frame), visible y=\(top)...\(bottom)")
     }
 

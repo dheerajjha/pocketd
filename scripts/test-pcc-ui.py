@@ -76,8 +76,8 @@ def select_phone(udid):
     raise RuntimeError("The selected Xcode has no available iOS 27+ iPhone runtime")
 
 
-def prepare_plan(products):
-    plan, = products.glob("*.xctestrun")
+def prepare_plan(products, shortcut=None):
+    plan, = (path for path in products.glob("*.xctestrun") if not path.name.startswith("."))
     spec = read_plist(plan)
     targets = [t for c in spec.get("TestConfigurations", []) for t in c["TestTargets"]]
     targets = targets or [t for t in spec.values() if isinstance(t, dict) and t.get("TestBundlePath")]
@@ -93,8 +93,22 @@ def prepare_plan(products):
     if receipt.get("bundleID") != BUNDLE or receipt.get("permitsRequests") is not False:
         raise RuntimeError("The QA bundle must have a negative real PCC signing receipt")
     run("codesign", "--verify", "--strict", app)
-    target.setdefault("EnvironmentVariables", {})["POCKETD_UI_INSTALLED_GGUF"] = NAME
-    plan.write_bytes(plistlib.dumps(spec))
+    environment = target.setdefault("EnvironmentVariables", {})
+    environment["POCKETD_UI_INSTALLED_GGUF"] = NAME
+    if shortcut is not None:
+        environment["POCKETD_UI_PRELAUNCHED_SHORTCUT"] = shortcut
+        # Both products are installed and the Shortcut has already opened the
+        # target. A second installation could terminate it or move the runner's
+        # fixture mailbox. Use xctestrun's documented installed-product mode.
+        plugin = target.pop("TestBundlePath")
+        if plugin != "__TESTHOST__/PlugIns/PocketdUITests.xctest" or not (runner / "PlugIns/PocketdUITests.xctest").is_dir():
+            raise RuntimeError("The UI test bundle must be embedded in the installed runner")
+        target.update(UseDestinationArtifacts=True, TestHostBundleIdentifier=RUNNER,
+                      TestBundleDestinationRelativePath=plugin, UITargetAppBundleIdentifier=BUNDLE)
+        for key in ("TestHostPath", "UITargetAppPath", "DependentProductPaths"):
+            target.pop(key, None)
+        plan = products / ".pcc-installed.xctestrun"
+        plan.write_bytes(plistlib.dumps(spec))
     return plan, app, runner, receipt
 
 
@@ -112,18 +126,26 @@ def require_clean_phone(device):
         raise RuntimeError(f"Use a disposable simulator: already installed: {', '.join(sorted(existing))}")
 
 
-def exercise(device, plan, app, runner, result, suite, containers):
+def exercise(device, plan, app, runner, result, suite, containers, shortcut):
     require_clean_phone(device)
     owned, staging = [], None
     try:
-        for path, identifier in [(app, BUNDLE), (runner, RUNNER)]:
-            run(*SIM, "install", device, path, timeout=180)
-            owned.append(identifier)
+        run(*SIM, "install", device, app, timeout=180)
+        owned.append(BUNDLE)
         data = container(device, BUNDLE)
         models = data / "Library/Application Support/Models"
         if data.name in containers.values() or (models.exists() and any(models.iterdir())):
             raise RuntimeError("Expected a fresh QA app container with no installed model")
         containers[suite] = data.name
+        if suite == "ShortcutCloudHandoffTests":
+            # A Shortcut opens the app from outside XCTest. Start the actual
+            # first launch here; attaching avoids the cold Xcode launch-service
+            # deadline. No onboarding or saved provider is supplied.
+            run(*SIM, "launch", device, BUNDLE, "-pocketd.testPCC", "available", "-pocketd.proOverride", "off",
+                "-pocketd.analyticsConsent", "refused", "-pocketd.serverShouldRun", "NO", "-pocketd.calendarTools", "NO",
+                "-pocketd.reminderTools", "NO", "-pocketd.healthTools", "NO", "-pocketd.siriAsk", shortcut, timeout=300)
+        run(*SIM, "install", device, runner, timeout=180)
+        owned.append(RUNNER)
         if suite == "PrivateCloudComputeTests":
             staging = subprocess.Popen([sys.executable, ROOT / "scripts/pcc_ui_fixture.py", device, BUNDLE, RUNNER])
         run("xcodebuild", "test-without-building", "-xctestrun", plan, "-destination", f"platform=iOS Simulator,id={device}",
@@ -155,17 +177,19 @@ def export_screenshots(result, out, require_all):
         raise RuntimeError("A required onboarding, Settings or Ask screenshot is missing")
 
 
-def run_suites(device, plan, app, runner, out):
+def run_suites(device, plan, app, runner, out, shortcut):
     counts, containers, errors = {}, {}, []
     for suite, expected in SUITES:
         result = out / (suite.removesuffix("Tests") + ".xcresult")
         try:
-            exercise(device, plan, app, runner, result, suite, containers)
+            exercise(device, plan, app, runner, result, suite, containers, shortcut)
         except (OSError, RuntimeError, subprocess.SubprocessError) as error:
             errors.append(f"{suite}: {error}")
         if not result.is_dir():
             errors.append(f"{suite}: XCTest did not produce a result bundle")
-            break  # No test ran; don't parse a nonexistent bundle or repeat a failed setup.
+            if suite not in containers:  # Common simulator setup failed before the app was installed.
+                break
+            continue  # A Shortcut launch failure needn't suppress the seven independent picker cases.
         try:
             summary = json.loads(output("xcrun", "xcresulttool", "get", "test-results", "summary", "--path", result))
             (out / (result.stem + "-summary.json")).write_text(json.dumps(summary, indent=2) + "\n")
@@ -228,7 +252,8 @@ def main():
                 raise RuntimeError("The test products do not match this commit and Xcode")
         else:
             build(derived, args.packages)
-        plan, app, runner, receipt = prepare_plan(products)
+        shortcut = None if args.build_only else str(10_000_000 + uuid.uuid4().int % 80_000_000)
+        plan, app, runner, receipt = prepare_plan(products, shortcut)
         if args.build_only:
             (products / "pcc-build.json").write_text(json.dumps(stamp))
             run("/usr/bin/tar", "-czf", args.build_only.resolve(), "-C", products, "pcc-build.json", plan.name,
@@ -241,7 +266,7 @@ def main():
             print(json.dumps(evidence), flush=True)
             if not args.simulator:
                 run(*SIM, "bootstatus", device, "-b", timeout=360)
-            run_suites(device, plan, app, runner, out)
+            run_suites(device, plan, app, runner, out, shortcut)
         finally:
             if not args.simulator:
                 try:
