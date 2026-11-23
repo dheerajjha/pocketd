@@ -73,7 +73,8 @@ def make_gguf():
 
 
 def container(device, identifier):
-    path = Path(subprocess.check_output(["xcrun", "simctl", "get_app_container", device, identifier, "data"], text=True).strip())
+    path = Path(subprocess.check_output(["xcrun", "simctl", "get_app_container", device, identifier, "data"],
+                                        text=True, timeout=120).strip())
     metadata = plistlib.loads((path / ".com.apple.mobile_container_manager.metadata.plist").read_bytes())
     if metadata["MCMMetadataIdentifier"] != identifier:
         raise RuntimeError(f"Wrong container for {identifier}")

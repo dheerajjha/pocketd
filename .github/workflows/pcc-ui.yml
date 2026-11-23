@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  simulator:
+  build:
     runs-on: xcode-27
     timeout-minutes: 60
     steps:
@@ -16,8 +16,32 @@ jobs:
           persist-credentials: false
       - name: Install XcodeGen
         run: command -v xcodegen || brew install xcodegen
+      - name: Build portable QA test products
+        run: python3 scripts/test-pcc-ui.py --build-only "$RUNNER_TEMP/pcc-products.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pcc-products-${{ github.sha }}
+          path: ${{ runner.temp }}/pcc-products.tar.gz
+          retention-days: 1
+          compression-level: 0
+          overwrite: true
+
+  simulator:
+    # Start with a fresh host: no llama.cpp compiler processes or build cache
+    # competing with the simulator's installation and XCTest services.
+    needs: build
+    runs-on: xcode-27
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: pcc-products-${{ github.sha }}
+          path: ${{ runner.temp }}
       - name: Test Shortcut handoff and processing choices with separate QA installs
-        run: python3 scripts/test-pcc-ui.py --output "$RUNNER_TEMP/pcc-ui-evidence"
+        run: python3 scripts/test-pcc-ui.py --from-build "$RUNNER_TEMP/pcc-products.tar.gz" --output "$RUNNER_TEMP/pcc-ui-evidence"
       - name: Keep both result bundles, counts, signing receipt and screenshots
         if: always()
         uses: actions/upload-artifact@v4

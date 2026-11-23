@@ -55,7 +55,19 @@ def select_phone(udid):
         raise ValueError("--simulator must be an explicitly reserved, booted iOS 27+ iPhone")
     if os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted" or os.environ.get("GITHUB_ACTIONS") != "true":
         raise ValueError("Supply --simulator on a shared or local Mac")
-    for runtime in sorted(eligible, key=lambda r: tuple(map(int, r["version"].split("."))), reverse=True):
+    sdk = output("xcrun", "--sdk", "iphonesimulator", "--show-sdk-version").split(".")[:2]
+    runtimes = sorted(eligible, key=lambda r: (r["version"].split(".")[:2] == sdk,
+                                              tuple(map(int, r["version"].split(".")))), reverse=True)
+    devices = json.loads(output(*SIM, "list", "devices", "available", "-j"))["devices"]
+    # Hosted images have stock devices. Prefer one already provisioned for
+    # this toolchain over migrating another device while the tests wait.
+    for runtime in runtimes:
+        phones = [p for p in devices.get(runtime["identifier"], []) if ".iPhone-" in p.get("deviceTypeIdentifier", "")
+                  and p["state"] in ("Booted", "Shutdown")]
+        if phones:
+            phone = max(phones, key=lambda p: (p["state"] == "Booted", p["name"].endswith(" Pro")))
+            return phone["udid"], runtime["version"], False
+    for runtime in runtimes:
         phones = [t for t in runtime["supportedDeviceTypes"] if t.get("productFamily") == "iPhone"]
         if phones:
             model = next((p for p in phones if p["name"].endswith(" Pro")), phones[0])
@@ -64,8 +76,8 @@ def select_phone(udid):
     raise RuntimeError("The selected Xcode has no available iOS 27+ iPhone runtime")
 
 
-def prepare_plan(derived):
-    plan, = (derived / "Build/Products").glob("*.xctestrun")
+def prepare_plan(products):
+    plan, = products.glob("*.xctestrun")
     spec = read_plist(plan)
     targets = [t for c in spec.get("TestConfigurations", []) for t in c["TestTargets"]]
     targets = targets or [t for t in spec.values() if isinstance(t, dict) and t.get("TestBundlePath")]
@@ -86,16 +98,26 @@ def prepare_plan(derived):
     return plan, app, runner, receipt
 
 
+def require_clean_phone(device):
+    # A missing-app lookup can hang on a newly booted simulator. Read the
+    # registry once and require a known positive before trusting any absence.
+    raw = subprocess.check_output([*SIM, "listapps", device], timeout=180)
+    xml = subprocess.run(["/usr/bin/plutil", "-convert", "xml1", "-o", "-", "-"], input=raw,
+                         stdout=subprocess.PIPE, check=True, timeout=15).stdout
+    apps = plistlib.loads(xml)
+    if apps.get("com.apple.Preferences", {}).get("CFBundleIdentifier") != "com.apple.Preferences":
+        raise RuntimeError("The simulator application registry did not report Settings")
+    existing = {"dev.pocketd.app", BUNDLE, RUNNER}.intersection(apps)
+    if existing:
+        raise RuntimeError(f"Use a disposable simulator: already installed: {', '.join(sorted(existing))}")
+
+
 def exercise(device, plan, app, runner, result, suite, containers):
-    for identifier in ("dev.pocketd.app", BUNDLE, RUNNER):
-        for kind in ("app", "data"):
-            installed = subprocess.run([*SIM, "get_app_container", device, identifier, kind], capture_output=True, timeout=30)
-            if installed.returncode == 0:
-                raise RuntimeError(f"Use a disposable simulator: {identifier} already has an {kind} container")
+    require_clean_phone(device)
     owned, staging = [], None
     try:
         for path, identifier in [(app, BUNDLE), (runner, RUNNER)]:
-            run(*SIM, "install", device, path)
+            run(*SIM, "install", device, path, timeout=180)
             owned.append(identifier)
         data = container(device, BUNDLE)
         models = data / "Library/Application Support/Models"
@@ -141,6 +163,9 @@ def run_suites(device, plan, app, runner, out):
             exercise(device, plan, app, runner, result, suite, containers)
         except (OSError, RuntimeError, subprocess.SubprocessError) as error:
             errors.append(f"{suite}: {error}")
+        if not result.is_dir():
+            errors.append(f"{suite}: XCTest did not produce a result bundle")
+            break  # No test ran; don't parse a nonexistent bundle or repeat a failed setup.
         try:
             summary = json.loads(output("xcrun", "xcresulttool", "get", "test-results", "summary", "--path", result))
             (out / (result.stem + "-summary.json")).write_text(json.dumps(summary, indent=2) + "\n")
@@ -159,43 +184,72 @@ def run_suites(device, plan, app, runner, out):
     print(f"8/8 passed (1 Shortcut + 7 processing choices). Evidence: {out}")
 
 
+def build(derived, packages):
+    run("xcodegen", "generate")
+    minimal = ROOT / "App/Resources/Pocketd-NoMemoryLimit.entitlements"
+    cache = ["-clonedSourcePackagesDirPath", packages.resolve()] if packages else []
+    run("xcodebuild", "-project", "Pocketd.xcodeproj", "-scheme", "Pocketd", "-configuration", "Debug",
+        "-destination", "generic/platform=iOS Simulator", "-derivedDataPath", derived, "-jobs", "3", *cache,
+        "-skipPackageUpdates", "-skipMacroValidation", "-hideShellScriptEnvironment", "-parallel-testing-enabled", "NO",
+        *(f"-only-testing:PocketdUITests/{suite}" for suite, _ in SUITES),
+        "CODE_SIGN_IDENTITY=-", f"POCKETD_BUNDLE_ID={BUNDLE}", f"POCKETD_ENTITLEMENTS={minimal}",
+        f"POCKETD_WIDGET_ENTITLEMENTS={minimal}", "build-for-testing", timeout=2700)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--simulator", metavar="UDID", help="reserved disposable iPhone; only GitHub-hosted runs create one")
-    parser.add_argument("--output", required=True, type=Path, help="empty directory for the result bundle and screenshots")
+    parser.add_argument("--simulator", metavar="UDID", help="reserved disposable iPhone; required for local tests")
+    parser.add_argument("--output", type=Path, help="empty directory for the test results and screenshots")
     parser.add_argument("--packages", type=Path, help="optional SwiftPM checkout cache")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--build-only", type=Path, metavar="TAR_GZ", help="package this build for a fresh simulator host")
+    group.add_argument("--from-build", type=Path, metavar="TAR_GZ", help="run the matching build-only product")
     args = parser.parse_args()
-    if not args.simulator and (os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted" or os.environ.get("GITHUB_ACTIONS") != "true"):
-        parser.error("--simulator is required outside a GitHub-hosted runner")
-    out = args.output.resolve()
-    out.mkdir(parents=True, exist_ok=True)
-    if any(out.iterdir()):
-        parser.error("--output must be empty; existing evidence will not be replaced")
+    if args.build_only:
+        if args.build_only.exists() or args.output or args.simulator:
+            parser.error("--build-only needs an unused archive path and does not run a simulator")
+    else:
+        if not args.simulator and (os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted" or os.environ.get("GITHUB_ACTIONS") != "true"):
+            parser.error("--simulator is required outside a GitHub-hosted runner")
+        if not args.output:
+            parser.error("--output is required for test execution")
+        out = args.output.resolve()
+        out.mkdir(parents=True, exist_ok=True)
+        if any(out.iterdir()):
+            parser.error("--output must be empty; existing evidence will not be replaced")
+    stamp = {"commit": output("git", "rev-parse", "HEAD"), "xcode": output("xcodebuild", "-version")}
     with tempfile.TemporaryDirectory(prefix="pocketd-pcc-ui-") as tmp:
         derived = Path(tmp).resolve() / "Derived"
-        run("xcodegen", "generate")
-        minimal = ROOT / "App/Resources/Pocketd-NoMemoryLimit.entitlements"
-        cache = ["-clonedSourcePackagesDirPath", args.packages.resolve()] if args.packages else []
-        run("xcodebuild", "-project", "Pocketd.xcodeproj", "-scheme", "Pocketd", "-configuration", "Debug",
-            "-destination", "generic/platform=iOS Simulator", "-derivedDataPath", derived, *cache,
-            "-skipPackageUpdates", "-skipMacroValidation", "-hideShellScriptEnvironment", "-parallel-testing-enabled", "NO",
-            *(f"-only-testing:PocketdUITests/{suite}" for suite, _ in SUITES),
-            "CODE_SIGN_IDENTITY=-", f"POCKETD_BUNDLE_ID={BUNDLE}", f"POCKETD_ENTITLEMENTS={minimal}",
-            f"POCKETD_WIDGET_ENTITLEMENTS={minimal}", "build-for-testing", timeout=2700)
-        plan, app, runner, receipt = prepare_plan(derived)
+        products = derived / "Build/Products"
+        if args.from_build:
+            products.mkdir(parents=True)
+            run("/usr/bin/tar", "-xzf", args.from_build.resolve(), "-C", products, timeout=180)
+            if json.loads((products / "pcc-build.json").read_text()) != stamp:
+                raise RuntimeError("The test products do not match this commit and Xcode")
+        else:
+            build(derived, args.packages)
+        plan, app, runner, receipt = prepare_plan(products)
+        if args.build_only:
+            (products / "pcc-build.json").write_text(json.dumps(stamp))
+            run("/usr/bin/tar", "-czf", args.build_only.resolve(), "-C", products, "pcc-build.json", plan.name,
+                app.relative_to(products), runner.relative_to(products), timeout=180)
+            return
         device, runtime, created = select_phone(args.simulator)
         try:
-            evidence = {"commit": output("git", "rev-parse", "HEAD"), "xcode": output("xcodebuild", "-version"),
-                        "runtime": runtime, "simulator": device, "signingReceipt": receipt}
+            evidence = dict(stamp, runtime=runtime, simulator=device, signingReceipt=receipt)
             (out / "environment.json").write_text(json.dumps(evidence, indent=2) + "\n")
             print(json.dumps(evidence), flush=True)
-            if created:
-                run(*SIM, "bootstatus", device, "-b", timeout=300)
+            if not args.simulator:
+                run(*SIM, "bootstatus", device, "-b", timeout=360)
             run_suites(device, plan, app, runner, out)
         finally:
-            if created:
-                subprocess.run([*SIM, "shutdown", device], check=False, timeout=60)
-                run(*SIM, "delete", device)
+            if not args.simulator:
+                try:
+                    run(*SIM, "shutdown", device, timeout=90)
+                    if created:
+                        run(*SIM, "delete", device)
+                except subprocess.SubprocessError as error:
+                    print(f"Hosted simulator cleanup: {error}", file=sys.stderr)
 
 
 if __name__ == "__main__":
