@@ -51,7 +51,6 @@ extension AppModel {
         guard ability.readsPersonalData, isOn(ability) else { return }
         record(.abilityDisabled(ability: ability.rawValue))
         setSwitch(ability, on: false)
-        dayMayHaveChanged()
     }
 
     private func walkThroughConnectDoor(_ ability: Ability, from source: AbilitySource) async -> ConnectOutcome {
@@ -103,6 +102,8 @@ extension AppModel {
     /// Puts the iOS sheet up. The only call in the app that does, for these
     /// three.
     private func askIOS(for ability: Ability) async -> ConnectOutcome {
+        // HealthKit doesn't report which read grants the person changed on its sheet.
+        defer { synchronizeBriefSources(newRevision: ability == .health) }
         switch ability {
         case .calendar, .reminders:
             guard let entity = ability.entity else { return .unavailable }
@@ -131,12 +132,17 @@ extension AppModel {
     }
 
     private func setSwitch(_ ability: Ability, on: Bool) {
+        guard isOn(ability) != on else { return }
         switch ability {
         case .calendar: calendarToolsEnabled = on
         case .reminders: reminderToolsEnabled = on
-        case .health: healthToolsEnabled = on
-        case .localServer: break
+        case .health:
+            healthToolsEnabled = on
+            if DemoDay.isRequested { briefing.demoHealthConnected = on }
+        case .localServer: return
         }
+        // Before yielding to the tools observer or an already-running day read.
+        synchronizeBriefSources(newRevision: true)
     }
 
     /// Pocketd's own page in the Settings app — the only page an app may open.
@@ -232,7 +238,6 @@ extension AppModel {
     /// Health was the last one still asking from here; it now asks only at
     /// the door, like the other two — see `connect(_:from:)`.
     func applyPersonalDataTools() async {
-        let before = personalDataAuthorization
         for entity in PersonalDataEntity.allCases {
             guard isEnabled(entity) else {
                 // Dropped, not kept. These entries are what Settings turns into
@@ -245,6 +250,7 @@ extension AppModel {
             }
             personalDataAuthorization[entity] = EventAccess.authorization(for: entity)
         }
+        synchronizeBriefSources()
         // Not a reload. The engine records the new set and rebuilds its client
         // on the next request that needs one, so a user who flips the switch
         // and puts the phone down pays nothing at all. Both brains are told:
@@ -266,9 +272,6 @@ extension AppModel {
         // appeared after the next model load, which is to say on the screen the
         // user was already looking at, several minutes late.
         await refreshToolGate()
-        // A switch changes what Today may read. The brief's own refresh folds
-        // this into the one already running rather than reading twice.
-        if personalDataAuthorization != before { dayMayHaveChanged() }
     }
 
     /// Re-reads what iOS thinks, without prompting.
@@ -296,21 +299,10 @@ extension AppModel {
         // they are on or not have to say whether turning one on will work or
         // will need a trip to iOS Settings first, and they cannot from an
         // absent entry.
-        let before = personalDataAuthorization
         for entity in PersonalDataEntity.allCases {
             personalDataAuthorization[entity] = EventAccess.authorization(for: entity)
         }
-        // A permission changed while the app was away: the tiles were read
-        // under the old answer.
-        if Self.readableEntities(before) != Self.readableEntities(personalDataAuthorization) {
-            dayMayHaveChanged()
-        }
-    }
-
-    private static func readableEntities(
-        _ answers: [PersonalDataEntity: PersonalDataAuthorization]
-    ) -> Set<PersonalDataEntity> {
-        Set(answers.filter { $0.value.canRead }.map(\.key))
+        synchronizeBriefSources()
     }
 
     /// Asks iOS for an entity without touching the switch.
@@ -319,6 +311,7 @@ extension AppModel {
     /// so a view that has not moved yet still compiles.
     func requestAccess(to entity: PersonalDataEntity) async {
         personalDataAuthorization[entity] = await EventAccess.shared.requestReadAccess(to: entity)
+        synchronizeBriefSources()
         await refreshToolGate()
         dayMayHaveChanged()
     }

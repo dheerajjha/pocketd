@@ -843,8 +843,12 @@ extension AppModel {
     var isUsingPrivateCloudCompute: Bool { effectiveBrain == .privateCloudCompute }
     private var isUsingAppleManagedBrain: Bool { effectiveBrain?.isAppleManaged == true }
 
+    func localUse(of choice: BrainChoice) -> BrainChoice.LocalUse {
+        BrainChoice.localUse(of: choice, saved: brainChoice, effective: effectiveBrain, residentID: loadedModelID)
+    }
+
     func isUsingDownload(_ id: String) -> Bool {
-        effectiveBrain == .downloaded(id: id) && (brainChoice != .privateCloudCompute || loadedModelID == id)
+        localUse(of: .downloaded(id: id)) == .selected
     }
 
     /// How the Brain page and onboarding present Apple's model on this phone.

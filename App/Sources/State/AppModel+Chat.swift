@@ -39,6 +39,7 @@ extension AppModel {
         // A picture with no words is a question — "what is this" is implied —
         // so an empty draft is allowed once something is attached.
         guard !text.isEmpty || !attachments.isEmpty, !isGenerating else { return }
+        IntentInbox.questions.sentFromComposer(in: currentConversationID, text: text)
         // Nothing can answer yet. The question waits in the box, the notice
         // above it says so, and it goes the moment a brain can take it — this
         // used to return here without a word, which left somebody staring at
@@ -546,7 +547,7 @@ extension AppModel {
             brain: brainStatus,
             replyFailure: generationError,
             offer: pendingToolOffer,
-            questionWaiting: waitingQuestion != nil,
+            questionWaiting: waitingQuestion != nil || IntentInbox.questions.isWaiting,
             dismissed: dismissedNotices,
             selectedCloud: isUsingPrivateCloudCompute ? cloudStatus : nil
         ))
@@ -573,11 +574,9 @@ extension AppModel {
 
     /// Holds a question until a brain can answer it, and gets one ready.
     ///
-    /// Siri, a Shortcut, the Control Center button and the composer all end
-    /// here when nothing can answer yet. The question stays in the box, the
-    /// notice says it will be sent, and `sendWaitingQuestionIfReady` sends it
-    /// the moment a brain is in — never left silently unsent, which is what a
-    /// question asked while the brain was still downloading used to be.
+    /// A Send from the composer stays in the box until a brain is ready.
+    /// A Shortcut keeps its own provider-bound delivery until actual dispatch;
+    /// don't put a second, text-only copy of it in this queue.
     func askWhenReady(_ question: String) {
         let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
@@ -600,15 +599,37 @@ extension AppModel {
         loadDownloadedBrainIfIdle()
     }
 
-    /// A question handed over by Siri or a Shortcut, before or after the
-    /// screen it belongs on exists.
-    ///
-    /// When a brain can answer, the Ask screen sends it as it always has.
-    /// When none can, it is held here — the screen only ever put it in the box
-    /// and left it there.
-    func questionArrived(_ question: String) {
-        guard !brainStatus.canAnswer else { return }
-        askWhenReady(question)
+    /// Stamp the live route at delivery; don't also enqueue an unqualified
+    /// copy of the question while the shell is waiting to present it.
+    func questionArrived(_ question: String) -> ShortcutQuestionInbox.Question {
+        // The old local residency can briefly outlive an explicit switch to
+        // cloud. Only a local brain still in use counts as a local fallback.
+        .init(question, chosen: brainChoice, residentID: isUsingPrivateCloudCompute ? nil : loadedModelID)
+    }
+
+    func openShortcutQuestion(_ question: ShortcutQuestionInbox.Question) async {
+        let inbox = IntentInbox.questions
+        guard inbox.isOpening(question.id) else { return }
+        if !isGenerating, !conversation.isEmpty, Date().timeIntervalSince(lastConversationActivity) > Self.freshConversationAfter {
+            let previous = currentConversationID
+            await flushConversation()
+            guard inbox.isOpening(question.id) else { return }
+            if currentConversationID == previous, !isGenerating { beginEmptyConversation() }
+        }
+        guard let text = inbox.stage(question.id, in: currentConversationID) else { return }
+        draft = text
+        sendShortcutIfReady()
+        if draft == text { scheduleConversationSave() } // On relaunch, only the editable words remain.
+        if inbox.isWaiting, !brainStatus.canAnswer { loadDownloadedBrainIfIdle() }
+    }
+
+    func sendShortcutIfReady() {
+        guard IntentInbox.questions.isWaiting else { return }
+        if IntentInbox.questions.claimSend(in: currentConversationID, draft: draft, chosen: brainChoice,
+                                          usingCloud: isUsingPrivateCloudCompute, cloudIsBlocked: !cloudStatus.canChoose,
+                                          ready: brainStatus.canAnswer && !isGenerating) {
+            send()
+        }
     }
 
     /// Sends the waiting question once a brain can take it.
@@ -633,12 +654,16 @@ extension AppModel {
     /// Starts a new conversation unless the open one was used in the last
     /// half hour, so a question about sleep never lands at the bottom of an
     /// unrelated chat from yesterday.
-    func askFresh(_ question: String, now: Date = Date()) async {
+    func askFresh(_ handoff: AskHandoff, now: Date = Date()) async {
         if !conversation.isEmpty, now.timeIntervalSince(lastConversationActivity) > Self.freshConversationAfter {
             if isGenerating { stopGenerating() }
             await newConversation()
         }
-        draft = question
+        draft = handoff.draft
+        guard handoff.send, handoff.usingCloud == isUsingPrivateCloudCompute else {
+            scheduleConversationSave()
+            return
+        }
         send()
     }
 
@@ -654,6 +679,7 @@ extension AppModel {
 
     func loadHistory() async {
         history = await conversations.all()
+        IntentInbox.questions.didReadHistory(current: currentConversationID, latest: history.first?.id)
     }
 
     /// What goes to disk.
@@ -724,6 +750,10 @@ extension AppModel {
     func newConversation() async {
         if isGenerating { stopGenerating() }
         await flushConversation()
+        beginEmptyConversation()
+    }
+
+    private func beginEmptyConversation() {
         conversation.removeAll()
         draft = ""
         dayRefusal = nil

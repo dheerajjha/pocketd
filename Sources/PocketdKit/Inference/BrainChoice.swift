@@ -115,6 +115,16 @@ public extension BrainChoice {
 // MARK: - Deciding
 
 public extension BrainChoice {
+    enum LocalUse: Sendable, Equatable { case other, selected, temporary }
+
+    /// A restored cloud choice can temporarily resolve to a local brain. The
+    /// picker must still offer a way to make that local choice permanent.
+    static func localUse(of local: Self, saved: Self?, effective: Self?, residentID: String?) -> LocalUse {
+        guard local != .privateCloudCompute, effective == local else { return .other }
+        if saved == .privateCloudCompute { return residentID == local.modelID ? .temporary : .other }
+        return .selected
+    }
+
     /// Which brain the phone should actually use, given what was chosen and
     /// what is true now.
     ///

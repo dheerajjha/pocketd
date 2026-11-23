@@ -1,7 +1,9 @@
+import Combine
 import EventKit
 import Foundation
 import Observation
 import PocketdKit
+import UIKit
 
 // MARK: - The state the Today tab reads
 
@@ -64,27 +66,12 @@ final class BriefingState {
     /// would redraw the whole tab twice per brief for no pixels.
     @ObservationIgnored var generation: Task<Void, Never>?
 
-    /// Re-entrancy guard for `refreshBrief`. Scene-active and the view's own
-    /// `.task` can both fire within the same frame on a cold launch, and two
-    /// concurrent reads of EventKit produce one wasted read and one duplicate
-    /// write of the same file.
-    @ObservationIgnored var isRefreshing = false
-
-    /// Something the day is read from has changed since the last reading — a
-    /// switch, an iOS permission, the calendar database, the app coming back
-    /// to the front — so the next refresh reads again however recent the last
-    /// one was. Starts true: nothing has been read this launch.
-    @ObservationIgnored var isStale = true
-
-    /// A forced refresh asked for while another was running. It runs when that
-    /// one finishes rather than being dropped.
-    ///
-    /// Dropping it was the stale first paint. On a launch the Today tab's own
-    /// refresh started first, under switches the launch had not finished
-    /// restoring; the launch's refresh then arrived, hit the guard above, and
-    /// went nowhere — so the tiles said "Off" for a calendar that was
-    /// connected until somebody pulled to refresh.
-    @ObservationIgnored var wantsForcedPass = false
+    typealias Reads = BriefRefreshGate<DayReader.Access>
+    @ObservationIgnored let reads = Reads()
+    @ObservationIgnored var refreshQueued = false
+    @ObservationIgnored var backgroundObservation: AnyCancellable?
+    // The screenshot fixture starts connected, but an explicit disconnect wins.
+    @ObservationIgnored var demoHealthConnected = DemoDay.isRequested
 
     /// Sleeps until the brief on screen next stops being true — a meeting
     /// starting or ending, a timed reminder falling due, the greeting's part
@@ -154,26 +141,36 @@ extension AppModel {
 
     // MARK: Reading the day
 
-    /// Everything today is, read from the real sources and without a model.
-    ///
-    /// One call to `DayReader`, which reads concurrently, off the main actor,
-    /// and never prompts. A source that is not readable is not read at all —
-    /// the same gate the tools respect — and `Availability` carries which of
-    /// "nothing on today" and "not allowed to look" this is.
-    ///
-    /// Under `-pocketd.demoHealth` Health is fabricated by `DemoDay` inside the
-    /// reader and nothing is written anywhere: this app promises it never
-    /// writes to Health, and a screenshot is not a reason to break that.
-    func makeTodaySnapshot(now: Date = DemoClock.now, calendar: Calendar = .current) async -> TodaySnapshot {
-        await DayReader.snapshot(
-            now: now,
-            calendar: calendar,
-            access: DayReader.Access(
-                calendar: availability(for: .calendar),
-                reminders: availability(for: .reminders),
-                health: DemoDay.isRequested ? .connected : briefingHealthAvailability
-            )
+    /// Called synchronously by the switch and permission paths, and rechecked
+    /// at the read and dispatch boundaries in case iOS changed between them.
+    @discardableResult
+    func synchronizeBriefSources(newRevision: Bool = false) -> BriefingState.Reads.Ticket {
+        let access = DayReader.Access(
+            calendar: availability(for: .calendar),
+            reminders: availability(for: .reminders),
+            health: briefing.demoHealthConnected ? .connected : briefingHealthAvailability
         )
+        return briefing.reads.observe(access, newRevision: newRevision) {
+            cancelBriefGeneration()
+            briefing.nextRewrite?.cancel()
+            briefing.nextRewrite = nil
+            // Neither a name change nor a cached first paint may republish
+            // previously connected rows while the replacement read is pending.
+            briefing.snapshot = TodaySnapshot(generatedAt: DemoClock.now, calendar: access.calendar,
+                                              reminders: access.reminders, health: access.health)
+            briefing.brief = nil
+            briefing.lastRefresh = nil
+            briefing.phase = .building
+            queueBriefRefresh()
+        }
+    }
+
+    private func deliverableBriefSources() -> BriefingState.Reads.Ticket? {
+        guard UIApplication.shared.applicationState != .background else {
+            cancelBriefGeneration()
+            return nil
+        }
+        return synchronizeBriefSources()
     }
 
     /// The brief's reading of one EventKit ability.
@@ -185,7 +182,7 @@ extension AppModel {
     /// registration here would switch the Today tiles off on the day somebody
     /// downloaded a smaller brain.
     private func availability(for entity: PersonalDataEntity) -> TodaySnapshot.Availability {
-        let authorization = personalDataAuthorization[entity] ?? EventAccess.authorization(for: entity)
+        let authorization = EventAccess.authorization(for: entity)
         let ability: Ability = entity == .calendar ? .calendar : .reminders
         return .of(AbilityState.of(ability, enabled: isEnabled(entity), grant: AbilityGrant(authorization)))
     }
@@ -237,26 +234,22 @@ extension AppModel {
     /// - Parameter force: Rewrite even if a model already wrote today's. What
     ///   the Refresh pill and pull-to-refresh pass.
     func refreshBrief(force: Bool = false) async {
-        if briefing.isRefreshing {
-            if force { briefing.wantsForcedPass = true }
-            return
-        }
+        watchBriefSuspension()
+        synchronizeBriefSources()
         guard force || briefNeedsReading(now: DemoClock.now) else { return }
-        briefing.isRefreshing = true
-        var forced = force
-        while true {
-            briefing.isStale = false
-            await rebuildBrief(force: forced)
-            if briefing.wantsForcedPass {
-                briefing.wantsForcedPass = false
-                forced = true
-            } else if briefing.isStale {
-                forced = false
-            } else {
-                break
+        await briefing.reads.refresh(
+            force: force,
+            current: deliverableBriefSources,
+            read: { access in
+                if self.briefing.phase == .idle { self.briefing.phase = .building }
+                let calendar = Calendar.current
+                let snapshot = await DayReader.snapshot(now: DemoClock.now, calendar: calendar, access: access)
+                return (snapshot, calendar)
+            },
+            publish: { reading, ticket, forced in
+                self.acceptBriefSnapshot(reading.0, calendar: reading.1, ticket: ticket, force: forced)
             }
-        }
-        briefing.isRefreshing = false
+        )
     }
 
     /// Something the day is read from has changed: mark the reading stale and
@@ -266,37 +259,35 @@ extension AppModel {
     /// was away, by the calendar database announcing a change, and by the app
     /// coming back to the front. Folded into a refresh that is already running.
     func dayMayHaveChanged() {
-        briefing.isStale = true
-        Task { await refreshBrief() }
+        synchronizeBriefSources()
+        briefing.reads.markStale()
+        queueBriefRefresh()
+    }
+
+    private func queueBriefRefresh() {
+        // A running reader owns its next pass. A second scheduled task must
+        // not turn the same grant change into a second read or a second prompt.
+        guard !briefing.reads.isRefreshing, !briefing.refreshQueued,
+              UIApplication.shared.applicationState != .background else { return }
+        briefing.refreshQueued = true
+        Task {
+            self.briefing.refreshQueued = false
+            await self.refreshBrief()
+        }
     }
 
     private func briefNeedsReading(now: Date) -> Bool {
-        guard !briefing.isStale, let last = briefing.lastRefresh else { return true }
+        guard !briefing.reads.isStale, let last = briefing.lastRefresh else { return true }
         return now.timeIntervalSince(last) >= Self.dayReadingShelfLife
             || !Calendar.current.isDate(last, inSameDayAs: now)
     }
 
-    /// One pass of `refreshBrief`: read the day, publish the template, and let
-    /// a brain that can read the day rewrite it.
-    private func rebuildBrief(force: Bool) async {
-        let now = DemoClock.now
-        let calendar = Calendar.current
+    /// Runs in the same main-actor turn that validated the completed read.
+    private func acceptBriefSnapshot(
+        _ snapshot: TodaySnapshot, calendar: Calendar, ticket: BriefingState.Reads.Ticket, force: Bool
+    ) {
+        let now = snapshot.generatedAt
         let store = Self.dailyBriefStore()
-
-        // Yesterday's file is read before the calendar is, so a cold launch
-        // shows a card rather than an empty one for the second EventKit takes
-        // to answer. Only today's: a brief written at 23:50 is about yesterday
-        // ten minutes later, which is what `isForToday` is for.
-        if briefing.brief == nil, let stored = store?.read(), stored.isForToday(now: now, calendar: calendar) {
-            briefing.snapshot = stored.snapshot
-            if keepsStoredBrief(stored) {
-                briefing.brief = stillTrue(stored, current: stored.snapshot, now: now, calendar: calendar)
-                briefing.phase = .ready
-            }
-        }
-        if briefing.phase == .idle { briefing.phase = .building }
-
-        let snapshot = await makeTodaySnapshot(now: now, calendar: calendar)
         briefing.snapshot = snapshot
         briefing.lastRefresh = now
 
@@ -355,6 +346,7 @@ extension AppModel {
         guard willGenerate else { return }
         startBriefGeneration(
             snapshot: snapshot,
+            ticket: ticket,
             now: now,
             calendar: calendar,
             source: force ? .manual : .auto
@@ -516,6 +508,7 @@ extension AppModel {
     /// their own day and the network origins must never reach either.
     private func startBriefGeneration(
         snapshot: TodaySnapshot,
+        ticket: BriefingState.Reads.Ticket,
         now: Date,
         calendar: Calendar,
         source: BriefSource
@@ -551,7 +544,9 @@ extension AppModel {
         let started = ContinuousClock.now
 
         briefing.generation = Task { [weak self] in
-            guard let self else { return }
+            // Creating the task isn't dispatch: the switch can change before
+            // it gets its first turn. Once dispatched we can cancel, not unsend.
+            guard let self, ticket.permitsDelivery(current: self.deliverableBriefSources) else { return }
             var raw = ""
             do {
                 // Without tools: every fact the brief may use is in its
@@ -559,6 +554,7 @@ extension AppModel {
                 // again and write about a card the brief never shows. A
                 // download answers exactly as before.
                 for try await event in try await self.phoneBrain.generateWithoutTools(request) {
+                    guard !Task.isCancelled else { return }
                     guard case let .token(chunk) = event else { continue }
                     raw += chunk
                     // Cleaned on every token rather than at the end, because
@@ -569,11 +565,12 @@ extension AppModel {
                     self.briefing.streamingText = BriefPrompt.clean(raw)
                 }
             } catch {
-                self.failBriefGeneration(error)
+                self.failBriefGeneration(error, ticket: ticket)
                 return
             }
             self.finishBriefGeneration(
                 raw: raw,
+                ticket: ticket,
                 instructions: request.messages,
                 modelID: modelID,
                 snapshot: snapshot,
@@ -587,6 +584,7 @@ extension AppModel {
 
     private func finishBriefGeneration(
         raw: String,
+        ticket: BriefingState.Reads.Ticket,
         instructions: [ChatMessage],
         modelID: String,
         snapshot: TodaySnapshot,
@@ -595,10 +593,12 @@ extension AppModel {
         now: Date,
         calendar: Calendar
     ) {
+        // A cancelled stream can end normally. Its cleanup must not touch the
+        // replacement generation that now owns the slot.
+        guard ticket.permitsDelivery(current: deliverableBriefSources) else { return }
         briefing.generation = nil
         briefing.streamingText = ""
         briefing.phase = .ready
-        guard !Task.isCancelled else { return }
 
         // A model that emitted nothing usable leaves the template standing.
         // Replacing two true sentences with an empty card is the one outcome
@@ -631,10 +631,11 @@ extension AppModel {
     /// Cancellation is not a failure and is not reported as one: it is what
     /// `send()` and the scene going to the background both do on purpose, and
     /// the template brief is still on screen and still true.
-    private func failBriefGeneration(_ error: any Error) {
+    private func failBriefGeneration(_ error: any Error, ticket: BriefingState.Reads.Ticket) {
+        guard ticket.permitsDelivery(current: deliverableBriefSources) else { return }
         briefing.generation = nil
         briefing.streamingText = ""
-        guard !Task.isCancelled, !(error is CancellationError) else {
+        guard !(error is CancellationError) else {
             briefing.phase = .ready
             return
         }
@@ -675,19 +676,31 @@ extension AppModel {
     /// this moment — a cheap, synchronous lookup — and the real reading
     /// replaces it a second later.
     func primeTodayFromDisk(now: Date = DemoClock.now, calendar: Calendar = .current) {
-        var snapshot = TodaySnapshot.empty
-        let stored = Self.dailyBriefStore()?.read().flatMap { $0.isForToday(now: now, calendar: calendar) ? $0 : nil }
-        if let stored { snapshot = stored.snapshot }
-        snapshot.calendar = availability(for: .calendar)
-        snapshot.reminders = availability(for: .reminders)
-        snapshot.health = DemoDay.isRequested ? .connected : briefingHealthAvailability
-        // Judged against the sources as they stand now, not as they stood
-        // when it was written: see `isStillTrue`.
-        if let stored, keepsStoredBrief(stored) {
-            briefing.brief = stillTrue(stored, current: snapshot, now: now, calendar: calendar)
+        let access = synchronizeBriefSources().access
+        briefing.snapshot = TodaySnapshot(generatedAt: now, calendar: access.calendar,
+                                          reminders: access.reminders, health: access.health)
+        guard let stored = Self.dailyBriefStore()?.read(), stored.isForToday(now: now, calendar: calendar),
+              stored.snapshot.calendar == access.calendar, stored.snapshot.reminders == access.reminders,
+              stored.snapshot.health == access.health else { return }
+        briefing.snapshot = stored.snapshot
+        if keepsStoredBrief(stored) {
+            briefing.brief = stillTrue(stored, current: stored.snapshot, now: now, calendar: calendar)
             briefing.phase = .ready
         }
-        briefing.snapshot = snapshot
+    }
+
+    /// HealthKit won't say whether a read grant changed in Settings. An
+    /// unfinished brief must not carry pre-Settings rows through suspension,
+    /// even if all three switches still look the same on return.
+    private func watchBriefSuspension() {
+        guard briefing.backgroundObservation == nil else { return }
+        briefing.backgroundObservation = NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.briefing.reads.isRefreshing || self.briefing.generation != nil else { return }
+                    self.synchronizeBriefSources(newRevision: true)
+                }
+            }
     }
 
     /// The name changed, so the greeting is wrong.
@@ -697,6 +710,7 @@ extension AppModel {
     /// paragraph greets by the old name, so it is replaced by the template and
     /// written again by a brain that can.
     func nameDidChange() {
+        synchronizeBriefSources()
         cancelBriefGeneration()
         guard briefing.lastRefresh != nil else {
             // Nothing read yet: the first reading uses the new name anyway.

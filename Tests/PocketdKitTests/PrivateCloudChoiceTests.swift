@@ -54,6 +54,17 @@ struct PrivateCloudChoiceTests {
         }
     }
 
+    @Test("A temporary local fallback can be kept even if Apple's cloud becomes available again")
+    func keepLocal() {
+        for local in [BrainChoice.builtIn, .downloaded(id: "small")] {
+            #expect(BrainChoice.localUse(of: local, saved: .privateCloudCompute, effective: local, residentID: local.modelID) == .temporary)
+            #expect(BrainChoice.localUse(of: local, saved: .privateCloudCompute, effective: .privateCloudCompute, residentID: local.modelID) == .other)
+            let chosen = BrainChoice.effective(chosen: local, builtIn: .available, installed: ["small"], cloud: .available)
+            #expect(chosen == local)
+            #expect(BrainChoice.localUse(of: local, saved: local, effective: chosen, residentID: local.modelID) == .selected)
+        }
+    }
+
     @Test("Ask reports actual quota state and offers a local choice, without affecting local conversations")
     func notices() {
         let limited = AppleCloudStatus.limitReached(reset: nil)

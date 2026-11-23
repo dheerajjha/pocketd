@@ -52,17 +52,17 @@ struct BrainView: View {
 
     private var builtInCard: some View {
         let offer = model.builtInOffer
-        let inUse = model.isUsingBuiltInBrain && choosingCloud == nil
-            && (model.brainChoice != .privateCloudCompute || model.loadedModelID == ModelRecord.builtInID)
+        let use = model.localUse(of: .builtIn)
+        let inUse = use == .selected && choosingCloud == nil
         return BrainCard(
             identifier: "brain.builtIn",
             symbol: "sparkles",
             title: BuiltInBrainOffer.title,
             detail: offer.detail ?? BuiltInBrainOffer.readyDetail,
-            note: model.cloudStatus.isListed ? Intro.Copy.localProcessing : nil,
+            note: use == .temporary ? "Answering locally for now." : (model.cloudStatus.isListed ? Intro.Copy.localProcessing : nil),
             accessory: inUse
                 ? .selected("In use")
-                : .action("Use this", symbol: BrainCardAccessory.useSymbol) {
+                : .action(use == .temporary ? "Keep on device" : "Use this", symbol: BrainCardAccessory.useSymbol) {
                     Task { await model.useBuiltInBrain() }
                 }
         )
@@ -214,7 +214,8 @@ struct BrainView: View {
         }
         if inUse { return .selected("In use") }
         if model.isInstalled(record) {
-            return .action("Use this", symbol: BrainCardAccessory.useSymbol) {
+            let temporary = model.localUse(of: .downloaded(id: record.id)) == .temporary
+            return .action(temporary ? "Keep on device" : "Use this", symbol: BrainCardAccessory.useSymbol) {
                 Task { await model.useDownloadedBrain(id: record.id) }
             }
         }

@@ -96,6 +96,8 @@ struct AskHandoff: Identifiable, Equatable {
     let id = UUID()
     var draft: String
     var send: Bool
+    /// Captured at the tap, not when the sheet eventually becomes ready.
+    var usingCloud: Bool
 }
 
 /// Where the app is, and the only thing allowed to move it.
@@ -169,8 +171,8 @@ final class Navigator {
     /// `send: false` leaves it in the box with the cursor after it, which is
     /// what a half-sentence like "Remind me to…" needs. The sheet goes over the
     /// page that asked, so closing it lands back there.
-    func ask(_ draft: String, send: Bool = false) {
-        askHandoff = AskHandoff(draft: draft, send: send)
+    func ask(_ draft: String, send: Bool = false, usingCloud: Bool = false) {
+        askHandoff = AskHandoff(draft: draft, send: send, usingCloud: usingCloud)
         isAskPresented = true
     }
 

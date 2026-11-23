@@ -35,6 +35,7 @@ struct AskComposer<Accessory: View>: View {
     @FocusState private var isFocused: Bool
     @State private var voice = VoiceInput()
     @State private var dictation = DictationHandoff()
+    @State private var dictatingForCloud = false
     @State private var voiceStart: Task<Void, Never>?
     @State private var picked: [PhotosPickerItem] = []
     @State private var isPickingPhoto = false
@@ -42,7 +43,7 @@ struct AskComposer<Accessory: View>: View {
     /// A question handed over while a reply was still being written. It waits
     /// in the box and goes when that reply ends; sending over it would cut the
     /// reply off, and dropping it would lose the question.
-    @State private var queued: String?
+    @State private var queued: AskHandoff?
     /// One line above the bar just before iOS asks for Speech Recognition for
     /// the first time. The system's prompt says speech "will be sent to
     /// Apple"; this says first what Pocketd actually does with it.
@@ -210,6 +211,7 @@ struct AskComposer<Accessory: View>: View {
         // A tap on a mic opened by a page stops that turn on touch-up.
         if dictation.isHeld { return dictation.id }
         cancelDictation()
+        dictatingForCloud = model.isUsingPrivateCloudCompute
         let id = dictation.begin(draft: model.draft, in: model.currentConversationID)
         voiceStart = Task { @MainActor in
             if let delay {
@@ -257,6 +259,9 @@ struct AskComposer<Accessory: View>: View {
             voice.stop(for: id)
         case .submit(let words):
             model.draft = words
+            // A delayed final still belongs to the processing location at
+            // mic-down. Keep it editable if that changed before release.
+            guard dictatingForCloud == model.isUsingPrivateCloudCompute else { isFocused = true; return }
             model.record(.voiceAskUsed)
             isFocused = false
             model.send()
@@ -314,11 +319,11 @@ struct AskComposer<Accessory: View>: View {
         cancelDictation()
         if handoff.send {
             guard !model.isGenerating else {
-                queued = handoff.draft
+                queued = handoff
                 model.draft = handoff.draft
                 return
             }
-            Task { await model.askFresh(handoff.draft) }
+            Task { await model.askFresh(handoff) }
         } else {
             Task {
                 await startFreshIfStale()
@@ -332,11 +337,11 @@ struct AskComposer<Accessory: View>: View {
     /// if the box still holds it. Somebody who has since typed something else
     /// has changed their mind.
     private func sendQueued() {
-        guard let question = queued else { return }
+        guard let handoff = queued else { return }
         queued = nil
-        guard model.draft.trimmingCharacters(in: .whitespacesAndNewlines) == question
+        guard navigator.isAskPresented, model.draft.trimmingCharacters(in: .whitespacesAndNewlines) == handoff.draft
             .trimmingCharacters(in: .whitespacesAndNewlines) else { return }
-        Task { await model.askFresh(question) }
+        Task { await model.askFresh(handoff) }
     }
 
     /// `askFresh`'s rule for a sentence that is started rather than sent.

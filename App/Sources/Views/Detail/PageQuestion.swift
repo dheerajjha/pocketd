@@ -21,16 +21,16 @@ import SwiftUI
 enum PageQuestion {
 
     /// The chip above the composer, for `question`.
-    static func suggestion(_ question: String, navigator: Navigator) -> ContextComposer.Suggestion {
-        ContextComposer.Suggestion(question) { ask(question, navigator: navigator) }
+    static func suggestion(_ question: String, navigator: Navigator, model: AppModel) -> ContextComposer.Suggestion {
+        ContextComposer.Suggestion(question) { ask(question, navigator: navigator, usingCloud: model.isUsingPrivateCloudCompute) }
     }
 
     /// Asks `question`, or starts it when it is unfinished.
-    static func ask(_ question: String, navigator: Navigator) {
+    static func ask(_ question: String, navigator: Navigator, usingCloud: Bool) {
         if let stem = unfinished(question) {
             navigator.ask(stem, send: false)
         } else {
-            navigator.ask(question, send: true)
+            navigator.ask(question, send: true, usingCloud: usingCloud)
         }
     }
 
@@ -77,7 +77,7 @@ enum PageQuestion {
         model: AppModel
     ) -> ContextComposer {
         ContextComposer(
-            suggestion: question.map { suggestion($0, navigator: navigator) },
+            suggestion: question.map { suggestion($0, navigator: navigator, model: model) },
             placeholder: placeholder,
             onAsk: { openConversation(navigator: navigator) },
             // No mic at all where nothing can listen: a button that only opens

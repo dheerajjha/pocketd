@@ -1,3 +1,4 @@
+import PocketdKit
 import StoreKit
 import SwiftUI
 #if DEBUG
@@ -9,6 +10,22 @@ struct RootView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        content
+            .onChange(of: IntentInbox.questions.awaitingPresentation(in: model.currentConversationID)?.id, initial: true) { _, _ in
+                // There is no composer during setup or Desk Mode. Preserve the
+                // words as an ordinary draft if the app is closed here; never
+                // persist the permission to submit the Shortcut on relaunch.
+                guard model.needsOnboarding || model.deskMode,
+                      let question = IntentInbox.questions.awaitingPresentation(in: model.currentConversationID) else { return }
+                model.draft = question.text
+                model.scheduleConversationSave()
+            }
+            #if DEBUG
+            .onAppear { IntentInbox.stageLaunchQuestionOnce() }
+            #endif
+    }
+
+    @ViewBuilder private var content: some View {
         if model.needsOnboarding {
             // Ahead of desk mode and the shell both: there is nothing useful
             // behind this yet, and a home screen under an intro invites someone
@@ -101,6 +118,17 @@ private struct Shell: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { collectArrivals() }
         }
+        // An intent can also arrive with the scene already active, or before
+        // its saved conversation is restored. All paths claim the same ID.
+        .onChange(of: IntentInbox.questions.awaitingPresentation(in: model.currentConversationID)?.id) { _, id in
+            if id != nil, scenePhase == .active { collectIntentQuestion() }
+        }
+        .onChange(of: model.isGenerating) { _, busy in
+            if !busy, scenePhase == .active { model.sendShortcutIfReady() }
+        }
+        .onChange(of: IntentInbox.questions.isWaiting ? model.brainStatus : nil) { _, _ in
+            if scenePhase == .active { model.sendShortcutIfReady() }
+        }
         // A notification tapped while the app is already on screen: the
         // delegate sets this and nothing else would notice.
         .onChange(of: NotificationCentre.shared.requestedTask) { _, task in
@@ -170,10 +198,8 @@ private struct Shell: View {
     /// Puts a question from Siri or a Shortcut into the conversation, or opens
     /// it for the "Ask Pocketd" control.
     ///
-    /// Sent whether or not a brain can answer yet. `AppModel.questionArrived`
-    /// has already held it for that case — the conversation says it will be
-    /// sent and sends it the moment a brain is in — so gating here would only
-    /// leave it sitting in the box, which is the failure that hold exists for.
+    /// Opening the sheet is navigation only. In particular, don't make a
+    /// second, unqualified `send: true` handoff from the question's text.
     private func collectIntentQuestion() {
         // A tap on the control, independent of any Siri question below — see
         // AskLaunch. It asks for the composer, and the microphone where the
@@ -182,8 +208,13 @@ private struct Shell: View {
             navigator.go(.ask)
             model.askComposerFocusRequested = true
         }
-        guard let question = IntentInbox.take() else { return }
-        navigator.ask(question, send: true)
+        guard scenePhase == .active else { return }
+        if let question = IntentInbox.questions.takeForPresentation(in: model.currentConversationID) {
+            navigator.go(.ask)
+            Task { await model.openShortcutQuestion(question) }
+        } else {
+            model.sendShortcutIfReady()
+        }
     }
 
     /// Takes a tap on a routine's notification to where the model says it
