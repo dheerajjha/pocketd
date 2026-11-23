@@ -2,6 +2,19 @@ import PocketdKit
 import SwiftUI
 import UIKit
 
+#if DEBUG && POCKETD_LIVE_PCC_PROBE && os(iOS) && !targetEnvironment(macCatalyst) && canImport(FoundationModels)
+/// A dedicated diagnostic build has no normal AppModel, persisted chat,
+/// personal-data sources or store listener. Its one request is also launch-argument gated.
+@main
+private struct PocketdCloudProbeApp: App {
+    var body: some Scene {
+        WindowGroup {
+            Text("Apple Private Cloud Compute verification")
+                .task { _ = await AppleCloudTransportProbe.runIfRequested() }
+        }
+    }
+}
+#else
 @main
 struct PocketdApp: App {
     /// The app exists for two things that have to happen before launch
@@ -73,6 +86,7 @@ struct PocketdApp: App {
         }
     }
 }
+#endif
 
 /// Two callbacks, both of which are worthless a moment later.
 ///

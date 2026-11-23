@@ -1,0 +1,28 @@
+name: Private Cloud Compute UI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  simulator:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install XcodeGen
+        run: command -v xcodegen || brew install xcodegen
+      - name: Test Shortcut handoff and processing choices with separate QA installs
+        run: python3 scripts/test-pcc-ui.py --output "$RUNNER_TEMP/pcc-ui-evidence"
+      - name: Keep both result bundles, counts, signing receipt and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pcc-ui-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pcc-ui-evidence
+          retention-days: 14
+          if-no-files-found: warn
