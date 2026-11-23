@@ -230,7 +230,7 @@ final class PrivateCloudComputeTests: XCTestCase {
         let condition = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             FileManager.default.fileExists(atPath: ready.path)
         }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [condition], timeout: 20), .completed, "The host did not install the test weights")
+        XCTAssertEqual(XCTWaiter.wait(for: [condition], timeout: 125), .completed, "The host did not install the test weights")
     }
 
     private func launch(_ mode: String?, completedIntro: Bool? = nil, choice: String? = nil) -> XCUIApplication {

@@ -81,13 +81,16 @@ def container(device, identifier):
     return path
 
 
-def stage(device, bundle, runner):
+def stage(device, bundle, runner, shortcut=None):
     device = str(uuid.UUID(device)).upper()  # Never the ambiguous `booted` alias.
     if not bundle.startswith("dev.pocketd.qa.") or runner != "dev.pocketd.ui.tests.xctrunner":
         raise ValueError("Only the separate QA app and test runner may be used")
     docs = container(device, runner) / "Documents"
     docs.mkdir(exist_ok=True)
-    request, ready = docs / "pcc-ui-stage-request", docs / "pcc-ui-stage-ready"
+    if shortcut is not None and (len(shortcut) != 8 or not shortcut.isascii() or not shortcut.isdecimal()):
+        raise ValueError("Expected an eight-digit synthetic Shortcut challenge")
+    kind = "shortcut-" + shortcut if shortcut else "stage"
+    request, ready = docs / f"pcc-ui-{kind}-request", docs / f"pcc-ui-{kind}-ready"
     deadline = time.monotonic() + 600
     fd = os.open(docs, os.O_EVTONLY)
     try:
@@ -96,9 +99,20 @@ def stage(device, bundle, runner):
                                          fflags=select.KQ_NOTE_WRITE | select.KQ_NOTE_DELETE)], 0, 0)
             while not request.is_file():
                 if not queue.control(None, 1, max(0, deadline - time.monotonic())):
-                    raise TimeoutError("The onboarding test did not request its local fixture")
+                    raise TimeoutError(f"The UI runner did not request {kind}")
     finally:
         os.close(fd)
+    if shortcut:
+        # By the time this one-shot signal exists, XCTest has installed its
+        # products. Deliver a cold launch with no prior provider or onboarding override.
+        if ready.exists():
+            raise RuntimeError("The external Shortcut was already delivered")
+        subprocess.run(["xcrun", "simctl", "launch", device, bundle, "-pocketd.testPCC", "available",
+                        "-pocketd.proOverride", "off", "-pocketd.analyticsConsent", "refused",
+                        "-pocketd.serverShouldRun", "NO", "-pocketd.calendarTools", "NO", "-pocketd.reminderTools", "NO",
+                        "-pocketd.healthTools", "NO", "-pocketd.siriAsk", shortcut], check=True, timeout=210)
+        ready.touch(exist_ok=False)
+        return
     models = container(device, bundle) / "Library/Application Support/Models"
     models.mkdir(parents=True, exist_ok=True)
     if any(models.iterdir()) or ready.exists():

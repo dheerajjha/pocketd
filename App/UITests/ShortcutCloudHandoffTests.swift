@@ -3,10 +3,10 @@ import XCTest
 
 @MainActor
 final class ShortcutCloudHandoffTests: XCTestCase {
-    func testPreOnboardingShortcutStaysEditableAndFreshAuthorizedShortcutAnswers() {
+    func testPreOnboardingShortcutStaysEditableAndFreshAuthorizedShortcutAnswers() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
-        let external = ProcessInfo.processInfo.environment["POCKETD_UI_PRELAUNCHED_SHORTCUT"]
+        let external = ProcessInfo.processInfo.environment["POCKETD_UI_SHORTCUT"]
         let original = external.flatMap(Int.init) ?? Int.random(in: 10_000_000...89_999_999)
         let fresh = String(original + 1)
         let fixture = ["-pocketd.testPCC", "available", "-pocketd.proOverride", "off",
@@ -14,6 +14,17 @@ final class ShortcutCloudHandoffTests: XCTestCase {
                        "-pocketd.calendarTools", "NO", "-pocketd.reminderTools", "NO", "-pocketd.healthTools", "NO"]
         if let external {
             XCTAssertEqual(external, String(original))
+            // Request the cold launch from inside the running test: an earlier
+            // launch can be terminated by XCTest's installation on a simulator.
+            let docs = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            let prefix = "pcc-ui-shortcut-\(external)-"
+            let ready = docs.appendingPathComponent(prefix + "ready")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: ready.path))
+            try Data().write(to: docs.appendingPathComponent(prefix + "request"), options: .withoutOverwriting)
+            let delivered = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                FileManager.default.fileExists(atPath: ready.path)
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [delivered], timeout: 230), .completed, "No external Shortcut launch was acknowledged")
             XCTAssertTrue([.runningForeground, .runningBackground, .runningBackgroundSuspended].contains(app.state),
                           "The app must already be running from the external Shortcut launch")
             app.activate()

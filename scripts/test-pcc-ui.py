@@ -96,18 +96,10 @@ def prepare_plan(products, shortcut=None):
     environment = target.setdefault("EnvironmentVariables", {})
     environment["POCKETD_UI_INSTALLED_GGUF"] = NAME
     if shortcut is not None:
-        environment["POCKETD_UI_PRELAUNCHED_SHORTCUT"] = shortcut
-        # Both products are installed and the Shortcut has already opened the
-        # target. A second installation could terminate it or move the runner's
-        # fixture mailbox. Use xctestrun's documented installed-product mode.
-        plugin = target.pop("TestBundlePath")
-        if plugin != "__TESTHOST__/PlugIns/PocketdUITests.xctest" or not (runner / "PlugIns/PocketdUITests.xctest").is_dir():
-            raise RuntimeError("The UI test bundle must be embedded in the installed runner")
-        target.update(UseDestinationArtifacts=True, TestHostBundleIdentifier=RUNNER,
-                      TestBundleDestinationRelativePath=plugin, UITargetAppBundleIdentifier=BUNDLE)
-        for key in ("TestHostPath", "UITargetAppPath", "DependentProductPaths"):
-            target.pop(key, None)
-        plan = products / ".pcc-installed.xctestrun"
+        # Simulators require Xcode's ordinary host, bundle and app paths.
+        # The test requests its external launch once XCTest has finished installing them.
+        environment["POCKETD_UI_SHORTCUT"] = shortcut
+        plan = products / ".pcc-simulator.xctestrun"
         plan.write_bytes(plistlib.dumps(spec))
     return plan, app, runner, receipt
 
@@ -137,22 +129,15 @@ def exercise(device, plan, app, runner, result, suite, containers, shortcut):
         if data.name in containers.values() or (models.exists() and any(models.iterdir())):
             raise RuntimeError("Expected a fresh QA app container with no installed model")
         containers[suite] = data.name
-        if suite == "ShortcutCloudHandoffTests":
-            # A Shortcut opens the app from outside XCTest. Start the actual
-            # first launch here; attaching avoids the cold Xcode launch-service
-            # deadline. No onboarding or saved provider is supplied.
-            run(*SIM, "launch", device, BUNDLE, "-pocketd.testPCC", "available", "-pocketd.proOverride", "off",
-                "-pocketd.analyticsConsent", "refused", "-pocketd.serverShouldRun", "NO", "-pocketd.calendarTools", "NO",
-                "-pocketd.reminderTools", "NO", "-pocketd.healthTools", "NO", "-pocketd.siriAsk", shortcut, timeout=300)
         run(*SIM, "install", device, runner, timeout=180)
         owned.append(RUNNER)
-        if suite == "PrivateCloudComputeTests":
-            staging = subprocess.Popen([sys.executable, ROOT / "scripts/pcc_ui_fixture.py", device, BUNDLE, RUNNER])
+        args = [shortcut] if suite == "ShortcutCloudHandoffTests" else []
+        staging = subprocess.Popen([sys.executable, ROOT / "scripts/pcc_ui_fixture.py", device, BUNDLE, RUNNER, *args])
         run("xcodebuild", "test-without-building", "-xctestrun", plan, "-destination", f"platform=iOS Simulator,id={device}",
             "-parallel-testing-enabled", "NO", f"-only-testing:PocketdUITests/{suite}", "-collect-test-diagnostics", "never",
             "-resultBundlePath", result, timeout=900)
-        if staging is not None and staging.wait(timeout=10) != 0:
-            raise RuntimeError("The GGUF staging handshake failed")
+        if staging.wait(timeout=15) != 0:
+            raise RuntimeError(f"The {suite} simulator handshake failed")
     finally:
         if staging is not None and staging.poll() is None:
             staging.terminate()
