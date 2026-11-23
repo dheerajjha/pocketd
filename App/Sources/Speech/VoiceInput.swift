@@ -1,26 +1,12 @@
 import AVFoundation
 import Foundation
 import Observation
+import PocketdKit
 import Speech
 
-/// On-device speech-to-text for a microphone button on the Ask and Today
-/// screens.
-///
-/// Everything here runs on-device — `requiresOnDeviceRecognition` is set to
-/// `true` once, in `start()`, and nothing in this file ever sets it back to
-/// `false`. That is not a performance choice, it is the whole point of the
-/// class: this app's argument to the user is that nothing they say to it
-/// leaves the phone, and `SFSpeechRecognizer`'s automatic fallback to a
-/// server-side recognizer whenever the on-device one is unavailable would
-/// break that argument silently rather than loudly. `isSupported` exists so a
-/// caller can find out *before* offering the microphone at all, which is what
-/// keeps this class from ever having to choose between refusing to listen and
-/// quietly cheating.
-///
-/// On-device recognition does not exist for every locale, and — worth
-/// knowing before this ever looks broken in testing — is unavailable in the
-/// iOS Simulator. `isSupported` reports `false` there; that is expected, not
-/// a bug in this class.
+/// On-device dictation for Ask, including mic handoffs from Today. Recognition
+/// audio must never go to a server: hide the mic for unsupported locales and
+/// require local recognition on every request, even if the local assets fail.
 @MainActor
 @Observable
 final class VoiceInput {
@@ -40,7 +26,6 @@ final class VoiceInput {
         case denied
     }
 
-    private(set) var transcript: String = ""
     private(set) var isListening: Bool = false
 
     /// 0...1, smoothed. A waveform redrawn straight from a buffer's raw RMS
@@ -48,13 +33,6 @@ final class VoiceInput {
     /// exponential smoothing in `updateLevel` is what turns that into
     /// something that reads as speech rather than static.
     private(set) var level: Float = 0
-
-    /// One plain sentence for whoever is looking at the screen, or `nil`.
-    /// Never a raw error description — `SFSpeechRecognitionTask` and
-    /// `AVAudioEngine` report failures as framework NSErrors written for a
-    /// console, and `plainMessage(forDescription:)` is the only place that
-    /// text is looked at, and only to classify it.
-    private(set) var error: String?
 
     private(set) var authorization: Authorization = .unknown
 
@@ -73,23 +51,22 @@ final class VoiceInput {
     private var recognizer: SFSpeechRecognizer?
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
-    private var autoStopTask: Task<Void, Never>?
+    private var deadline: Task<Void, Never>?
 
-    /// Identifies one `start()` session. The recognizer can be slow to wind
-    /// down after `stop()`, and its last callback for an old session can
+    /// Identifies one recognition session. The recognizer can be slow to wind
+    /// down after `endAudio()`, and its last callback for an old session can
     /// arrive after a new one has already begun; every callback below is
     /// stamped with the token that was current when it was scheduled and is
     /// dropped once that is no longer this one — the same trade `LlamaEngine`
     /// makes with its own generation token, so a stale answer never overwrites
     /// the one running now.
-    private var token = UUID()
+    private var token: UUID?
+    private var onResult: (@MainActor (DictationHandoff.Event) -> Void)?
 
-    /// Apple bounds a recognition request to about 60 seconds and ends it
-    /// unasked, with an error, once it does. Stopping just ahead of that
-    /// turns an internal limit nobody was told about into the same clean stop
-    /// as tapping the mic again — whatever was heard is kept, and nothing
-    /// that looks like a failure reaches `error`.
+    /// End audio just ahead of Apple's roughly one-minute recognition limit.
+    /// This stops capture; it doesn't supply either a final or a user release.
     private static let maxListenDuration: Duration = .seconds(58)
+    private static let finalWait: Duration = .seconds(4)
 
     // MARK: - Permission
 
@@ -98,7 +75,11 @@ final class VoiceInput {
     /// once; calling this again after a decision re-reads that decision
     /// instead of asking again.
     func requestAuthorization() async -> Bool {
+        guard !Task.isCancelled else { return false }
         let speechStatus = await Self.speechAuthorization()
+        // Releasing a pending press cannot dismiss an OS prompt already on
+        // screen, but it must not start the next prompt or open the mic.
+        guard !Task.isCancelled else { return false }
         // Asking for the microphone after Speech Recognition was refused
         // would show a permission sheet for a capability that refusal already
         // makes useless, right after the user just said no to the thing next
@@ -108,6 +89,7 @@ final class VoiceInput {
             return false
         }
         _ = await AVAudioApplication.requestRecordPermission()
+        guard !Task.isCancelled else { return false }
         let current = Self.currentAuthorization()
         authorization = current
         return current == .granted
@@ -130,24 +112,19 @@ final class VoiceInput {
 
     // MARK: - Listening
 
-    func start() {
-        guard !isListening else { return }
-        error = nil
-
-        guard isSupported else {
-            error = "On-device speech recognition isn't available on this device."
+    func start(for sessionToken: UUID, onResult: @escaping @MainActor (DictationHandoff.Event) -> Void) {
+        cancel()
+        // `isAvailable` can be false even when local dictation works. Check the
+        // actual recognizer's local capability; the request below enforces it.
+        guard let recognizer = SFSpeechRecognizer(), recognizer.supportsOnDeviceRecognition else {
+            onResult(.failed("On-device speech recognition isn't available on this device."))
             return
         }
 
         let liveAuthorization = Self.currentAuthorization()
         authorization = liveAuthorization
         guard liveAuthorization == .granted else {
-            error = Self.refusedSentence
-            return
-        }
-
-        guard let recognizer = SFSpeechRecognizer(), recognizer.isAvailable else {
-            error = Self.unavailableSentence
+            onResult(.failed(Self.refusedSentence))
             return
         }
 
@@ -160,7 +137,7 @@ final class VoiceInput {
             try session.setCategory(.record, mode: .measurement, options: [.duckOthers])
             try session.setActive(true)
         } catch {
-            self.error = "Couldn't start the microphone. Try again."
+            onResult(.failed("Couldn't start the microphone. Try again."))
             return
         }
 
@@ -172,10 +149,11 @@ final class VoiceInput {
 
         let inputNode = audioEngine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
-        inputNode.removeTap(onBus: 0) // defensive: a previous session's tap should already be gone
-
-        let sessionToken = UUID()
-        token = sessionToken
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            try? session.setActive(false, options: [.notifyOthersOnDeactivation])
+            onResult(.failed("Couldn't start the microphone. Try again."))
+            return
+        }
 
         // The tap block runs on the audio engine's real-time render thread,
         // never the main actor — see `tapBlock`, which builds it outside this
@@ -194,13 +172,14 @@ final class VoiceInput {
         } catch {
             inputNode.removeTap(onBus: 0)
             try? session.setActive(false, options: [.notifyOthersOnDeactivation])
-            self.error = "Couldn't start the microphone. Try again."
+            onResult(.failed("Couldn't start the microphone. Try again."))
             return
         }
 
         self.recognizer = recognizer
         self.request = request
-        transcript = ""
+        token = sessionToken
+        self.onResult = onResult
         isListening = true
 
         task = recognizer.recognitionTask(
@@ -208,37 +187,31 @@ final class VoiceInput {
             resultHandler: Self.resultHandler(token: sessionToken, owner: self)
         )
 
-        scheduleAutoStop(for: sessionToken)
+        deadline = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: Self.maxListenDuration) } catch { return }
+            self?.stop(for: sessionToken)
+        }
     }
 
-    /// Ends listening and keeps whatever has been transcribed so far.
-    func stop() {
-        guard isListening else { return }
-        isListening = false
-        level = 0
-        autoStopTask?.cancel()
-        autoStopTask = nil
-        // Ends the audio rather than cancelling the task, so the recognizer
-        // still hands back a final result for whatever was already said —
-        // cancelling is what would throw away the last word spoken before the
-        // tap landed on Stop. `request`, `task` and `recognizer` are
-        // deliberately left in place for that final callback to arrive
-        // against; `handle` clears them once it does.
-        request?.endAudio()
-        teardownAudioEngineAndSession()
+    /// Ends capture, not recognition: further partials and the final still
+    /// belong to the same callback. The deadline only abandons the request.
+    func stop(for sessionToken: UUID) {
+        guard token == sessionToken, isListening else { return }
+        deadline?.cancel()
+        stopCapture(endingAudio: true)
+        deadline = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: Self.finalWait) } catch { return }
+            self?.resolve(.timedOut, for: sessionToken, cancellingTask: true)
+        }
     }
 
-    /// Clears the transcript and any error for a fresh turn. Leaves
-    /// `isListening` untouched — this is for wiping the slate between uses of
-    /// the same instance, not for stopping one that is still listening.
-    func reset() {
-        transcript = ""
-        error = nil
+    func cancel() {
+        clearSession(cancellingTask: true)
     }
 
     deinit {
         // A defensive net for a caller that goes away without calling
-        // `stop()` first. Both calls are idempotent and safe even when
+        // `cancel()` first. Both calls are idempotent and safe even when
         // nothing is running.
         audioEngine.inputNode.removeTap(onBus: 0)
         if audioEngine.isRunning { audioEngine.stop() }
@@ -293,7 +266,9 @@ final class VoiceInput {
             let transcript = result?.bestTranscription.formattedString
             let isFinal = result?.isFinal ?? false
             let description = error.map { String(describing: $0) }
-            Task { @MainActor [weak owner] in
+            // Keep callbacks in delivery order: a terminal error can follow
+            // immediately behind the last usable partial.
+            DispatchQueue.main.async { [weak owner] in
                 owner?.handle(token: token, transcript: transcript, isFinal: isFinal, errorDescription: description)
             }
         }
@@ -301,43 +276,38 @@ final class VoiceInput {
 
     // MARK: - Session bookkeeping
 
-    private func scheduleAutoStop(for sessionToken: UUID) {
-        autoStopTask?.cancel()
-        autoStopTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: Self.maxListenDuration)
-            guard !Task.isCancelled else { return }
-            guard let self, self.token == sessionToken else { return }
-            self.stop()
+    private func handle(token callbackToken: UUID, transcript: String?, isFinal: Bool, errorDescription: String?) {
+        guard callbackToken == token else { return }
+        if let errorDescription {
+            // An error can carry a transcription, but it cannot confirm one.
+            if let transcript { onResult?(.partial(transcript)) }
+            resolve(.failed(Self.plainMessage(forDescription: errorDescription)), for: callbackToken)
+        } else if isFinal {
+            // The recognizer may finish while the mic is still held.
+            resolve(.final(transcript ?? ""), for: callbackToken)
+        } else if let transcript {
+            onResult?(.partial(transcript))
         }
     }
 
-    private func handle(token callbackToken: UUID, transcript: String?, isFinal: Bool, errorDescription: String?) {
-        guard callbackToken == token else { return } // a stale session's last word, arriving after the next one started
-        if let transcript {
-            self.transcript = transcript
-        }
-        guard let errorDescription else {
-            if isFinal {
-                task = nil
-                request = nil
-                recognizer = nil
-            }
-            return
-        }
-        // A cancellation or "no speech" error that follows our own `stop()`
-        // is expected — `request.endAudio()` there is exactly what produces
-        // one — and must never overwrite a transcript that already holds the
-        // user's words with an error message.
-        guard isListening else { return }
-        isListening = false
-        level = 0
-        autoStopTask?.cancel()
-        autoStopTask = nil
-        teardownAudioEngineAndSession()
+    private func resolve(_ event: DictationHandoff.Event, for sessionToken: UUID, cancellingTask: Bool = false) {
+        guard token == sessionToken else { return }
+        let report = onResult
+        clearSession(cancellingTask: cancellingTask)
+        report?(event)
+    }
+
+    private func clearSession(cancellingTask: Bool) {
+        // Invalidate before touching Speech: a callback may already be queued.
+        token = nil
+        onResult = nil
+        deadline?.cancel()
+        deadline = nil
+        stopCapture()
+        if cancellingTask { task?.cancel() }
         task = nil
         request = nil
         recognizer = nil
-        self.error = Self.plainMessage(forDescription: errorDescription)
     }
 
     private func updateLevel(_ raw: Float, for callbackToken: UUID) {
@@ -349,9 +319,13 @@ final class VoiceInput {
         level += (raw - level) * smoothing
     }
 
-    private func teardownAudioEngineAndSession() {
+    private func stopCapture(endingAudio: Bool = false) {
+        guard isListening else { return }
+        isListening = false
+        level = 0
         audioEngine.inputNode.removeTap(onBus: 0)
         if audioEngine.isRunning { audioEngine.stop() }
+        if endingAudio { request?.endAudio() }
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
 

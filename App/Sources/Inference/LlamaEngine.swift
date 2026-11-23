@@ -1284,10 +1284,11 @@ actor LlamaEngine: InferenceEngine {
                 ))
                 continuation.finish()
             } catch {
+                // Cleanup trips the same abort switch as Stop. Read it first,
+                // or every decode error looks like a retryable interruption.
+                let cancelled = Task.isCancelled || abort?.isTripped == true || error is CancellationError
                 poisonResidentContext()
-                // A decode llama.cpp gave up on because it was told to is a
-                // stop, not a failure, whatever the library calls it.
-                if Task.isCancelled || abort?.isTripped == true {
+                if cancelled {
                     continuation.finish(throwing: InferenceError.cancelled)
                     return
                 }

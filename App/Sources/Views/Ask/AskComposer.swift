@@ -30,9 +30,12 @@ struct AskComposer<Accessory: View>: View {
     @Environment(AppModel.self) private var model
     @Environment(Navigator.self) private var navigator
     @Environment(ToastCenter.self) private var toasts: ToastCenter?
+    @Environment(\.scenePhase) private var scenePhase
 
     @FocusState private var isFocused: Bool
     @State private var voice = VoiceInput()
+    @State private var dictation = DictationHandoff()
+    @State private var voiceStart: Task<Void, Never>?
     @State private var picked: [PhotosPickerItem] = []
     @State private var isPickingPhoto = false
     @State private var levels: [Float] = []
@@ -46,8 +49,6 @@ struct AskComposer<Accessory: View>: View {
     @State private var primer: String?
 
     var body: some View {
-        @Bindable var model = model
-
         VStack(alignment: .leading, spacing: PDSpacing.s) {
             if !model.attachments.isEmpty { attachments }
             if voice.isListening {
@@ -56,18 +57,25 @@ struct AskComposer<Accessory: View>: View {
                 Primer(primer)
                     .padding(.horizontal, PDSpacing.xxs)
                     .transition(.opacity)
+            } else if dictation.id != nil && voiceStart == nil {
+                Primer(dictation.isHeld ? "Release or tap the microphone to finish." : "Finishing dictation…")
+                    .padding(.horizontal, PDSpacing.xxs)
             } else {
                 accessory
             }
 
             AskBar(
-                text: $model.draft,
+                text: draft,
                 placeholder: "Ask anything…",
+                micSession: dictation.isHeld ? dictation.id : nil,
                 isListening: voice.isListening,
                 canSend: canSend,
                 showsMic: voice.isSupported && !model.isGenerating,
-                onMic: startListening,
-                onMicEnd: finishListening,
+                onMic: { startListening() },
+                onMicEnd: { receive(.release, for: $0) },
+                onMicCancel: { id in
+                    if dictation.id == id && dictation.isHeld { cancelDictation() }
+                },
                 onSend: send,
                 onAttach: model.loadedModelSeesImages ? { isPickingPhoto = true } : nil,
                 focus: $isFocused
@@ -81,32 +89,32 @@ struct AskComposer<Accessory: View>: View {
             photoLibrary: .shared()
         )
         .task(id: picked) { await loadPicked() }
-        // Live, so the words appear as they are said rather than all at once on
-        // release — which is the difference between dictation you can correct
-        // and dictation you have to trust.
-        .onChange(of: voice.transcript) { _, text in
-            guard voice.isListening else { return }
-            model.draft = text
-        }
         .onChange(of: voice.level) { _, level in
             guard voice.isListening else { return }
             levels = Array((levels + [level]).suffix(VoiceWaveform.barCount))
         }
-        // Already a sentence for a person, with the reason in it — see
-        // `VoiceInput.plainMessage`. The cursor goes back in the box, so the
-        // question can be typed instead.
-        .onChange(of: voice.error) { _, error in
-            guard let error else { return }
-            toasts?.show(error, symbol: "mic.slash", tint: .pd.caution)
-            isFocused = true
-        }
         .onAppear(perform: arrive)
+        .onDisappear(perform: cancelDictation)
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { cancelDictation() }
+        }
+        .onChange(of: model.currentConversationID) { _, _ in cancelIfDraftChanged() }
+        .onChange(of: model.draft) { _, _ in cancelIfDraftChanged() }
         .onChange(of: navigator.askHandoff?.id) { _, _ in takeHandoff(arriving: false) }
         .onChange(of: model.askComposerFocusRequested) { _, _ in takeFocusRequest(arriving: false) }
         .onChange(of: model.isGenerating) { _, generating in
-            guard !generating else { return }
-            sendQueued()
+            if generating { cancelDictation() } else { sendQueued() }
         }
+    }
+
+    private var draft: Binding<String> {
+        Binding(get: { model.draft }, set: { text in
+            guard text != model.draft else { return }
+            // Retire the turn synchronously, even if the user then undoes the
+            // edit back to the exact words the recognizer last previewed.
+            if dictation.id != nil { cancelDictation() }
+            model.draft = text
+        })
     }
 
     /// Byte-for-byte the predicate `AppModel.send()` guards on, minus the
@@ -123,6 +131,7 @@ struct AskComposer<Accessory: View>: View {
     }
 
     private func send() {
+        cancelDictation()
         isFocused = false
         model.send()
     }
@@ -188,10 +197,25 @@ struct AskComposer<Accessory: View>: View {
 
     // MARK: - Voice
 
-    private func startListening() {
-        guard !voice.isListening, !model.isGenerating else { return }
-        levels = []
-        Task {
+    // A dismissal or a new handoff can precede SwiftUI's onDisappear/onChange.
+    // Check again at delivery, on the same actor as the draft write and send.
+    private var acceptsDictation: Bool {
+        scenePhase != .background && navigator.isAskPresented && navigator.askHandoff == nil
+            && !model.askComposerFocusRequested && !model.isGenerating
+    }
+
+    @discardableResult
+    private func startListening(after delay: Duration? = nil) -> UUID? {
+        guard acceptsDictation else { return nil }
+        // A tap on a mic opened by a page stops that turn on touch-up.
+        if dictation.isHeld { return dictation.id }
+        cancelDictation()
+        let id = dictation.begin(draft: model.draft, in: model.currentConversationID)
+        voiceStart = Task { @MainActor in
+            if let delay {
+                do { try await Task.sleep(for: delay) } catch { return }
+            }
+            guard !Task.isCancelled else { return }
             if voice.authorization != .granted {
                 if VoiceInput.hasNeverAsked {
                     withAnimation(PDMotion.gentle) {
@@ -199,43 +223,66 @@ struct AskComposer<Accessory: View>: View {
                     }
                     // Long enough to be read before the system's alert dims
                     // the screen; it stays readable beneath it.
-                    try? await Task.sleep(for: .milliseconds(900))
+                    do { try await Task.sleep(for: .milliseconds(900)) } catch { return }
                 }
                 // iOS shows each prompt once; asking again after a decision
                 // re-reads it rather than nagging.
                 let granted = await voice.requestAuthorization()
+                guard !Task.isCancelled else { return }
                 withAnimation(PDMotion.gentle) { primer = nil }
                 guard granted else {
-                    toasts?.show(VoiceInput.refusedSentence, symbol: "mic.slash", tint: .pd.caution)
-                    isFocused = true
+                    voiceStart = nil
+                    receive(.failed(VoiceInput.refusedSentence), for: id)
                     return
                 }
             }
-            voice.reset()
-            voice.start()
+            voiceStart = nil
+            guard dictation.id == id else { return }
+            guard acceptsDictation, dictation.beginCapture(for: id, draft: model.draft, in: model.currentConversationID) else {
+                cancelDictation()
+                return
+            }
+            voice.start(for: id) { receive($0, for: id) }
+        }
+        return id
+    }
+
+    private func receive(_ event: DictationHandoff.Event, for id: UUID) {
+        guard dictation.id == id else { return }
+        guard acceptsDictation else { cancelDictation(); return }
+        switch dictation.receive(event, for: id, draft: model.draft, in: model.currentConversationID) {
+        case .preview(let words):
+            model.draft = words
+        case .endAudio:
+            voice.stop(for: id)
+        case .submit(let words):
+            model.draft = words
+            model.record(.voiceAskUsed)
+            isFocused = false
+            model.send()
+        case .review(let message):
+            toasts?.show(message, symbol: "mic.slash", tint: .pd.caution)
+            isFocused = true
+        case .cancel:
+            cancelDictation()
+        case nil:
+            break
         }
     }
 
-    private func finishListening() {
-        guard voice.isListening else { return }
-        voice.stop()
-        Task {
-            // The recogniser's last callback arrives after `endAudio()`, and it
-            // carries the final word. Sending before it lands is how "remind me
-            // at four" becomes "remind me at".
-            try? await Task.sleep(for: .milliseconds(400))
-            levels = []
-            let said = voice.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !said.isEmpty else {
-                isFocused = true
-                return
-            }
-            model.draft = said
-            model.record(.voiceAskUsed)
-            // Unconditionally. With no brain yet it is held, in the box, with
-            // the notice above saying it will go.
-            model.send()
+    private func cancelIfDraftChanged() {
+        if dictation.id != nil, !dictation.owns(draft: model.draft, in: model.currentConversationID) {
+            cancelDictation()
         }
+    }
+
+    private func cancelDictation() {
+        dictation.cancel()
+        voiceStart?.cancel()
+        voiceStart = nil
+        voice.cancel()
+        primer = nil
+        levels = []
     }
 
     // MARK: - Arriving with something to say
@@ -264,6 +311,7 @@ struct AskComposer<Accessory: View>: View {
     /// sentence and leaves the cursor after it.
     private func takeHandoff(arriving: Bool) {
         guard let handoff = navigator.takeAskHandoff() else { return }
+        cancelDictation()
         if handoff.send {
             guard !model.isGenerating else {
                 queued = handoff.draft
@@ -309,12 +357,10 @@ struct AskComposer<Accessory: View>: View {
     private func takeFocusRequest(arriving: Bool) {
         guard model.askComposerFocusRequested else { return }
         model.askComposerFocusRequested = false
+        if dictation.isHeld { cancelDictation() }
         focus(after: arriving)
         guard voice.isSupported, !model.isGenerating else { return }
-        Task {
-            if arriving { try? await Task.sleep(for: .milliseconds(500)) }
-            startListening()
-        }
+        startListening(after: arriving ? .milliseconds(500) : nil)
     }
 
     /// Puts the cursor in the box. On arrival the sheet is still sliding up,

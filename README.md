@@ -40,7 +40,9 @@ a question, or hold the mic button and speak it; the mic on Today and on each
 page opens the conversation already listening. Speech recognition runs on the
 device — `requiresOnDeviceRecognition` is set once and never unset — so on a
 phone or in a locale where that isn't available, the mic button hides itself
-rather than quietly sending your voice to a server. An answer that touches
+rather than quietly sending your voice to a server. Releasing the mic sends
+the final words. If dictation can’t finish, the words already heard stay in
+the box for you to edit or send. An answer that touches
 your calendar, reminders or health comes back as one card: a sentence, and
 under it a timeline of events, a checklist of reminders you can tick off
 without leaving the card, or a small grid of health numbers. A reminder or an

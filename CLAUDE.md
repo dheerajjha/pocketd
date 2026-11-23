@@ -26,6 +26,10 @@ generated from `project.yml` by XcodeGen) adds llama.cpp through LocalLLMClient 
 - Debug builds started from Xcode load Pocketd Pro from `App/Resources/Pocketd.storekit`. A simulator launched from the
   command line ignores that file; pass `-pocketd.proOverride on|off|early` instead.
 
+## Cancellation and dictation
+- An interrupted scheduled prompt stays due. A cancelled stream can end without throwing, even after emitting words; neither that prefix nor an empty result is a completed run.
+- Releasing the Ask mic ends audio input. Only the final result for that dictation may automatically send its draft. If finalization fails or times out, keep the words editable instead.
+
 ## Upload-time rule
 App Intent, App Shortcut and Control strings must not name Apple products (iPhone, iPad, Apple Watch, Siri). Nothing
 fails locally; Apple rejects the build during processing (ITMS-90626). Before an upload, `grep -i` the built app's

@@ -292,7 +292,9 @@ final class ScheduleRunner {
         // device can swap or drop the resident model without this app hearing
         // about it — `AppModel.syncLoadedModel` exists because that really
         // happens — and "is there a model to think with" has one honest source.
-        guard let resident = await engine.loadedModel() else {
+        let resident = await engine.loadedModel()
+        guard !Task.isCancelled else { return nil }
+        guard let resident else {
             return await settle(
                 .failed(.noModelLoaded, firing: handoff.firing, ranAt: now(), context: context),
                 of: task,
@@ -349,17 +351,19 @@ final class ScheduleRunner {
             await self.collect(request)
         }
 
+        // AsyncThrowingStream can end without throwing when its reader is
+        // cancelled. In particular, its last token is not a finished answer.
+        guard !Task.isCancelled else { return nil }
         let ranAt = now()
-        if let failure = produced.failure {
-            // An interruption is the one failure this app causes on purpose —
-            // the app backgrounding, a model being loaded underneath the run,
-            // the user starting to type — and it is deliberately NOT settled.
-            // Settling advances `settledThrough` past the firing, so recording
-            // it would mean a briefing the app itself abandoned is simply gone
-            // for that day. Left owed, the next sweep runs it again, and the
-            // retry is bounded by the recurrence: tomorrow's firing supersedes
-            // today's whether or not it was ever collected.
-            guard failure != .interrupted else { return nil }
+        let text: String
+        switch produced {
+        case let .completed(answer):
+            text = answer
+        case .failed(.interrupted):
+            // The engine can also be stopped independently of this sweep.
+            // Leave the firing (or its foreground promise) for the next one.
+            return nil
+        case let .failed(failure):
             return await settle(
                 .failed(failure, firing: handoff.firing, ranAt: ranAt, context: context),
                 of: task,
@@ -371,7 +375,7 @@ final class ScheduleRunner {
         // answer — the walkthrough found SmolLM2 doing exactly that on Today —
         // and a stored run is shown on a card for weeks. The echoed sentences
         // go; an answer that was mostly echo is no answer (spec §5b).
-        let cleaned = PromptEcho.clean(produced.text, against: request.messages)
+        let cleaned = PromptEcho.clean(text, against: request.messages)
         let answer = cleaned.isMostlyEcho ? "" : cleaned.text.trimmingCharacters(in: .whitespacesAndNewlines)
         // A generation that stopped cleanly having said nothing is a failure,
         // not "nothing to report". That outcome means the rule ran and the day
@@ -390,41 +394,44 @@ final class ScheduleRunner {
         return await settle(run, of: task, context: context)
     }
 
-    /// Drains a generation into the text it produced, or the reason it stopped.
-    ///
-    /// A closed set of failures rather than the error's own text, for the reason
-    /// `RunFailure` is written down: a run record is shown in a list, kept for
-    /// weeks and sits next to the user's calendar, and this app has already once
-    /// put a `URLError`'s description — carrying a signed CDN URL and a whole
-    /// resume blob — straight onto the screen.
-    private func collect(_ request: GenerationRequest) async -> (text: String, failure: RunFailure?) {
+    private enum PromptResult {
+        case completed(String)
+        case failed(RunFailure)
+    }
+
+    /// Only a terminal answer can carry text into the run record. A backend
+    /// failure after a few tokens must not publish those tokens as an answer.
+    private func collect(_ request: GenerationRequest) async -> PromptResult {
         var text = ""
+        var finished = false
         do {
             for try await event in try await engine.generate(request) {
+                try Task.checkCancellation()
+                guard !finished else { return .failed(.other) }
                 switch event {
                 case let .token(chunk):
                     text += chunk
+                case .finished(.stop, _), .finished(.length, _):
+                    // Reaching the requested token cap is an intentional end.
+                    finished = true
+                case .finished(.cancelled, _):
+                    return .failed(.interrupted)
                 // A card is a rendering for a view and there is no view here;
                 // the run record keeps the text. `InferenceEngine.complete`
                 // drops them for exactly the same reason.
-                case .answerCard, .toolCallStarted, .finished:
+                case .answerCard, .toolCallStarted:
                     break
                 }
             }
-            return (text, nil)
+            // An uncancelled EOF without .finished violates the engine contract.
+            return finished ? .completed(text) : .failed(.other)
+        } catch InferenceError.cancelled, is CancellationError {
+            return .failed(.interrupted)
+        } catch InferenceError.noModelLoaded {
+            // The model can leave between the residency check and generation.
+            return .failed(.noModelLoaded)
         } catch {
-            switch error as? InferenceError {
-            case .noModelLoaded:
-                // The model went between the residency check above and the
-                // gate being acquired — the engine reads residency *after*
-                // acquiring precisely because a load can happen while a request
-                // is queued.
-                return (text, .noModelLoaded)
-            case .cancelled:
-                return (text, .interrupted)
-            default:
-                return (text, error is CancellationError ? .interrupted : .other)
-            }
+            return .failed(.other)
         }
     }
 

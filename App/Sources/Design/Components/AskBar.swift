@@ -1,3 +1,4 @@
+import PocketdKit
 import SwiftUI
 
 /// The composer, pinned above the tab bar.
@@ -19,13 +20,17 @@ import SwiftUI
 struct AskBar: View {
     @Binding var text: String
     var placeholder: String = "Ask anything"
+    /// Held through permission prompts and an early recognition final, until
+    /// the person releases (or explicitly stops an accessibility/page mic).
+    var micSession: UUID?
     var isListening: Bool = false
     var canSend: Bool = false
     /// Hidden entirely when the device cannot recognise speech on-device. A mic
     /// that would have to upload audio does not belong in this app.
     var showsMic: Bool = true
-    var onMic: () -> Void = {}
-    var onMicEnd: () -> Void = {}
+    var onMic: () -> UUID? = { nil }
+    var onMicEnd: (UUID) -> Void = { _ in }
+    var onMicCancel: (UUID) -> Void = { _ in }
     var onSend: () -> Void = {}
     var onAttach: (() -> Void)?
     /// A focus state owned by the screen, for the callers that have to put the
@@ -34,6 +39,9 @@ struct AskBar: View {
     var focus: FocusState<Bool>.Binding?
 
     @FocusState private var isFocused: Bool
+    @GestureState private var touchingMic = false
+    @State private var micPress = DictationHandoff.Press()
+    private var micIsHeld: Bool { micSession != nil }
 
     var body: some View {
         HStack(spacing: PDSpacing.xs) {
@@ -61,7 +69,7 @@ struct AskBar: View {
                 // Multiline fields insert a newline on the software Return key.
                 // Sending is the separate control at the trailing edge.
                 .submitLabel(.return)
-                .disabled(isListening)
+                .disabled(micIsHeld)
                 // The placeholder is not a label: VoiceOver stops reading it
                 // the moment there is a character in the field, and a text
                 // field announced as nothing but its contents gives no clue
@@ -92,6 +100,16 @@ struct AskBar: View {
         }
         .animation(PDMotion.gentle, value: canSend)
         .animation(PDMotion.gentle, value: isListening)
+        // System interruptions can cancel a drag without calling onEnded.
+        // A normal lift has already taken its session out of micPress.
+        .onChange(of: touchingMic) { _, down in
+            if !down { cancelPress() }
+        }
+        .onDisappear(perform: cancelPress)
+    }
+
+    private func cancelPress() {
+        if let id = micPress.end() { onMicCancel(id) }
     }
 
     /// A capsule at one line. Once a question runs to two or more lines the
@@ -104,7 +122,9 @@ struct AskBar: View {
 
     @ViewBuilder
     private var trailingControl: some View {
-        if canSend {
+        // Keep this very gesture mounted through partials, early finals and
+        // even a recognition failure while the finger is still down.
+        if canSend && !micIsHeld && !micPress.isDown {
             Button {
                 Haptics.send()
                 onSend()
@@ -120,7 +140,7 @@ struct AskBar: View {
             .buttonStyle(PDPressStyle())
             .accessibilityLabel("Send")
             .accessibilityIdentifier("ask.send")
-        } else if showsMic {
+        } else if showsMic || micIsHeld || micPress.isDown {
             Image(systemName: isListening ? "waveform" : "mic")
                 .font(Font.pd.body)
                 .foregroundStyle(isListening ? Color.pd.onPrimary : Color.pd.inkSecondary)
@@ -134,25 +154,26 @@ struct AskBar: View {
                 // events, and a Button only reports the end of one.
                 .gesture(
                     DragGesture(minimumDistance: 0)
+                        .updating($touchingMic) { _, down, _ in down = true }
                         .onChanged { _ in
-                            guard !isListening else { return }
-                            Haptics.tap()
-                            onMic()
+                            micPress.begin {
+                                if !micIsHeld { Haptics.tap() }
+                                return onMic()
+                            }
                         }
                         .onEnded { _ in
-                            guard isListening else { return }
-                            onMicEnd()
+                            if let id = micPress.end() { onMicEnd(id) }
                         }
                 )
-                .accessibilityLabel(isListening ? "Stop listening" : "Speak")
-                .accessibilityHint(isListening ? "Sends what you said" : "Double-tap to start, and again to stop")
+                .accessibilityLabel(isListening ? "Stop listening" : micIsHeld ? "Finish dictation" : "Speak")
+                .accessibilityHint(micIsHeld ? "Finishes this dictation" : "Double-tap to start, and again to stop")
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction {
-                    if isListening {
-                        onMicEnd()
+                    if let micSession {
+                        onMicEnd(micSession)
                     } else {
                         Haptics.tap()
-                        onMic()
+                        _ = onMic()
                     }
                 }
         }
@@ -176,7 +197,7 @@ private struct AskBarPreview: View {
             Spacer()
             AskBar(text: $empty)
             AskBar(text: $typed, canSend: true, onAttach: {})
-            AskBar(text: $empty, isListening: true)
+            AskBar(text: $empty, micSession: UUID(), isListening: true)
             AskBar(text: $empty, showsMic: false)
         }
         .padding(PDSpacing.gutter)
