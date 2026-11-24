@@ -99,7 +99,7 @@ struct OtherDevicesView: View {
             // iOS asks once, the first time the phone shows itself on the
             // network; on later visits nothing appears and the line is merely
             // early.
-            primer: "Next, tap **Allow** so your laptop can find this iPhone.",
+            primer: "iOS may ask about your local network next, so your laptop can find this iPhone.",
             onPrimary: {
                 promoSeen = true
                 showsPromo = false

@@ -296,7 +296,7 @@ public extension Intro {
     /// remembered by the screen: going Back and forward, or replaying the
     /// intro, has to show what is true now rather than what was tapped.
     enum SourceStatus: Sendable, Equatable {
-        /// Nothing asked yet, or switched off in Pocketd. The Connect pill.
+        /// Nothing asked yet, or switched off in Pocketd. The Continue pill.
         case notConnected
         case connected
         /// iOS said no. A trip to the Settings app is the only fix, and the
@@ -346,7 +346,7 @@ public extension Intro {
         /// The pill's verb, while the row still offers one.
         public var pillTitle: String? {
             switch self {
-            case .notConnected: "Connect"
+            case .notConnected: "Continue"
             case .couldNotAsk: "Try again"
             case .connected, .offInSettings, .blocked, .unavailable, .asking: nil
             }
@@ -378,25 +378,27 @@ public extension Intro {
         }
     }
 
-    /// The line that names the button the iOS sheet is about to show.
+    /// The line that says the iOS sheet comes next, and nothing about how to
+    /// answer it.
     ///
-    /// Word for word what the sheet says, which is the whole job of the line.
-    /// The calendar sheet offers "Allow Full Access" beside an add-only choice;
-    /// the reminders sheet has a plain "Allow"; Health lists every type with
-    /// "Turn On All" above its own "Allow".
+    /// It used to name the sheet's own buttons ("Next, tap Allow Full
+    /// Access."). App Review rejected 1.1.3 under guideline 5.1.1(iv) on
+    /// 24 Nov 2026 for steering people to grant access: a primer may say what
+    /// comes next and that any answer is fine, never which button to tap, and
+    /// the button that raises the sheet says Continue. "May": the same row can
+    /// be a granted source switched off, where no sheet follows.
     static func primer(for ability: Ability) -> String? {
         switch ability {
-        case .calendar: "Next, tap **Allow Full Access**."
-        case .reminders: "Next, tap **Allow**."
-        case .health: "Next, tap **Turn On All**, then **Allow**."
+        case .calendar, .reminders: "iOS may ask next. Pocketd works either way, and you can change this in Settings."
+        case .health: "iOS may ask next, listing each kind of health data. Pocketd works either way, and you can change this in Settings."
         case .localServer: nil
         }
     }
 
     /// The row the primer sits under: the one being connected, or else the
-    /// first that still offers Connect.
+    /// first that still offers Continue.
     ///
-    /// One primer at a time. Three "Next, tap…" lines stacked under three rows
+    /// One primer at a time. Three primers stacked under three rows
     /// say nothing about which comes next; one, under the row about to raise a
     /// sheet, is read before the sheet appears and is still there behind it.
     static func primerRow(connecting: Ability?, statuses: [(Ability, SourceStatus)]) -> Ability? {
@@ -586,8 +588,10 @@ public extension Intro {
         /// The banner's second line when nothing is connected to write it
         /// from. Says what the brief holds without inventing a figure.
         public static let exampleFallback = "What's next, what's due and how you slept, in one short brief."
-        public static let morningPrimer = "Next, tap **Allow**."
-        public static let setItUp = "Set it up"
+        public static let morningPrimer = "iOS may ask about notifications next. You can change this in Settings."
+        /// Continue, not "Set it up": this button raises the notifications
+        /// sheet, and guideline 5.1.1(iv) wants Continue or Next there.
+        public static let morningContinue = "Continue"
         public static let notNow = "Not now"
 
         // 5 · You're all set

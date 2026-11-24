@@ -325,11 +325,11 @@ struct IntroTests {
         #expect(!Intro.SourceStatus.asking.isConnected)
     }
 
-    @Test("Primers name the button on iOS's own sheet, in bold")
+    @Test("Primers say iOS asks next, never which button to tap (5.1.1(iv))")
     func primers() {
-        #expect(Intro.primer(for: .calendar) == "Next, tap **Allow Full Access**.")
-        #expect(Intro.primer(for: .reminders) == "Next, tap **Allow**.")
-        #expect(Intro.primer(for: .health)?.contains("**Turn On All**") == true)
+        #expect(Intro.primer(for: .calendar) == "iOS may ask next. Pocketd works either way, and you can change this in Settings.")
+        #expect(Intro.primer(for: .reminders) == "iOS may ask next. Pocketd works either way, and you can change this in Settings.")
+        #expect(Intro.primer(for: .health) == "iOS may ask next, listing each kind of health data. Pocketd works either way, and you can change this in Settings.")
         #expect(Intro.primer(for: .localServer) == nil)
     }
 
@@ -414,7 +414,7 @@ struct IntroTests {
             C.nothingFitsTitle, C.nothingFitsLine, C.builtInGettingReady, C.ready,
             C.connectTitle, C.connectLine, C.connectCloudLine,
             C.morningTitle, C.morningLine, C.exampleLabel, C.exampleFallback, C.morningPrimer,
-            C.setItUp, C.notNow,
+            C.morningContinue, C.notNow,
             C.allSetTitle, C.allSetLine, C.nameQuestion, C.nameUseWithCloud, C.namePlaceholder, C.openPocketd,
         ]
         + C.promises.map(\.text)

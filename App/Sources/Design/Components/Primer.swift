@@ -1,17 +1,18 @@
 import SwiftUI
 
-/// "ⓘ Next, tap **Allow Full Access** so Pocketd can read your calendar."
+/// "ⓘ iOS may ask next. Pocketd works either way, and you can change this in Settings."
 ///
 /// The line that prepares somebody for an iOS permission sheet, which is the
 /// screen people actually decline on: it uses words nobody has been prepared
-/// for. The primer names the exact button they are about to see, in bold ink,
-/// and says why ("so Pocketd can…").
+/// for. The primer says iOS may ask next and why ("so Pocketd can…"). It
+/// never names a button on iOS's sheet: App Review rejected 1.1.3 under
+/// guideline 5.1.1(iv) on 24 Nov 2026 for steering people to grant access.
 ///
 /// An accent ⓘ and a grey sentence, and no box. A filled bubble — what v2's
 /// `Callout` drew here — makes a hint look like a warning, and this is help.
 ///
-/// The text is a Markdown string so the button name can be marked where it is
-/// written: `Primer("Next, tap **Allow** so Pocketd can remind you.")`. Bold
+/// The text is a Markdown string so a word can be marked where it is
+/// written: `Primer("iOS asks about notifications next, so Pocketd can remind you.")`. Bold
 /// runs are drawn in ink and the rest in the secondary grey; nothing else in
 /// Markdown is interpreted beyond the inline styles.
 struct Primer: View {
@@ -21,7 +22,8 @@ struct Primer: View {
     /// for their warm pair — the same rule `PDCard(warm:)` follows.
     var warm: Bool = false
 
-    /// - Parameter markdown: One sentence. Wrap the iOS button name in `**`.
+    /// - Parameter markdown: One or two sentences. Never name a button on
+    ///   iOS's sheet (guideline 5.1.1(iv)).
     init(_ markdown: String, symbol: String = "info.circle", warm: Bool = false) {
         self.text = Self.styled(markdown)
         self.symbol = symbol
@@ -85,10 +87,10 @@ struct Primer: View {
 private struct PrimerPreview: View {
     var body: some View {
         VStack(alignment: .leading, spacing: PDSpacing.l) {
-            Primer("Next, tap **Allow Full Access** so Pocketd can read your calendar.")
-            Primer("Next, tap **Allow**. You can change this later in Settings.")
+            Primer("iOS may ask next. Pocketd works either way, and you can change this in Settings.")
+            Primer("iOS asks about notifications next. You can change this in Settings.")
             PDCard(warm: true) {
-                Primer("Next, tap **Turn On All** so Pocketd can see your sleep and steps.", warm: true)
+                Primer("iOS lists each kind of health data next. Pocketd works either way.", warm: true)
             }
         }
         .padding(PDSpacing.gutter)

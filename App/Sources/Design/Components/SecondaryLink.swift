@@ -46,7 +46,7 @@ struct SecondaryLink: View {
 private struct SecondaryLinkPreview: View {
     var body: some View {
         VStack(spacing: PDSpacing.xs) {
-            PrimaryButton(title: "Connect Calendar") {}
+            PrimaryButton(title: "Continue") {}
             SecondaryLink("Not now") {}
             SecondaryLink("See other options") {}
         }

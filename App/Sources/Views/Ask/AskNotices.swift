@@ -144,7 +144,7 @@ struct AskNoticeView: View {
             NoticeCard(
                 symbol: "calendar",
                 text: AskNotice.offer(ToolOffer(ability: .calendar)).sentence,
-                linkTitle: "Connect",
+                linkTitle: "Continue",
                 action: {},
                 onDismiss: {}
             )

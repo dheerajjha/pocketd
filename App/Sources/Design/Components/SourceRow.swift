@@ -6,7 +6,7 @@ import SwiftUI
 /// A symbol, a title, one grey line saying what Pocketd does with it, and on
 /// the end exactly one of three things:
 ///
-/// - `.connect` — a small Connect pill (onboarding). A row, not a card with a
+/// - `.connect` — a small Continue pill (onboarding). A row, not a card with a
 ///   full-width button, so the screen's own Continue stays the one button.
 /// - `.toggle` — a switch (You › What Pocketd can see). Its binding's setter is
 ///   the connect door: turning it on is what raises the iOS sheet.
@@ -18,8 +18,9 @@ import SwiftUI
 /// No size, word or language breaks "Reminders" into "Remind / ers".
 struct SourceRow: View {
     enum Accessory {
-        /// A small pill. "Connect" unless told otherwise.
-        case connect(title: String = "Connect", action: () -> Void)
+        /// A small pill. "Continue" unless told otherwise: it raises an iOS
+        /// permission sheet, so guideline 5.1.1(iv) wants Continue or Next.
+        case connect(title: String = "Continue", action: () -> Void)
         /// A switch.
         case toggle(Binding<Bool>)
         /// A word. `isOn` puts a ✓ before it in green; otherwise it is grey.
@@ -106,7 +107,7 @@ struct SourceRow: View {
                     .pdHitTarget()
             }
             .buttonStyle(PDPressStyle())
-            .accessibilityLabel("\(title) \(self.title)")
+            .accessibilityLabel("\(title), \(self.title)")
 
         case let .toggle(isOn):
             // The row's words are the switch's label, so VoiceOver reads
@@ -166,7 +167,7 @@ private struct SourceRowPreview: View {
                             detail: "Reads and adds events",
                             accessory: .connect {}, warm: true
                         )
-                        Primer("Next, tap **Allow Full Access** so Pocketd can read your calendar.", warm: true)
+                        Primer("iOS may ask next. Pocketd works either way, and you can change this in Settings.", warm: true)
                     }
                 }
                 PDCard {

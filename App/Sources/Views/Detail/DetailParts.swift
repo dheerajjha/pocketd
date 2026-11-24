@@ -110,8 +110,8 @@ struct ShowMoreButton: View {
 /// The way out on a page whose source is off: the one connect door, or the
 /// Settings app when iOS has already said no.
 ///
-/// Only the action; the page's own summary is the sentence ("Connect your
-/// calendar to see your day here."), and saying it twice would be a card
+/// Only the action; the page's own summary is the sentence ("Your day shows
+/// here once Pocketd can read your calendar."), and saying it twice would be a card
 /// apologising under a heading that already did.
 struct ConnectSourceLink: View {
     @Environment(AppModel.self) private var model
@@ -122,7 +122,8 @@ struct ConnectSourceLink: View {
     var body: some View {
         switch availability {
         case .off:
-            TextLink("Connect \(ability.title)") { connect() }
+            TextLink("Continue") { connect() }
+                .accessibilityLabel("Continue, \(ability.title)")
         case .refused:
             TextLink("Open Settings", symbol: "arrow.up.right") { connect() }
         case .connected, .unavailable:

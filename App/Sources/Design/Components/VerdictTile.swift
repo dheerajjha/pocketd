@@ -16,8 +16,8 @@ import SwiftUI
 /// pinned to the bottom, and in a `VerdictGrid` every tile in a row is as tall
 /// as the tallest, so the sentences of two neighbours end on one line.
 ///
-/// `.off` is the tile for a source that is not connected — "Off" and "Turn on
-/// to see what's next." — and its action is the connect door itself, not a
+/// `.off` is the tile for a source that is not connected — "Off" and "Shows
+/// what's next once connected." — and its action is the connect door itself, not a
 /// trip to You.
 struct VerdictTile: View {
     enum Tone: Equatable, Sendable {
@@ -182,7 +182,7 @@ struct VerdictTile: View {
 ///         VerdictTile(label: "Up next", symbol: "calendar", status: "Design review", sentence: "In 3h 19m · Room B.")
 ///         VerdictTile(label: "Due", symbol: "checklist", status: "1 overdue", tone: .caution, sentence: "…")
 ///         VerdictTile(label: "Sleep", symbol: "bed.double", status: "Rested", tone: .positive, sentence: "…")
-///         VerdictTile.off(label: "Activity", symbol: "figure.walk", sentence: "Turn on to see your steps.")
+///         VerdictTile.off(label: "Activity", symbol: "figure.walk", sentence: "Shows your steps once connected.")
 ///     }
 struct VerdictGrid<Content: View>: View {
     var spacing: CGFloat = PDSpacing.tileGap
@@ -230,7 +230,7 @@ private struct VerdictTilePreview: View {
                 ) {}
                 VerdictTile.off(
                     label: "Activity", symbol: "figure.walk",
-                    sentence: "Turn on to see your steps."
+                    sentence: "Shows your steps once connected."
                 ) {}
             }
             .padding(PDSpacing.gutter)

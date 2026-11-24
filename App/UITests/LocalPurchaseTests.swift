@@ -18,7 +18,9 @@ final class LocalPurchaseTests: XCTestCase {
             XCTAssertTrue(builtIn.waitForExistence(timeout: 30))
             builtIn.tap()
             app.buttons["Continue"].tap()
-            app.buttons["Continue"].tap()
+            // The connect step's rows say Continue too (5.1.1(iv)), so its
+            // page button is found by identifier.
+            app.buttons["intro.connect.continue"].tap()
             app.buttons["Not now"].tap()
             app.buttons["Open Pocketd"].tap()
         }

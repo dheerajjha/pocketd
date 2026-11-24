@@ -294,10 +294,10 @@ struct TodayVerdictsTests {
         #expect(verdicts.map(\.tile) == [.upNext, .due, .sleep, .activity])
         #expect(verdicts.allSatisfy { $0.status == "Off" && $0.action == .connect && $0.isOff })
         #expect(verdicts.map(\.sentence) == [
-            "Turn on to see what's next.",
-            "Turn on to see what's due.",
-            "Turn on to see how you slept.",
-            "Turn on to see your steps.",
+            "Shows what's next once connected.",
+            "Shows what's due once connected.",
+            "Shows how you slept once connected.",
+            "Shows your steps once connected.",
         ])
     }
 

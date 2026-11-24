@@ -269,7 +269,7 @@ struct TodayView: View {
             case .sleep: "Shows your sleep"
             case .activity: "Shows your steps"
             }
-        case .connect: "Turns on \(ability(for: verdict.tile).title)"
+        case .connect: "Sets up \(ability(for: verdict.tile).title)"
         case .openSettings: "Opens Settings"
         case .none: nil
         }
@@ -379,7 +379,9 @@ struct TodayView: View {
             NoticeCard(
                 symbol: "sun.horizon",
                 text: "Get your day every morning, before you pick up the phone.",
-                linkTitle: "Set it up",
+                // Continue: this link asks iOS for notifications straight
+                // away, and guideline 5.1.1(iv) wants Continue or Next there.
+                linkTitle: "Continue",
                 action: { setUpMorningBrief() },
                 onDismiss: { morningBriefOfferDismissed = true }
             )

@@ -54,7 +54,7 @@ struct TextLink: View {
 ///     NoticeCard(
 ///         symbol: "sun.horizon",
 ///         text: "Get your day every morning, before you pick up the phone.",
-///         linkTitle: "Set it up"
+///         linkTitle: "Continue"
 ///     ) { openRoutines() }
 ///
 /// Today's feed cards (a morning-brief setup, the latest routine result,
@@ -151,7 +151,7 @@ private struct NoticeCardPreview: View {
                 NoticeCard(
                     symbol: "sun.horizon",
                     text: "Get your day every morning, before you pick up the phone.",
-                    linkTitle: "Set it up"
+                    linkTitle: "Continue"
                 ) {}
                 NoticeCard(
                     symbol: "calendar",

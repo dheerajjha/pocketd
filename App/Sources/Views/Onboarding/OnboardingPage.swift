@@ -49,7 +49,8 @@ struct OnboardingPage<Content: View>: View {
     var ornament: Ornament
     var headline: String
     var secondary: String?
-    /// Markdown, with the iOS button's name in bold. Above the button.
+    /// Markdown. Says iOS may ask next, never which button to tap
+    /// (guideline 5.1.1(iv)). Above the button.
     var primer: String?
     var primary: Action
     /// The quiet way past an optional screen: "Not now →".

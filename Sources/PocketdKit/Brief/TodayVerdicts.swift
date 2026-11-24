@@ -474,7 +474,7 @@ public enum TodayVerdicts {
             // `isReadable` first. Stated rather than trapped.
             return TileVerdict(tile: tile, status: "—", sentence: "", tone: .neutral, action: .openDetail)
         case .off:
-            return TileVerdict(tile: tile, status: "Off", sentence: "Turn on to see \(tile.payoff).", tone: .neutral, action: .connect)
+            return TileVerdict(tile: tile, status: "Off", sentence: "Shows \(tile.payoff) once connected.", tone: .neutral, action: .connect)
         case .refused:
             return TileVerdict(tile: tile, status: "Off", sentence: "Turn on in Settings to see \(tile.payoff).", tone: .warning, action: .openSettings)
         case .unavailable:
@@ -489,7 +489,7 @@ public enum TodayVerdicts {
 }
 
 extension TileVerdict.Tile {
-    /// What turning the source on would show, finishing "Turn on to see …".
+    /// What turning the source on would show, finishing "Shows … once connected."
     var payoff: String {
         switch self {
         case .upNext: "what's next"

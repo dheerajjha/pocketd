@@ -44,7 +44,7 @@ struct RoutineTemplateSheet: View {
                     if notificationsUndecided {
                         // The first routine is what asks iOS for
                         // notifications; this is the warning that it will.
-                        Primer("Next, tap **Allow** so Pocketd can tell you when it's ready.", symbol: "bell")
+                        Primer("Your first routine makes iOS ask about notifications, so Pocketd can tell you when it's ready.", symbol: "bell")
                             .padding(.horizontal, PDSpacing.xxs)
                     }
                 }

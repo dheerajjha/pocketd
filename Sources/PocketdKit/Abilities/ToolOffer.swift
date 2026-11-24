@@ -69,7 +69,7 @@ public struct ToolOffer: Sendable, Equatable {
     /// the same silence, which is why `Ability.grantIsReportedByOS` is false for
     /// exactly that one. A sentence promising the figure would be promising
     /// something this app has no way to know it can deliver.
-    public var sentence: String { "I can check \(ability.noun) — turn that on?" }
+    public var sentence: String { "Want Pocketd to check \(ability.noun)?" }
 
     public init(ability: Ability) {
         self.ability = ability

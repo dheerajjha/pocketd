@@ -469,7 +469,7 @@ struct BriefPromptTests {
             snapshot: TodaySnapshot(generatedAt: Self.date(20)), name: "Dheeraj", now: Self.date(20),
             calendar: Self.calendar, locale: Self.locale
         )
-        #expect(text == "Good evening, Dheeraj. Connect your calendar, reminders and Health to see your day here.")
+        #expect(text == "Good evening, Dheeraj. Your day shows here once Pocketd can read your calendar, reminders and Health.")
     }
 
     @Test("the fallback is never an empty string, whatever it is handed")
@@ -547,7 +547,7 @@ struct BriefPromptTests {
 
         #expect(BriefPrompt.firstSentence(
             snapshot: TodaySnapshot(generatedAt: Self.date(8)), now: Self.date(8), calendar: Self.calendar, locale: Self.locale
-        ) == "Connect your calendar, reminders and Health to see your day here.")
+        ) == "Your day shows here once Pocketd can read your calendar, reminders and Health.")
     }
 
     @Test("the first fact of any brief, template or model, is the one after the greeting")

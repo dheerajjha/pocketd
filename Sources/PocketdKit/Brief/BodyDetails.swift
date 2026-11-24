@@ -185,7 +185,7 @@ public struct SleepDetail: Sendable, Equatable {
             return SleepDetail(
                 availability: availability, lastNight: nil, usual: nil, nights: [],
                 verdict: verdict,
-                summary: availability == .refused ? "Health is off in Settings." : "Connect Health to see how you slept."
+                summary: availability == .refused ? "Health is off in Settings." : "How you slept shows here once Pocketd can read Health."
             )
         }
 
@@ -316,7 +316,7 @@ public struct ActivityDetail: Sendable, Equatable {
             return ActivityDetail(
                 availability: availability, today: nil, usualByNow: nil, usualDaily: nil, days: [],
                 verdict: verdict,
-                summary: availability == .refused ? "Health is off in Settings." : "Connect Health to see your steps."
+                summary: availability == .refused ? "Health is off in Settings." : "Your steps show here once Pocketd can read Health."
             )
         }
 

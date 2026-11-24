@@ -537,7 +537,7 @@ public enum BriefPrompt {
         if !snapshot.reminders.isReadable { missing.append(missing.isEmpty ? "your reminders" : "reminders") }
         if !snapshot.health.isReadable { missing.append("Health") }
         guard !missing.isEmpty else { return "There's nothing to report yet." }
-        return "Connect \(listed(missing)) to see your day here."
+        return "Your day shows here once Pocketd can read \(listed(missing))."
     }
 
     /// `a`, `a and b`, `a, b and c`.

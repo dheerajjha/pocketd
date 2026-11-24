@@ -31,7 +31,7 @@ struct OnboardingMorningBriefStep: View {
     /// and then lost by tapping Back is a time they have to set twice.
     @Binding var time: TimeOfDay
     @Binding var weekdaysOnly: Bool
-    /// Whether iOS has never been asked about notifications, so Set it up
+    /// Whether iOS has never been asked about notifications, so Continue
     /// will raise its sheet. Read by the flow when the intro opens, so it is
     /// known by the time this screen appears; `nil` until then.
     ///
@@ -66,7 +66,7 @@ struct OnboardingMorningBriefStep: View {
             headline: Intro.Copy.morningTitle,
             secondary: Intro.Copy.morningLine,
             primer: notificationsUndecided != false ? Intro.Copy.morningPrimer : nil,
-            primary: .init(Intro.Copy.setItUp, isLoading: saving, run: setUp),
+            primary: .init(Intro.Copy.morningContinue, isLoading: saving, run: setUp),
             escape: .init(Intro.Copy.notNow, run: skip)
         ) {
             VStack(alignment: .leading, spacing: PDSpacing.l) {

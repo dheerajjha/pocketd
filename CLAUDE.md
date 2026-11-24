@@ -49,6 +49,15 @@ outside `App/`. `docs/` publishes through GitHub Pages on every push to `main`.
 The listing describes the build on the store, not `main`. The app is iPhone-only, and analytics reporting is on by
 default (`optOutTrackingByDefault: false`), so the listing can't claim iPad support or "no telemetry".
 
+## Permission wording
+App Review rejected 1.1.3 under guideline 5.1.1(iv) (24 Nov 2026): a "Connect" button after a custom message, and
+primers that named iOS's own Allow buttons. Every control that raises an iOS permission sheet (Calendar, Reminders,
+Health, notifications, speech, local network) says Continue, or Next; a primer says iOS may ask next and that any
+answer is fine, never which button to tap. `PermissionWordingTests` scans `App/Sources` and `Sources` for the
+rejected wording. The connect step's page button is Next, so UI tests find it by `intro.connect.continue`.
+Left as they are, by EM judgement: the "Allow other devices" switch (an in-app feature name with no message before it),
+"Try again" after a failed ask, Save and template rows under neutral primers, and the "Connect it in Pocketd" chat replies.
+
 ## Analytics
 Use `AppModel.record` / `ProductAnalytics` for events, not the raw sink: this preserves
 consent, current context and the persisted external-success first-value latch. See

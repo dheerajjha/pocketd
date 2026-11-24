@@ -221,7 +221,7 @@ struct AskComposer<Accessory: View>: View {
             if voice.authorization != .granted {
                 if VoiceInput.hasNeverAsked {
                     withAnimation(PDMotion.gentle) {
-                        primer = "Pocketd turns your voice into text on this iPhone. Next, tap **Allow**."
+                        primer = "Pocketd turns your voice into text on this iPhone. iOS asks next."
                     }
                     // Long enough to be read before the system's alert dims
                     // the screen; it stays readable beneath it.

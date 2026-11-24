@@ -267,7 +267,7 @@ private struct GalleryButtons: View {
             }
             HStack(spacing: PDSpacing.xs) {
                 LinkPill(title: "Try again", symbol: "arrow.clockwise") { count += 1 }
-                TextLink("Set it up") { count += 1 }
+                TextLink("Continue") { count += 1 }
             }
             Text("Taps: \(count)")
                 .font(Font.pd.code)
@@ -276,7 +276,7 @@ private struct GalleryButtons: View {
 
             SectionLabel("The one button")
             PrimaryButton(title: "Continue") { count += 1 }
-            PrimaryButton(title: "Set it up", arrow: false, isLoading: true) {}
+            PrimaryButton(title: "Continue", arrow: false, isLoading: true) {}
             SecondaryLink("Not now") { count += 1 }
         }
     }
@@ -305,7 +305,7 @@ private struct GalleryTiles: View {
                 ) {}
                 VerdictTile.off(
                     label: "Activity", symbol: "figure.walk",
-                    sentence: "Turn on to see your steps."
+                    sentence: "Shows your steps once connected."
                 ) {}
             }
             SectionLabel("Inside a card")
@@ -365,7 +365,7 @@ private struct GalleryRows: View {
             PDCard(warm: true) {
                 VStack(alignment: .leading, spacing: PDSpacing.m) {
                     SourceRow(symbol: "checklist", title: "Reminders", detail: "Reads, adds and ticks off reminders", accessory: .connect {}, warm: true)
-                    Primer("Next, tap **Allow Full Access** so Pocketd can read your reminders.", warm: true)
+                    Primer("iOS may ask next. Pocketd works either way, and you can change this in Settings.", warm: true)
                 }
             }
             SectionLabel("Later today")
@@ -413,7 +413,7 @@ private struct GalleryCards: View {
             NoticeCard(
                 symbol: "sun.horizon",
                 text: "Get your day every morning, before you pick up the phone.",
-                linkTitle: "Set it up"
+                linkTitle: "Continue"
             ) {}
             NoticeCard(
                 symbol: "calendar",
@@ -424,7 +424,7 @@ private struct GalleryCards: View {
                 action: {},
                 onDismiss: {}
             )
-            Primer("Next, tap **Allow** so Pocketd can tell you when it's ready.")
+            Primer("iOS asks about notifications next, so Pocketd can tell you when it's ready.")
             ConnectCard(
                 title: "Reminders",
                 symbol: "checklist",
@@ -548,7 +548,7 @@ private struct GalleryComposerPage: View {
                     VerdictTile(label: "Sleep", symbol: "bed.double", status: "Rested", tone: .positive, sentence: "6h 36m — about your usual.") {}
                     VerdictTile(label: "Activity", symbol: "figure.walk", status: "Behind", tone: .caution, sentence: "4,120 steps — you're usually at 6,100 by now.") {}
                 }
-                NoticeCard(symbol: "sun.horizon", text: "Get your day every morning, before you pick up the phone.", linkTitle: "Set it up") {}
+                NoticeCard(symbol: "sun.horizon", text: "Get your day every morning, before you pick up the phone.", linkTitle: "Continue") {}
             }
             .padding(.horizontal, PDSpacing.gutter)
         }
@@ -583,8 +583,8 @@ private struct GalleryPromoHost: View {
                     .init("exclamationmark.circle", "Overdue things, caught early"),
                     .init("clock", "At the time you choose"),
                 ],
-                primaryTitle: "Set it up",
-                primer: "Next, tap **Allow** so Pocketd can tell you when your brief is ready.",
+                primaryTitle: "Continue",
+                primer: "iOS asks about notifications next, so Pocketd can tell you when your brief is ready.",
                 onPrimary: { showsPromo = false },
                 onSecondary: { showsPromo = false }
             )

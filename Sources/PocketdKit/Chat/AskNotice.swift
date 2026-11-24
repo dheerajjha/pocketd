@@ -51,7 +51,7 @@ public enum AskNotice: Sendable, Equatable {
         case let .appleCloud(status):
             return status.statusLine
         case let .offer(offer):
-            return "Connect \(offer.ability.noun) so Pocketd can answer that."
+            return "Pocketd needs \(offer.ability.noun) to answer that."
         case let .gettingReady(minutesLeft, waiting):
             let minutes = minutesLeft.map { "about \($0) minute\($0 == 1 ? "" : "s")" }
             switch (waiting, minutes) {
@@ -89,7 +89,7 @@ public enum AskNotice: Sendable, Equatable {
     public var actionTitle: String? {
         switch self {
         case .replyFailed: "Start a new chat"
-        case .offer: "Connect"
+        case .offer: "Continue"
         case .gettingReady: nil
         case .chooseBrain, .brainFailed: "Choose"
         case .cannotReadYourDay: "Switch"

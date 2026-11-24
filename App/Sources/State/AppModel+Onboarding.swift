@@ -113,7 +113,7 @@ extension AppModel {
 
     /// The morning brief already on this phone, as the time row should start:
     /// its time and whether it skips weekends. A replayed intro shows the
-    /// routine somebody has, and Set it up moves that one rather than adding a
+    /// routine somebody has, and Continue moves that one rather than adding a
     /// second (`setUpMorningBrief`).
     var introExistingMorningBrief: (time: TimeOfDay, weekdaysOnly: Bool, isOn: Bool)? {
         guard let routine = existingRoutine(for: .morningBrief) else { return nil }
@@ -129,11 +129,11 @@ extension AppModel {
         }
     }
 
-    /// Set it up on the morning screen: iOS's notification question, then the
+    /// Continue on the morning screen: iOS's notification question, then the
     /// routine — the one already here moved rather than a second one added.
     ///
     /// The question is put here, at the tap, and answered before this returns,
-    /// so the screen that primed it ("Next, tap **Allow**.") is still the one
+    /// so the screen that primed it ("iOS asks about notifications next.") is still the one
     /// on show when iOS asks. The save's own ask now runs in the background
     /// (`NotificationCentre.scheduleChanged`), which left the sheet arriving
     /// over "You're all set" with nothing on screen saying what it was for. It

@@ -27,7 +27,7 @@ struct AskNoticeTests {
         let notice = AskNotice.decide(.init(brain: .cannotReadYourDay, offer: Self.offer))
         #expect(notice == .offer(Self.offer))
         #expect(notice?.action == .connect(.calendar))
-        #expect(notice?.sentence == "Connect your calendar so Pocketd can answer that.")
+        #expect(notice?.sentence == "Pocketd needs your calendar to answer that.")
     }
 
     @Test("no brain: getting ready while one is on its way, a choice when none is")

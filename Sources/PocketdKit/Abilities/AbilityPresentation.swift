@@ -195,7 +195,7 @@ public struct AbilityPresentation: Sendable, Equatable, Identifiable {
             return grantSentence(
                 ability,
                 eventKit: .notDetermined,
-                server: "On here, but iOS has given no decision about the local network yet. Ask again, and allow the prompt."
+                server: "On here, but iOS has given no decision about the local network yet. You can ask again."
             )
 
         case .onAndRefused:

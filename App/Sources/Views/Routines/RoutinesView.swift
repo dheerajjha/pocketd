@@ -152,12 +152,12 @@ struct RoutinesView: View {
                     .init("exclamationmark.circle", "Overdue things, caught early"),
                     .init("clock", "At the time you choose"),
                 ],
-                primaryTitle: "Set it up",
-                // Only while iOS has never been asked: Set it up is what asks,
+                primaryTitle: "Continue",
+                // Only while iOS has never been asked: Continue is what asks,
                 // and a primer for a sheet that will not appear is a promise
                 // the next screen breaks.
                 primer: notificationsUndecided
-                    ? "Next, tap **Allow** so Pocketd can tell you when your brief is ready."
+                    ? "iOS asks about notifications next, so Pocketd can tell you when your brief is ready."
                     : nil,
                 onPrimary: setUp,
                 onSecondary: {
@@ -216,7 +216,7 @@ struct RoutinesView: View {
 
     // MARK: - First visit
 
-    /// [Set it up]: the morning brief and the overdue nudge, at their usual
+    /// [Continue]: the morning brief and the overdue nudge, at their usual
     /// times — the two the promo's rows promise. Notification permission is
     /// asked by the first save, now, after the person chose the feature.
     private func setUp() {

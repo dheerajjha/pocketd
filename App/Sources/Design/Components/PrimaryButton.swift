@@ -97,7 +97,7 @@ private struct PrimaryButtonPreview: View {
         VStack(spacing: PDSpacing.m) {
             PrimaryButton(title: "Get started") {}
             PrimaryButton(title: "Download and continue") {}
-            PrimaryButton(title: "Set it up", arrow: false) {}
+            PrimaryButton(title: "Continue", arrow: false) {}
             PrimaryButton(title: "Opening", isLoading: true) {}
             PrimaryButton(title: "Continue", isEnabled: false) {}
         }

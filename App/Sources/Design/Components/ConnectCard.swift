@@ -7,7 +7,7 @@ import SwiftUI
 /// day and a chat box.
 ///
 /// The `primer` is the line that raises the acceptance rate more than any copy
-/// change — "Next, tap Allow Full Access." — because iOS's own sheet is the
+/// change — "iOS may ask next." — because iOS's own sheet is the
 /// screen people actually decline on, and it uses words nobody has been
 /// prepared for. It appears only in `.connect`; once a thing is connected,
 /// instructions for connecting it are clutter. It is a `Primer`, so the button
@@ -36,7 +36,7 @@ struct ConnectCard: View {
     private var resolvedActionTitle: String {
         if let actionTitle { return actionTitle }
         switch state {
-        case .connect: return "Connect"
+        case .connect: return "Continue"
         case .connected: return "Connected"
         case .needsAttention: return "Open Settings"
         }
@@ -141,7 +141,7 @@ private struct ConnectCardPreview: View {
                     symbol: "calendar",
                     detail: "Ask what's on tomorrow, or have it add an event for you.",
                     state: .connect,
-                    primer: "Next, tap **Allow Full Access** so Pocketd can read your calendar."
+                    primer: "iOS may ask next. Pocketd works either way, and you can change this in Settings."
                 ) {}
                 ConnectCard(
                     title: "Reminders",

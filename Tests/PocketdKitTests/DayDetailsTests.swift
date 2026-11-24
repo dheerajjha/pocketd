@@ -142,7 +142,7 @@ struct DayDetailsTests {
     func agendaOff() {
         let off = DayAgenda.make(events: Self.demoEvents, availability: .off, now: Self.date(9), calendar: Self.calendar)
         #expect(off.isEmpty)
-        #expect(off.summary == "Connect your calendar to see your day here.")
+        #expect(off.summary == "Your day shows here once Pocketd can read your calendar.")
         let refused = DayAgenda.make(events: Self.demoEvents, availability: .refused, now: Self.date(9), calendar: Self.calendar)
         #expect(refused.summary == "Calendar is off in Settings.")
     }
@@ -224,7 +224,7 @@ struct DayDetailsTests {
     func remindersOff() {
         let off = ReminderAgenda.make(reminders: Self.demoReminders, availability: .off, now: Self.date(9), calendar: Self.calendar)
         #expect(off.isEmpty)
-        #expect(off.summary == "Connect your reminders to see what's due.")
+        #expect(off.summary == "What's due shows here once Pocketd can read your reminders.")
     }
 
     // MARK: - Ticking one off
@@ -363,7 +363,7 @@ struct DayDetailsTests {
 
     @Test("Health that is off is an empty page that says so")
     func bodyOff() {
-        #expect(SleepDetail.make(nights: [], availability: .off, now: Self.date(9), calendar: Self.calendar).summary == "Connect Health to see how you slept.")
-        #expect(ActivityDetail.make(daily: [], hourly: nil, availability: .off, now: Self.date(9), calendar: Self.calendar).summary == "Connect Health to see your steps.")
+        #expect(SleepDetail.make(nights: [], availability: .off, now: Self.date(9), calendar: Self.calendar).summary == "How you slept shows here once Pocketd can read Health.")
+        #expect(ActivityDetail.make(daily: [], hourly: nil, availability: .off, now: Self.date(9), calendar: Self.calendar).summary == "Your steps show here once Pocketd can read Health.")
     }
 }

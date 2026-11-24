@@ -204,7 +204,7 @@ public enum TodayTiles {
             // worth a crash.
             return Tile(value: "—", tone: .neutral)
         case .off:
-            return Tile(value: "Off", footnote: "Connect \(source)", tone: .neutral)
+            return Tile(value: "Off", footnote: "Not connected", tone: .neutral)
         case .refused:
             return Tile(value: "Off", footnote: "Allow in Settings", tone: .caution)
         case .unavailable:

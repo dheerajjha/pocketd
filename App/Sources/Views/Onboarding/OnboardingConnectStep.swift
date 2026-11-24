@@ -5,15 +5,17 @@ import SwiftUI
 ///
 /// They used to be three screens, each with a Connect card, a Continue and a
 /// Skip, and the third opened with "Let it read your body." Now they are three
-/// rows with a Connect pill each, and connecting is optional: Continue is
-/// always enabled, and anything skipped is offered again by the Today tile's
-/// Off state, in context, rather than by a nag.
+/// rows with a Continue pill each, and connecting is optional: Next is always
+/// enabled, and anything skipped is offered again by the Today tile's Off
+/// state, in context, rather than by a nag.
 ///
-/// Each pill goes through the one connect door, `connect(_:from:)`, which
-/// raises the iOS sheet only where iOS has never answered and opens Settings
-/// where it said no. One primer at a time sits under the row that is being —
-/// or is next to be — connected, naming the button the sheet is about to show,
-/// so it is read before the sheet appears and is still there behind it.
+/// The pill says Continue and the page button Next because App Review
+/// rejected 1.1.3 under guideline 5.1.1(iv) (24 Nov 2026) for a "Connect"
+/// button after a custom message. Each pill goes through the one connect
+/// door, `connect(_:from:)`, which raises the iOS sheet only where iOS has
+/// never answered and opens Settings where it said no. One primer at a time
+/// sits under the row that is being — or is next to be — connected. It says
+/// iOS may ask next and that any answer is fine, never which button to tap.
 ///
 /// Every row is read from the phone each time the screen draws
 /// (`introSourceStatus`), never remembered here: Back and a replayed intro
@@ -42,7 +44,7 @@ struct OnboardingConnectStep: View {
             ornament: .icon("calendar"),
             headline: Intro.Copy.connectTitle,
             secondary: model.isUsingPrivateCloudCompute ? Intro.Copy.connectCloudLine : Intro.Copy.connectLine,
-            primary: .init("Continue", identifier: "intro.connect.continue", run: onContinue)
+            primary: .init("Next", identifier: "intro.connect.continue", run: onContinue)
         ) {
             PDCard(warm: true) {
                 VStack(alignment: .leading, spacing: PDSpacing.m) {

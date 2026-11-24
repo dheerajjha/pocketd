@@ -182,7 +182,7 @@ public struct DayAgenda: Sendable, Equatable {
                 sections: [],
                 summary: availability == .refused
                     ? "Calendar is off in Settings."
-                    : "Connect your calendar to see your day here.",
+                    : "Your day shows here once Pocketd can read your calendar.",
                 suggestion: "What's on tomorrow?"
             )
         }
@@ -369,7 +369,7 @@ public struct ReminderAgenda: Sendable, Equatable {
                 sections: [],
                 summary: availability == .refused
                     ? "Reminders are off in Settings."
-                    : "Connect your reminders to see what's due."
+                    : "What's due shows here once Pocketd can read your reminders."
             )
         }
         let tomorrowStart = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) ?? now

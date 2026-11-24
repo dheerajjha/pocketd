@@ -72,7 +72,7 @@ extension Color {
         static let fillTile = dual(light: 0xEDEDED, dark: 0x2A2724)
         /// Icon tiles and pills on the warm canvas.
         static let fillWarm = dual(light: 0xEFEDE8, dark: 0x2A2723)
-        /// The "Connect" pill.
+        /// The source row's "Continue" pill.
         static let fillPill = dual(light: 0xF4F1EA, dark: 0x2E2B27)
         /// A circular floating button's own surface, a shade brighter than the
         /// canvas so its shadow has something to sit against.

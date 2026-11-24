@@ -11,8 +11,8 @@ import SwiftUI
 ///                 .init("exclamationmark.circle", "Overdue things, caught early"),
 ///                 .init("clock", "At the time you choose"),
 ///             ],
-///             primaryTitle: "Set it up",
-///             primer: "Next, tap **Allow** so Pocketd can tell you when your brief is ready.",
+///             primaryTitle: "Continue",
+///             primer: "iOS asks about notifications next, so Pocketd can tell you when your brief is ready.",
 ///             onPrimary: { … },
 ///             onSecondary: { showsPromo = false }
 ///         )
@@ -47,11 +47,14 @@ struct PromoSheet: View {
     /// One line under the hero. Optional; the benefits usually say it.
     var subtitle: String?
     let benefits: [Benefit]
-    /// The verb on the one button — "Set it up", "Turn on".
+    /// The word on the one button. "Continue" whenever it leads to an iOS
+    /// permission sheet (guideline 5.1.1(iv): never "Turn on", "Allow" or
+    /// "Connect" there); otherwise a verb such as "Set it up".
     let primaryTitle: String
     /// A `Primer` (Markdown) directly above the button, when the button leads
-    /// to an iOS permission sheet: "Next, tap **Allow** so Pocketd can tell
-    /// you when your brief is ready."
+    /// to an iOS permission sheet: "iOS asks about notifications next, so
+    /// Pocketd can tell you when your brief is ready." It says what comes
+    /// next, never which answer to give.
     var primer: String?
     var secondaryTitle: String = "Not now"
     let onPrimary: () -> Void
@@ -148,8 +151,8 @@ private struct PromoSheetPreview: View {
                 .init("exclamationmark.circle", "Overdue things, caught early"),
                 .init("clock", "At the time you choose"),
             ],
-            primaryTitle: "Set it up",
-            primer: "Next, tap **Allow** so Pocketd can tell you when your brief is ready.",
+            primaryTitle: "Continue",
+            primer: "iOS asks about notifications next, so Pocketd can tell you when your brief is ready.",
             onPrimary: {},
             onSecondary: {}
         )

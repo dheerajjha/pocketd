@@ -383,7 +383,7 @@ struct ScheduleEditorView: View {
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             } else if notificationsUndecided {
-                Primer("Next, tap **Allow** so Pocketd can tell you when it's ready.", symbol: "bell")
+                Primer("Saving makes iOS ask about notifications, so Pocketd can tell you when it's ready.", symbol: "bell")
             }
             ProGateReader { proGate in
                 PrimaryButton(title: "Save", arrow: false, isLoading: saving, isEnabled: problem == nil && !saving) {
@@ -452,12 +452,12 @@ struct ScheduleEditorView: View {
         case .granted, .neverReported, .inProgress, .unavailable:
             return nil
         case .notAsked, .failed:
-            return AccessWarning(ability: ability, sentence: "Pocketd can't read your \(name.lowercased()) yet.", action: "Turn on")
+            return AccessWarning(ability: ability, sentence: "Pocketd can't read your \(name.lowercased()) yet.", action: "Continue")
         case .addOnly:
             return AccessWarning(
                 ability: ability,
                 sentence: "Pocketd can add to your \(name.lowercased()) but not read it.",
-                action: "Turn on"
+                action: "Continue"
             )
         case .refused:
             return AccessWarning(ability: ability, sentence: "\(name) is off in iOS Settings.", action: "Open Settings")

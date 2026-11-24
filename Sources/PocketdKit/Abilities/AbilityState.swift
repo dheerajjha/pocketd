@@ -266,7 +266,7 @@ public enum AbilityAction: Sendable, Equatable {
     /// it surfaces.
     public func label(for ability: Ability) -> String? {
         switch self {
-        case .turnOn: ability == .localServer ? "Start serving" : "Turn on"
+        case .turnOn: ability == .localServer ? "Start serving" : "Continue"
         case .turnOff: ability == .localServer ? "Stop serving" : "Turn off"
         case .askAgain: "Ask iOS again"
         case .openSystemSettings: "Open iOS Settings"

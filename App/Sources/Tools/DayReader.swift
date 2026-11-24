@@ -271,7 +271,7 @@ enum DayReader {
     }
 
     /// Health the caller thought readable that turned out never to have been
-    /// asked: the page says "Connect", which is what is true.
+    /// asked: the page offers to connect it, which is what is true.
     private static func notRead(_ availability: TodaySnapshot.Availability) -> TodaySnapshot.Availability {
         availability.isReadable ? .off : availability
     }
