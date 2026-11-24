@@ -582,10 +582,11 @@ opened, a model downloaded or loaded, a message sent, the brief written, a
 routine run, the server started, a client answered, an ability switched on, or
 a Pocketd Pro purchase flow started, completed, was cancelled, remained pending
 or failed. They are on by default, and "Share anonymous usage counts" in You ›
-Privacy turns them off; the complete list is `AnalyticsEvent.swift`, which is
-thirty-three cases long and is meant to be read in a minute. Purchase-flow
-counts include only the outcome and whether they began in Pocketd or on its App
-Store page — never the price, product identifier, transaction or Apple Account.
+Privacy turns them off. The full list is in `AnalyticsEvent.swift`; the
+[analytics guide](docs/ANALYTICS.md) describes screen, feature, restore and
+permission counts and their bounded context. Purchase-flow counts can identify
+the outcome and whether the flow began in Pocketd or on its App Store page —
+never the price, product identifier, transaction or Apple Account.
 StoreKit contacts Apple's App Store for Pocketd Pro: the price when you open
 its sheet, a purchase or a restore when you ask for one, and whether
 this Apple Account owns Pro. The payment is between you and Apple.

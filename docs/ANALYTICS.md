@@ -18,10 +18,10 @@ does not consume first value. SDK reset does not reset the product latch.
 Consent transitions also discard delayed requests started before the transition,
 so an opt-out generation finishing after opt-in is not replayed.
 
-The catalogue has 46 events (33 existing, 13 added). The existing live privacy page
-describes the live binary, not this future candidate. Its numeric event-count copy
-will need a separate release-time review; this change does not edit that page or
-the privacy manifest/labels.
+The updated 1.1.3 build has 46 catalogue events (33 existing, 13 added).
+The [public privacy policy](index.html) distinguishes its additional event
+categories and context from versions that send fewer events. App Store privacy
+labels and the privacy manifest are separate from that explanatory wording.
 
 ## Journey inventory
 

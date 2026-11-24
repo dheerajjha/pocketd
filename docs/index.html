@@ -98,9 +98,9 @@ Apple or give the laptop access to your conversations or connected sources.</p>
 
 <h2>Usage counts</h2>
 
-<p>Pocketd sends usage events to Mixpanel unless you turn them off. There are
-thirty-three of them and the complete list is one readable file,
-<a href="https://github.com/dheerajjha/pocketd/blob/main/Sources/PocketdKit/Analytics/AnalyticsEvent.swift"><code>AnalyticsEvent.swift</code></a>: the app was opened;
+<p>Pocketd sends usage events to Mixpanel unless you turn them off. The complete
+list for the app's current source is in
+<a href="https://github.com/dheerajjha/pocketd/blob/main/Sources/PocketdKit/Analytics/AnalyticsEvent.swift"><code>AnalyticsEvent.swift</code></a>. Older versions send fewer kinds of events. For example, Pocketd can count when the app was opened;
 the intro showed a step or was finished; a model download started, finished,
 was cancelled or failed; a model loaded or failed to load; a message was sent;
 an answer got a thumbs up or down; the brief was written or read aloud; the
@@ -111,6 +111,14 @@ stopped; a client on your Wi-Fi, or the chat page on the phone itself, was
 answered; a request was refused because the phone was too hot, too low on
 battery, or already busy; or a Pocketd Pro purchase flow started, completed,
 was cancelled, remained pending or failed.</p>
+
+<p>Starting with the updated 1.1.3 build, Pocketd can also count which screen or
+feature was used, the first request successfully answered for a paired client,
+when a purchase screen was shown or Restore was used, the category and outcome
+of a permission request, a settings switch changing, a sharing action, or a
+displayed error code. Sharing counts record the kind of action, not the copied
+address or diagnostics. Permission counts never include your appointments,
+reminder text or health values.</p>
 
 <p>An event may carry whether this is the first launch, a model's id, a file
 size in bytes, how far a download got, how long something took, a rounded
@@ -128,7 +136,11 @@ attaches the same facts to every event: an identifier for this installation of
 the app, the app's version and build number, the iOS version, the device model
 and screen size, whether the phone is on Wi-Fi or which kind of mobile network,
 a mobile-carrier field that current iOS answers only with a placeholder, and the
-SDK's own version.
+SDK's own version. Mixpanel may estimate an approximate location from the IP
+address it receives. The app does not request location permission for these counts.
+In the updated 1.1.3 build, counts can also include the install-age range,
+light or dark appearance, text-size category, notification permission status,
+and whether StoreKit has verified Pro access. They never include an Apple Account.
 Events also carry a build-environment label: Release builds with a
 sandbox receipt report <code>sandbox</code> (including TestFlight and App Review),
 and other Release builds report <code>app_store</code>. Debug builds do not
@@ -194,7 +206,7 @@ handles Pocketd Pro. The optional cloud brain is a separate service provided by 
     <tr><td>You search for a model</td><td>The text you typed, as a search term, and your phone's IP address</td></tr>
     <tr><td>You open a repository to see its files</td><td>The repository's name, and your phone's IP address</td></tr>
     <tr><td>You download a model</td><td>Which repository and file you are fetching, and your phone's IP address</td></tr>
-    <tr><td>You use the app, with usage counts on</td><td>One of the thirty-three usage events, the identifier for this installation, the device facts above, and your phone's IP address</td></tr>
+    <tr><td>You use the app, with usage counts on</td><td>A usage event, the identifier for this installation, the device and app context described above, and your phone's IP address</td></tr>
     <tr><td>Pocketd checks for Pocketd Pro, or you open, buy or restore it</td><td>What StoreKit sends Apple for any app's in-app purchase: the product, and the purchase or restore you asked for. The payment itself is between you and Apple</td></tr>
   </tbody>
 </table>
@@ -208,7 +220,7 @@ or usage events. The App Store's requests carry your Apple Account, as every
 purchase on an iPhone does, under Apple's privacy policy rather than this one.
 The identifier in the usage-events row is one the analytics SDK generates for
 the installation; it is not the advertising identifier and it is attached to
-nothing but those thirty-three events. Every download address is assembled as
+nothing but those usage events. Every download address is assembled as
 <code>huggingface.co</code>, then a repository and a filename; the search API accepts a
 repository and a filename and never a host. The stored record for a model
 carries a field that could name a different address, and nothing in the app or
