@@ -8,6 +8,12 @@ import UserNotifications
 /// The intro, desk mode, or the app.
 struct RootView: View {
     @Environment(AppModel.self) private var model
+    @Environment(Navigator.self) private var navigator
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var analyticsStarted = false
+    @State private var needsForegroundEvent = false
 
     var body: some View {
         content
@@ -20,24 +26,99 @@ struct RootView: View {
                 model.draft = question.text
                 model.scheduleConversationSave()
             }
-            #if DEBUG
-            .onAppear { IntentInbox.stageLaunchQuestionOnce() }
-            #endif
+        #if DEBUG
+        .onAppear { IntentInbox.stageLaunchQuestionOnce() }
+        #endif
+        .onAppear {
+            // Group can appear again when the intro or Desk Mode replaces the shell.
+            guard !analyticsStarted else { return }
+            analyticsStarted = true
+            updateAnalyticsContext()
+            foreground()
+            recordNavigationScreen(analyticsScreen)
+        }
+        .onChange(of: analyticsScreen) { _, screen in
+            updateAnalyticsContext()
+            recordNavigationScreen(screen)
+        }
+        .onChange(of: colorScheme) { _, _ in updateAnalyticsContext() }
+        .onChange(of: typeSize) { _, _ in updateAnalyticsContext() }
+        .onChange(of: model.deskMode) { _, on in
+            updateAnalyticsContext()
+            if on { model.record(.featureUsed(feature: .deskMode, surface: .app)) }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { needsForegroundEvent = true }
+            if phase == .active, needsForegroundEvent {
+                needsForegroundEvent = false
+                updateAnalyticsContext()
+                foreground()
+            }
+        }
+        .task(id: scenePhase) {
+            if scenePhase == .active { _ = await NotificationCentre.shared.authorizationStatus() }
+        }
     }
 
     @ViewBuilder private var content: some View {
         if model.needsOnboarding {
-            // Ahead of desk mode and the shell both: there is nothing useful
-            // behind this yet, and a home screen under an intro invites someone
-            // to tap into a screen the intro is about to explain.
-            OnboardingViewBridge()
-                .transition(.opacity)
+            OnboardingViewBridge().transition(.opacity)
         } else if model.deskMode {
-            DeskModeView()
-                .transition(.opacity)
+            DeskModeView().transition(.opacity)
         } else {
-            Shell()
-                .transition(.opacity)
+            Shell().transition(.opacity)
+        }
+    }
+
+    private func updateAnalyticsContext() {
+        // Desk Mode uses a black canvas and fixed pale ink, regardless of system appearance.
+        model.productAnalytics.context.appearance = model.deskMode && !model.needsOnboarding
+            ? .dark : (colorScheme == .dark ? .dark : .light)
+        model.productAnalytics.context.typeSize = typeSize.isAccessibilitySize ? .accessibility
+            : (typeSize >= .xxxLarge ? .large : .standard)
+    }
+
+    private func foreground() {
+        NotificationCentre.shared.invalidateAnalyticsStatus()
+        model.record(.appForegrounded)
+    }
+
+    private func recordNavigationScreen(_ screen: AnalyticsScreen) {
+        // These screens also have ordinary local-state entry points. Their
+        // actual views count appearances, once regardless of the routing door.
+        guard screen != .privacyDetails, screen != .routineResult else { return }
+        model.record(.screenViewed(screen: screen))
+    }
+
+    private var analyticsScreen: AnalyticsScreen {
+        if model.needsOnboarding { return .onboarding }
+        if model.deskMode { return .deskMode }
+        if navigator.isAskPresented { return .ask }
+        guard let route = navigator.path.last else { return .today }
+        switch route {
+        case .routines: return .routines
+        case .you: return .you
+        case let .detail(detail):
+            return switch detail {
+            case .day: .day
+            case .reminders: .reminders
+            case .sleep: .sleep
+            case .activity: .activity
+            case .routineResult: .routineResult
+            }
+        case let .youPage(page):
+            return switch page {
+            case .brain: .brain
+            case .addBrain: .addBrain
+            case .brainAdvanced: .brainAdvanced
+            case .devices: .devices
+            case .deskMode: .devices // this legacy route renders OtherDevicesView
+            case .privacy: .privacy
+            case .privacyDetails: .privacyDetails
+            case .settings: .settings
+            case .instructions: .instructions
+            case .diagnostics: .diagnostics
+            }
         }
     }
 }
@@ -139,6 +220,7 @@ private struct Shell: View {
         // nothing at all rather than landing somewhere surprising.
         .onOpenURL { url in
             guard let link = DeepLink(url: url) else { return }
+            model.record(.featureUsed(feature: .deepLink, surface: .link))
             navigator.follow(link)
         }
         // Asked from here rather than from the model, because a review request
@@ -205,11 +287,13 @@ private struct Shell: View {
         // AskLaunch. It asks for the composer, and the microphone where the
         // phone can listen on-device.
         if AskLaunch.take() != nil {
+            model.record(.featureUsed(feature: .controlAsk, surface: .control))
             navigator.go(.ask)
             model.askComposerFocusRequested = true
         }
         guard scenePhase == .active else { return }
         if let question = IntentInbox.questions.takeForPresentation(in: model.currentConversationID) {
+            model.record(.featureUsed(feature: .intentAsk, surface: .intent))
             navigator.go(.ask)
             Task { await model.openShortcutQuestion(question) }
         } else {
@@ -224,6 +308,7 @@ private struct Shell: View {
     private func collectRoutineTap() {
         Task {
             guard let destination = await model.takeRoutineTap() else { return }
+            model.record(.featureUsed(feature: .routineNotification, surface: .notification))
             navigator.follow(destination)
         }
     }

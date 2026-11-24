@@ -15,6 +15,7 @@ import Foundation
 /// thirteen call sites.
 public protocol AnalyticsSink: Sendable {
     func record(_ event: AnalyticsEvent)
+    func record(_ event: AnalyticsEvent, context: AnalyticsContext)
     /// Stop, and forget. Called when someone refuses: the implementation must
     /// drop anything queued and discard the identifier, not merely stop
     /// adding to the queue.
@@ -31,6 +32,10 @@ public protocol AnalyticsSink: Sendable {
     func resume()
 }
 
+public extension AnalyticsSink {
+    func record(_ event: AnalyticsEvent, context: AnalyticsContext) { record(event) }
+}
+
 /// The default, and what every test sees.
 public struct NoAnalytics: AnalyticsSink {
     public init() {}
@@ -44,6 +49,7 @@ public struct NoAnalytics: AnalyticsSink {
 public final class RecordingAnalytics: AnalyticsSink, @unchecked Sendable {
     private let lock = NSLock()
     private var _events: [AnalyticsEvent] = []
+    private var _contexts: [AnalyticsContext] = []
     private var _stopped = false
 
     public init() {}
@@ -56,6 +62,18 @@ public final class RecordingAnalytics: AnalyticsSink, @unchecked Sendable {
     public var wasStopped: Bool {
         lock.lock(); defer { lock.unlock() }
         return _stopped
+    }
+
+    public var contexts: [AnalyticsContext] {
+        lock.lock(); defer { lock.unlock() }
+        return _contexts
+    }
+
+    public func record(_ event: AnalyticsEvent, context: AnalyticsContext) {
+        lock.lock(); defer { lock.unlock() }
+        guard !_stopped else { return }
+        _events.append(event)
+        _contexts.append(context)
     }
 
     public func record(_ event: AnalyticsEvent) {
@@ -71,6 +89,7 @@ public final class RecordingAnalytics: AnalyticsSink, @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         _stopped = true
         _events.removeAll()
+        _contexts.removeAll()
     }
 
     public func resume() {

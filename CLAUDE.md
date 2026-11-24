@@ -48,3 +48,9 @@ outside `App/`. `docs/` publishes through GitHub Pages on every push to `main`.
 ## Store copy
 The listing describes the build on the store, not `main`. The app is iPhone-only, and analytics reporting is on by
 default (`optOutTrackingByDefault: false`), so the listing can't claim iPad support or "no telemetry".
+
+## Analytics
+Use `AppModel.record` / `ProductAnalytics` for events, not the raw sink: this preserves
+consent, current context and the persisted external-success first-value latch. See
+`docs/ANALYTICS.md`. Analytics-only plan publication must never change `ProAccess` or
+use `hasChecked`/cached entitlement as verified ownership.

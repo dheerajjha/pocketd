@@ -14,6 +14,19 @@ struct AnalyticsTaxonomyTests {
 
     /// One of every event. Exhaustiveness is enforced by `everyCaseIsSampled`.
     private static let sample: [AnalyticsEvent] = [
+        .appForegrounded,
+        .screenViewed(screen: .today),
+        .firstValueReached(secondsSinceInstall: 12),
+        .featureUsed(feature: .deskMode, surface: .app),
+        .paywallViewed(trigger: .laptop),
+        .planSelected,
+        .restoreStarted,
+        .restoreCompleted(outcome: .failed, errorCode: 7),
+        .permissionPrompted(permission: .health),
+        .permissionResult(permission: .health, outcome: .completed),
+        .settingChanged(setting: .authentication, enabled: true),
+        .shareUsed(kind: .address),
+        .errorShown(area: .chat, code: 9),
         .appOpened(isFirstLaunch: true),
         .onboardingCompleted(via: .skipped, destination: .models),
         .modelDownloadStarted(modelID: "llama-3.2-1b", sizeBytes: 807_700_000),
@@ -90,6 +103,7 @@ struct AnalyticsTaxonomyTests {
 
     @Test("the schema itself declares nothing forbidden")
     func schemaIsClean() {
+        #expect(AnalyticsSchema.contextProperties.isDisjoint(with: AnalyticsSchema.forbiddenProperties))
         // Checks the table rather than the code, so adding a banned name to
         // the schema fails even before anything emits it.
         for (event, keys) in AnalyticsSchema.allowedProperties {
@@ -106,7 +120,7 @@ struct AnalyticsTaxonomyTests {
         // other test in this file silently stops covering it. The count is
         // hand-maintained on purpose: bumping it is the moment you notice you
         // must also add a sample.
-        #expect(Self.sample.count == 33)
+        #expect(Self.sample.count == 46)
         #expect(Set(Self.sample.map(\.name)).count == Self.sample.count, "duplicate event in sample")
         #expect(Set(Self.sample.map(\.name)) == Set(AnalyticsSchema.allowedProperties.keys),
                 "sample and schema disagree about which events exist")

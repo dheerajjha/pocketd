@@ -158,7 +158,8 @@ extension InferenceServer {
         defer { endRequest() }
         do {
             let result = try await currentEngine().complete(generation)
-            await finishLog(logID, status: 200, model: model.id, usage: result.usage, started: started)
+            await finishLog(logID, status: 200, model: model.id, usage: result.usage, started: started,
+                            generationCompleted: result.didFinish && result.reason != .cancelled && !Task.isCancelled)
             return jsonResponse(
                 OpenAI.ChatCompletionResponse(
                     id: "chatcmpl-\(UUID().uuidString.prefix(24))",
@@ -199,6 +200,7 @@ extension InferenceServer {
             let encoder = JSONEncoder()
             var usage = TokenUsage()
             var status = 200
+            var generationCompleted = false
 
             func chunk(delta: OpenAI.Delta, finish: String? = nil) -> OpenAI.ChatCompletionChunk {
                 OpenAI.ChatCompletionChunk(
@@ -232,6 +234,7 @@ extension InferenceServer {
                         break
                     case .finished(let reason, let tokenUsage):
                         usage = tokenUsage
+                        generationCompleted = reason != .cancelled
                         if let frame = try? ServerSentEvents.frame(json: chunk(delta: OpenAI.Delta(), finish: reason.rawValue), encoder: encoder) {
                             continuation.yield(frame)
                         }
@@ -276,12 +279,14 @@ extension InferenceServer {
             let elapsed = started.duration(to: .now).timeInterval
             let finalStatus = status
             let finalUsage = usage
+            let completed = generationCompleted && status == 200 && !Task.isCancelled
             await log.update(id: logID) { entry in
                 entry.statusCode = finalStatus
                 entry.model = model.id
                 entry.promptTokens = finalUsage.promptTokens
                 entry.completionTokens = finalUsage.completionTokens
                 entry.duration = elapsed
+                entry.generationCompleted = completed
             }
         })
     }

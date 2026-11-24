@@ -17,6 +17,7 @@ import SwiftUI
 struct DeskModeView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @State private var drift = CGSize.zero
     @State private var showHint = true
 
@@ -110,6 +111,12 @@ struct DeskModeView: View {
             .animation(.easeInOut(duration: 8), value: drift)
         }
         .contentShape(Rectangle())
+        .onChange(of: model.serverAnalyticsErrorRevision) { _, _ in
+            if analyticsNoticeIsVisible { model.recordVisibleServerError() }
+        }
+        .onChange(of: analyticsNoticeIsVisible, initial: true) { _, visible in
+            if visible { model.recordVisibleServerError() }
+        }
         .onTapGesture(perform: exit)
         .onReceive(timer) { _ in
             // A slow wander, bounded well inside the safe area. Reduce Motion
@@ -136,6 +143,10 @@ struct DeskModeView: View {
         if let name = model.servedBrainName { parts.append(name) }
         parts.append(Format.counted(model.log.count, "request"))
         return parts.joined(separator: ". ")
+    }
+
+    private var analyticsNoticeIsVisible: Bool {
+        scenePhase == .active && model.deskMode && !model.needsOnboarding
     }
 
     private func exit() {

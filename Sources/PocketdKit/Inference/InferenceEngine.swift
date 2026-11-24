@@ -219,10 +219,11 @@ public extension InferenceEngine {
     var defaultSampling: SamplingParameters { get async { .default } }
 
     /// Convenience for non-streaming callers: drain the stream into one string.
-    func complete(_ request: GenerationRequest) async throws -> (text: String, reason: FinishReason, usage: TokenUsage) {
+    func complete(_ request: GenerationRequest) async throws -> (text: String, reason: FinishReason, usage: TokenUsage, didFinish: Bool) {
         var text = ""
         var reason = FinishReason.stop
         var usage = TokenUsage()
+        var didFinish = false
         for try await event in try await generate(request) {
             switch event {
             case .token(let chunk):
@@ -239,8 +240,9 @@ public extension InferenceEngine {
             case .finished(let r, let u):
                 reason = r
                 usage = u
+                didFinish = true
             }
         }
-        return (text, reason, usage)
+        return (text, reason, usage, didFinish)
     }
 }

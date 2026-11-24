@@ -70,14 +70,19 @@ final class ProStore {
     private(set) var offer: Offer = .loading
     private(set) var purchase: Purchase = .idle
     private(set) var isRestoring = false
+    private(set) var purchaseAnalyticsErrorCode: Int?
+    private(set) var restoreAnalyticsErrorCode: Int?
 
     /// The facts the Kit decides from. Kept so a purchase can be added to
     /// them without reading the app transaction again.
     @ObservationIgnored private var ownsPurchase = false
+    @ObservationIgnored private var analyticsOwnership: ProOwnershipScan?
     @ObservationIgnored private var app: AppFacts?
     @ObservationIgnored private var product: Product?
     @ObservationIgnored private var transactionRevision = 0
     @ObservationIgnored private let recordAnalytics: @MainActor (AnalyticsEvent) -> Void
+    @ObservationIgnored private let publishAnalyticsPlan: @MainActor (AnalyticsPlan) -> Void
+    @ObservationIgnored private lazy var analyticsPlan = AnalyticsPlanPublication(publish: publishAnalyticsPlan)
     /// Kept only while an Ask to Buy decision is pending in this process.
     @ObservationIgnored private var pendingPurchaseEntry: PurchaseEntry?
 
@@ -90,8 +95,10 @@ final class ProStore {
     /// How long the sheet waits for a price before it says Pro isn't available.
     private static let offerTimeout: Duration = .seconds(12)
 
-    init(recordAnalytics: @escaping @MainActor (AnalyticsEvent) -> Void) {
+    init(recordAnalytics: @escaping @MainActor (AnalyticsEvent) -> Void,
+         publishAnalyticsPlan: @escaping @MainActor (AnalyticsPlan) -> Void = { _ in }) {
         self.recordAnalytics = recordAnalytics
+        self.publishAnalyticsPlan = publishAnalyticsPlan
         // The store lives as long as the app does, so the listener is never
         // cancelled; `weak` only keeps a preview's throwaway store collectable.
         Task { [weak self] in
@@ -123,22 +130,26 @@ final class ProStore {
 
     /// Reads the current entitlements and the app transaction, and decides.
     func refresh() async {
+        let analyticsScan = analyticsPlan.invalidate()
         #if DEBUG
         if let facts = ProStage.facts {
             ownsPurchase = facts.purchased || stagedPurchase
             app = facts.environment.map { AppFacts(environment: $0, originalAppVersion: facts.originalAppVersion ?? "") }
             decide()
             hasChecked = true
+            publishCurrentAnalyticsPlan()
             return
         }
         #endif
         let revision = transactionRevision
-        let purchased = await Self.ownsPro()
+        let ownership = await Self.ownsPro()
+        let purchased = ownership.ownsPurchase
         // A verified purchase is sufficient. The app transaction is needed
         // only for the separate early-supporter rule, not to delay Restore.
         if purchased, revision == transactionRevision {
             ownsPurchase = true
             decide()
+            if !Task.isCancelled { analyticsPlan.accept(.lifetime, revision: analyticsScan) }
         }
         let app = await Self.readAppTransaction()
         // A verified update received while this read was suspended is newer
@@ -150,8 +161,10 @@ final class ProStore {
         ownsPurchase = purchased
         #endif
         self.app = app
+        analyticsOwnership = ownership
         decide()
         hasChecked = true
+        publishCurrentAnalyticsPlan(revision: analyticsScan)
     }
 
     /// Reads again only when the app transaction has not been read yet — it
@@ -183,17 +196,27 @@ final class ProStore {
         Self.log("entitlement \(entitlement.rawValue): purchased \(ownsPurchase), \(app?.environment.rawValue ?? "no app transaction") \(app?.originalAppVersion ?? "")")
     }
 
+    /// Analytics never decides access and never treats hasChecked as verification.
+    private func publishCurrentAnalyticsPlan(revision: Int? = nil) {
+        // The access verdict still follows ownsPurchase; only this telemetry
+        // classification distinguishes unverified rows from verified absence.
+        let plan = analyticsOwnership?.analyticsPlan(environment: app?.environment,
+            originalAppVersion: app?.originalAppVersion, cancelled: Task.isCancelled) ?? .unknown
+        analyticsPlan.accept(plan, revision: revision)
+    }
+
     /// A verified, unrevoked purchase of Pro among this Apple Account's
     /// current entitlements. Works offline: StoreKit keeps them on the phone.
-    private static func ownsPro() async -> Bool {
+    private static func ownsPro() async -> ProOwnershipScan {
+        var scan = ProOwnershipScan()
         for await result in Transaction.currentEntitlements {
-            if case let .verified(transaction) = result,
-               transaction.productID == ProAccess.productID,
-               transaction.revocationDate == nil {
-                return true
+            scan.observe(result) { transaction in
+                transaction.productID == ProAccess.productID && transaction.revocationDate == nil
             }
+            if scan.ownsPurchase { return scan }
         }
-        return false
+        scan.complete(cancelled: Task.isCancelled)
+        return scan
     }
 
     /// The app transaction, only when it verifies. An unverified one, or a
@@ -218,14 +241,23 @@ final class ProStore {
     /// Everything the listener hears: a purchase approved by a parent, one
     /// finished elsewhere, a restore, a refund.
     private func receive(_ update: VerificationResult<Transaction>) async {
-        guard case let .verified(transaction) = update else { return }
+        guard case let .verified(transaction) = update else {
+            analyticsPlan.invalidate()
+            analyticsOwnership = nil
+            return
+        }
         guard transaction.productID == ProAccess.productID else {
             await transaction.finish()
             return
         }
         transactionRevision += 1
+        analyticsPlan.invalidate()
         ownsPurchase = transaction.revocationDate == nil
+        var ownership = ProOwnershipScan()
+        ownership.observe(update) { $0.revocationDate == nil }
+        analyticsOwnership = ownership
         decide()
+        publishCurrentAnalyticsPlan()
         if purchase == .pending {
             if let entry = pendingPurchaseEntry {
                 recordAnalytics(.purchaseCompleted(entry: entry))
@@ -306,10 +338,15 @@ final class ProStore {
     func buy(offer intentOffer: Product.SubscriptionOffer? = nil,
              entry: PurchaseEntry = .inApp) async -> Bool {
         guard purchase != .purchasing else { return false }
+        purchaseAnalyticsErrorCode = nil
         #if DEBUG
         if ProStage.offer != nil { return await stagedBuy() }
         #endif
         guard let product else {
+            analyticsPlan.invalidate()
+            recordAnalytics(.purchaseStarted(entry: entry))
+            purchaseAnalyticsErrorCode = -1
+            recordAnalytics(.purchaseFailed(entry: entry))
             purchase = .failed(.unavailable)
             return false
         }
@@ -319,18 +356,25 @@ final class ProStore {
         }
         purchase = .purchasing
         pendingPurchaseEntry = entry
+        analyticsPlan.invalidate()
+        recordAnalytics(.planSelected)
         recordAnalytics(.purchaseStarted(entry: entry))
         do {
             switch try await product.purchase(options: options) {
             case let .success(.verified(transaction)):
                 transactionRevision += 1
                 ownsPurchase = true
+                var ownership = ProOwnershipScan()
+                ownership.observe(VerificationResult<Transaction>.verified(transaction)) { _ in true }
+                analyticsOwnership = ownership
                 decide()
+                analyticsPlan.accept(.lifetime)
                 recordAnalytics(.purchaseCompleted(entry: entry))
                 pendingPurchaseEntry = nil
                 purchase = .idle
                 await transaction.finish()
             case .success(.unverified):
+                purchaseAnalyticsErrorCode = -2
                 recordAnalytics(.purchaseFailed(entry: entry))
                 pendingPurchaseEntry = nil
                 purchase = .failed(.unverified)
@@ -348,6 +392,7 @@ final class ProStore {
             }
         } catch {
             if let failure = Self.failure(for: error) {
+                purchaseAnalyticsErrorCode = (error as NSError).code
                 recordAnalytics(.purchaseFailed(entry: entry))
                 pendingPurchaseEntry = nil
                 purchase = .failed(failure)
@@ -366,22 +411,32 @@ final class ProStore {
     /// early supporter right if the first read failed.
     func restore() async -> RestoreOutcome {
         guard !isRestoring else { return .cancelled }
+        restoreAnalyticsErrorCode = nil
         isRestoring = true
+        analyticsPlan.invalidate()
+        recordAnalytics(.restoreStarted)
         defer { isRestoring = false }
         #if DEBUG
         if ProStage.isStaged {
             try? await Task.sleep(for: .seconds(1))
             await refresh()
+            recordAnalytics(.restoreCompleted(outcome: isPro ? .restored : .empty, errorCode: 0))
             return isPro ? .restored : .nothingToRestore
         }
         #endif
         do {
             try await AppStore.sync()
         } catch {
-            guard let failure = Self.failure(for: error) else { return .cancelled }
+            guard let failure = Self.failure(for: error) else {
+                recordAnalytics(.restoreCompleted(outcome: .cancelled, errorCode: (error as NSError).code))
+                return .cancelled
+            }
+            restoreAnalyticsErrorCode = (error as NSError).code
+            recordAnalytics(.restoreCompleted(outcome: .failed, errorCode: (error as NSError).code))
             return .failed(failure)
         }
         await refresh()
+        recordAnalytics(.restoreCompleted(outcome: isPro ? .restored : .empty, errorCode: 0))
         return isPro ? .restored : .nothingToRestore
     }
 
@@ -389,6 +444,7 @@ final class ProStore {
     /// purchase waiting for approval is still waiting, and stays said.
     func clearFailure() {
         if case .failed = purchase { purchase = .idle }
+        purchaseAnalyticsErrorCode = nil
     }
 
     /// The sentence for what went wrong, or nil when the person cancelled.

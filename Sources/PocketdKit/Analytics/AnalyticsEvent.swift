@@ -211,6 +211,19 @@ public enum PurchaseEntry: String, Sendable, CaseIterable {
 /// or a suspicious user reading the source, which this app's audience actually
 /// does — can check in a minute.
 public enum AnalyticsEvent: Sendable, Equatable {
+    case appForegrounded
+    case screenViewed(screen: AnalyticsScreen)
+    case firstValueReached(secondsSinceInstall: Double)
+    case featureUsed(feature: AnalyticsFeature, surface: AnalyticsSurface)
+    case paywallViewed(trigger: AnalyticsPaywallTrigger)
+    case planSelected
+    case restoreStarted
+    case restoreCompleted(outcome: AnalyticsRestoreOutcome, errorCode: Int)
+    case permissionPrompted(permission: AnalyticsPermission)
+    case permissionResult(permission: AnalyticsPermission, outcome: AnalyticsPermissionOutcome)
+    case settingChanged(setting: AnalyticsSetting, enabled: Bool)
+    case shareUsed(kind: AnalyticsShare)
+    case errorShown(area: AnalyticsErrorArea, code: Int)
     case appOpened(isFirstLaunch: Bool)
     case onboardingCompleted(via: OnboardingExit, destination: OnboardingDestination)
 
@@ -337,6 +350,19 @@ public enum AnalyticsEvent: Sendable, Equatable {
 
     public var name: String {
         switch self {
+        case .appForegrounded: "app_foregrounded"
+        case .screenViewed: "screen_viewed"
+        case .firstValueReached: "first_value_reached"
+        case .featureUsed: "feature_used"
+        case .paywallViewed: "paywall_viewed"
+        case .planSelected: "plan_selected"
+        case .restoreStarted: "restore_started"
+        case .restoreCompleted: "restore_completed"
+        case .permissionPrompted: "permission_prompted"
+        case .permissionResult: "permission_result"
+        case .settingChanged: "setting_changed"
+        case .shareUsed: "share_used"
+        case .errorShown: "error_shown"
         case .appOpened: "app_opened"
         case .onboardingCompleted: "onboarding_completed"
         case .modelDownloadStarted: "model_download_started"
@@ -375,6 +401,21 @@ public enum AnalyticsEvent: Sendable, Equatable {
 
     private var eventProperties: [String: AnalyticsValue] {
         switch self {
+        case .appForegrounded, .restoreStarted: [:]
+        case let .screenViewed(screen): ["screen": .string(screen.rawValue)]
+        case let .firstValueReached(seconds):
+            ["action": .string("external_client"), "seconds_since_install": .double(seconds)]
+        case let .featureUsed(feature, surface):
+            ["feature": .string(feature.rawValue), "surface": .string(surface.rawValue)]
+        case let .paywallViewed(trigger): ["trigger": .string(trigger.rawValue), "placement": .string("sheet")]
+        case .planSelected: ["selected_plan": .string("lifetime")]
+        case let .restoreCompleted(outcome, code): ["outcome": .string(outcome.rawValue), "error_code": .int(code)]
+        case let .permissionPrompted(permission): ["permission": .string(permission.rawValue)]
+        case let .permissionResult(permission, outcome):
+            ["permission": .string(permission.rawValue), "outcome": .string(outcome.rawValue)]
+        case let .settingChanged(setting, enabled): ["setting": .string(setting.rawValue), "enabled": .bool(enabled)]
+        case let .shareUsed(kind): ["kind": .string(kind.rawValue)]
+        case let .errorShown(area, code): ["area": .string(area.rawValue), "error_code": .int(code)]
         case let .appOpened(isFirstLaunch):
             ["is_first_launch": .bool(isFirstLaunch)]
         case let .onboardingCompleted(via, destination):
@@ -443,9 +484,10 @@ public enum AnalyticsEvent: Sendable, Equatable {
     /// Every event carries its build environment through the same mapping
     /// that the schema tests inspect. A Mixpanel superproperty would bypass
     /// that allow-list and make it possible to drop this field silently.
-    public func properties(installEnvironment: AnalyticsInstallEnvironment) -> [String: AnalyticsValue] {
+    public func properties(installEnvironment: AnalyticsInstallEnvironment, context: AnalyticsContext? = nil) -> [String: AnalyticsValue] {
         var properties = eventProperties
         properties["install_env"] = .string(installEnvironment.rawValue)
+        if let context { properties.merge(context.properties) { _, new in new } }
         return properties
     }
 }
@@ -462,6 +504,19 @@ public enum AnalyticsSchema {
     public static let commonProperties: Set<String> = ["install_env"]
 
     private static let eventSpecificProperties: [String: Set<String>] = [
+        "app_foregrounded": [],
+        "screen_viewed": ["screen"],
+        "first_value_reached": ["action", "seconds_since_install"],
+        "feature_used": ["feature", "surface"],
+        "paywall_viewed": ["trigger", "placement"],
+        "plan_selected": ["selected_plan"],
+        "restore_started": [],
+        "restore_completed": ["outcome", "error_code"],
+        "permission_prompted": ["permission"],
+        "permission_result": ["permission", "outcome"],
+        "setting_changed": ["setting", "enabled"],
+        "share_used": ["kind"],
+        "error_shown": ["area", "error_code"],
         "app_opened": ["is_first_launch"],
         "onboarding_completed": ["via", "destination"],
         "model_download_started": ["model_id", "size_bytes"],
@@ -499,6 +554,11 @@ public enum AnalyticsSchema {
 
     public static let allowedProperties: [String: Set<String>] =
         eventSpecificProperties.mapValues { $0.union(commonProperties) }
+
+    public static let contextProperties: Set<String> = [
+        "plan", "is_pro", "appearance", "dynamic_type", "notification_status",
+        "notifications_authorised", "install_age_days"
+    ]
 
     /// Property names that must never appear, whatever anyone adds later.
     ///

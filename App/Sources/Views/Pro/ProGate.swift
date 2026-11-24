@@ -158,9 +158,15 @@ private struct ProGateHost: ViewModifier {
                 request(feature, action)
             })
             .sheet(item: $offer, onDismiss: carryOn) { offer in
-                ProSheet {
+                ProSheet(onUnlocked: {
                     unlocked = Unlocked(action: offer.action)
-                }
+                }, trigger: offer.feature.map { feature in
+                    return switch feature {
+                    case .laptop: .laptop
+                    case .routines: .routines
+                    case .brains: .brains
+                    }
+                } ?? .pro)
             }
     }
 

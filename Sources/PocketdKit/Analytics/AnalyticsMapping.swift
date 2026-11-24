@@ -85,7 +85,10 @@ public enum AnalyticsMapping {
         guard let address = clientAddress?.trimmingCharacters(in: .whitespaces),
               !address.isEmpty else { return false }
         let loopback = ["127.0.0.1", "::1", "localhost", "0:0:0:0:0:0:0:1"]
-        return !loopback.contains(address.lowercased())
+        let lower = address.lowercased()
+        if loopback.contains(lower) { return false }
+        if lower.hasPrefix("127.") || lower.hasPrefix("::ffff:127.") { return false }
+        return true
     }
 
     /// Which API surface was spoken, from the path we served rather than from
@@ -96,4 +99,3 @@ public enum AnalyticsMapping {
         return nil
     }
 }
-

@@ -59,6 +59,7 @@ struct PrivacyDetailsView: View {
                 withAnimation(PDMotion.standard) { proxy.scrollTo(focus, anchor: .top) }
             }
         }
+        .onAppear { model.record(.screenViewed(screen: .privacyDetails)) }
         .confirmationDialog(
             pending?.title ?? "",
             isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }),

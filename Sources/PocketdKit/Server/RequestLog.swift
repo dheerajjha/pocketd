@@ -12,6 +12,8 @@ public struct RequestLogEntry: Sendable, Identifiable, Equatable {
     public var completionTokens: Int?
     public var duration: TimeInterval?
     public var streamed: Bool
+    /// Local terminal outcome only; never an answer, token count or HTTP inference.
+    public var generationCompleted: Bool
 
     public init(
         id: UUID = UUID(),
@@ -24,7 +26,8 @@ public struct RequestLogEntry: Sendable, Identifiable, Equatable {
         promptTokens: Int? = nil,
         completionTokens: Int? = nil,
         duration: TimeInterval? = nil,
-        streamed: Bool = false
+        streamed: Bool = false,
+        generationCompleted: Bool = false
     ) {
         self.id = id
         self.date = date
@@ -37,6 +40,7 @@ public struct RequestLogEntry: Sendable, Identifiable, Equatable {
         self.completionTokens = completionTokens
         self.duration = duration
         self.streamed = streamed
+        self.generationCompleted = generationCompleted
     }
 
     public var tokensPerSecond: Double? {

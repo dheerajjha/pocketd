@@ -11,6 +11,7 @@ extension AppModel {
     func setAnalyticsConsent(_ consent: AnalyticsConsent) {
         guard consent != analyticsConsent else { return }
         analyticsConsent = consent
+        productAnalytics.consentChanged()
         UserDefaults.standard.set(consent.rawValue, forKey: Keys.analyticsConsent)
         // Refusing has to do more than stop the tap. Anything queued and not
         // yet flushed goes, and the identifier with it.
@@ -86,5 +87,11 @@ extension AppModel {
     /// `analytics` stays private to this type so the taxonomy has one door: a
     /// view holding the sink could call `record` with anything, and the whole
     /// guarantee here is that the set of transmittable facts is the enum.
-    func record(_ event: AnalyticsEvent) { analytics.record(event) }
+    func record(_ event: AnalyticsEvent) {
+        productAnalytics.record(event, consent: analyticsConsent)
+    }
+
+    func publishAnalyticsPlan(_ plan: AnalyticsPlan) {
+        productAnalytics.context.plan = plan
+    }
 }

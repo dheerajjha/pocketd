@@ -1,0 +1,1 @@
+../../App/Sources/Store/ProOwnershipScan.swift

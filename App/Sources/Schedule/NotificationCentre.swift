@@ -102,6 +102,8 @@ final class NotificationCentre {
     /// so on screen.
     @discardableResult
     func requestAuthorization() async -> Bool {
+        invalidateAnalyticsStatus()
+        analyticsEvent?(.permissionPrompted(permission: .notifications))
         #if DEBUG
         NotificationDiagnostics.record("authorization begin")
         if ProcessInfo.processInfo.arguments.contains("-pocketd.notificationRawCallbacks") {
@@ -115,6 +117,8 @@ final class NotificationCentre {
         #endif
         let granted = try? await UNUserNotificationCenter.current()
             .requestAuthorization(options: [.alert, .sound])
+        analyticsEvent?(.permissionResult(permission: .notifications,
+            outcome: granted == nil ? .failed : (granted == true ? .granted : .denied)))
         #if DEBUG
         NotificationDiagnostics.record("authorization end granted=\(granted ?? false)")
         #endif
@@ -124,6 +128,7 @@ final class NotificationCentre {
     /// Where permission stands, for a screen that needs to explain why a task
     /// will stay quiet.
     func authorizationStatus() async -> UNAuthorizationStatus {
+        let revision = analyticsStatusRevision
         #if DEBUG
         NotificationDiagnostics.record("settings begin")
         if ProcessInfo.processInfo.arguments.contains("-pocketd.notificationRawCallbacks") {
@@ -137,10 +142,30 @@ final class NotificationCentre {
         }
         #endif
         let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        if revision == analyticsStatusRevision {
+            let analytics: AnalyticsNotificationStatus = switch status {
+            case .notDetermined: .notDetermined
+            case .denied: .denied
+            case .authorized: .authorized
+            case .provisional: .provisional
+            case .ephemeral: .ephemeral
+            @unknown default: .unknown
+            }
+            analyticsStatus?(analytics)
+        }
         #if DEBUG
         NotificationDiagnostics.record("settings end status=\(status.rawValue)")
         #endif
         return status
+    }
+
+    @ObservationIgnored var analyticsStatus: (@MainActor (AnalyticsNotificationStatus) -> Void)?
+    @ObservationIgnored var analyticsEvent: (@MainActor (AnalyticsEvent) -> Void)?
+    @ObservationIgnored private var analyticsStatusRevision = 0
+
+    func invalidateAnalyticsStatus() {
+        analyticsStatusRevision += 1
+        analyticsStatus?(.unknown)
     }
 
     // MARK: - After a change

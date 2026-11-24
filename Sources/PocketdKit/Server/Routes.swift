@@ -260,7 +260,8 @@ extension InferenceServer {
         status: Int,
         model: String? = nil,
         usage: TokenUsage? = nil,
-        started: ContinuousClock.Instant? = nil
+        started: ContinuousClock.Instant? = nil,
+        generationCompleted: Bool = false
     ) async {
         let elapsed = started.map { $0.duration(to: .now).timeInterval }
         await log.update(id: id) { entry in
@@ -269,6 +270,7 @@ extension InferenceServer {
             entry.promptTokens = usage?.promptTokens ?? entry.promptTokens
             entry.completionTokens = usage?.completionTokens ?? entry.completionTokens
             entry.duration = elapsed ?? entry.duration
+            entry.generationCompleted = generationCompleted
         }
     }
 

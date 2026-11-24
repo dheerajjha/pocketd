@@ -33,7 +33,10 @@ struct PocketdApp: App {
     init() {
         let model = AppModel()
         _model = State(initialValue: model)
-        _pro = State(initialValue: ProStore(recordAnalytics: { event in model.record(event) }))
+        _pro = State(initialValue: ProStore(
+            recordAnalytics: { event in model.record(event) },
+            publishAnalyticsPlan: { plan in model.publishAnalyticsPlan(plan) }
+        ))
     }
 
     var body: some Scene {

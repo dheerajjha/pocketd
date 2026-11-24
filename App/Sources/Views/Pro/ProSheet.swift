@@ -16,16 +16,21 @@ import SwiftUI
 /// the person was doing.
 struct ProSheet: View {
     @Environment(ProStore.self) private var pro
+    @Environment(AppModel.self) private var model: AppModel?
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var onUnlocked: () -> Void = {}
+    var trigger: AnalyticsPaywallTrigger = .pro
 
     /// The outcome of a restore, which the store does not keep.
     @State private var note: String?
+    @State private var noteErrorCode: Int?
     /// Set once, so a purchase that both returns and arrives through the
     /// listener closes the sheet once.
     @State private var finished = false
+    @State private var analyticsViewed = false
 
     var body: some View {
         ScrollView {
@@ -62,6 +67,13 @@ struct ProSheet: View {
         // orphan the purchase it is waiting for.
         .interactiveDismissDisabled(pro.purchase == .purchasing)
         .task {
+            if !analyticsViewed {
+                analyticsViewed = true
+                model?.productAnalytics.context.appearance = colorScheme == .dark ? .dark : .light
+                model?.productAnalytics.context.typeSize = typeSize.isAccessibilitySize ? .accessibility
+                    : (typeSize >= .xxxLarge ? .large : .standard)
+                model?.record(.paywallViewed(trigger: trigger))
+            }
             pro.clearFailure()
             #if DEBUG
             if !ProStage.manualRestore { await pro.refreshIfNeeded() }
@@ -72,6 +84,9 @@ struct ProSheet: View {
         }
         .onChange(of: pro.isPro) { _, isPro in
             if isPro { finish() }
+        }
+        .onChange(of: displayedError, initial: true) { _, error in
+            if let error { model?.record(.errorShown(area: error.area, code: error.code)) }
         }
         .onChange(of: statusLine) { _, line in
             // Appears beside the button, where VoiceOver's cursor is not.
@@ -180,16 +195,35 @@ struct ProSheet: View {
     }
 
     /// The one sentence above the button, when there is one.
-    private var statusLine: String? {
-        if let note { return note }
+    private struct DisplayedError: Equatable {
+        var area: AnalyticsErrorArea
+        var code: Int
+    }
+
+    private struct StatusNotice {
+        var line: String
+        var error: DisplayedError? = nil
+    }
+
+    /// Text and analytics share one priority decision. An offer failure hidden
+    /// by Restore's note is not a second displayed error, and the StoreKit
+    /// listener itself cannot claim a notice when this sheet is not present.
+    private var displayedStatus: StatusNotice? {
+        if let note { return .init(line: note, error: noteErrorCode.map { .init(area: .restore, code: $0) }) }
         switch pro.purchase {
-        case .pending: return ProCopy.waitingForApproval
-        case let .failed(failure): return failure.sentence
+        case .pending: return .init(line: ProCopy.waitingForApproval)
+        case let .failed(failure):
+            return .init(line: failure.sentence, error: .init(area: .purchase, code: pro.purchaseAnalyticsErrorCode ?? -1))
         case .idle, .purchasing: break
         }
-        if pro.offer == .unavailable { return ProFailure.unavailable.sentence }
+        if pro.offer == .unavailable {
+            return .init(line: ProFailure.unavailable.sentence, error: .init(area: .purchase, code: -1))
+        }
         return nil
     }
+
+    private var statusLine: String? { displayedStatus?.line }
+    private var displayedError: DisplayedError? { displayedStatus?.error }
 
     private var statusSymbol: String {
         if note == nil, pro.purchase == .pending { return "clock" }
@@ -200,6 +234,7 @@ struct ProSheet: View {
 
     private func buy() {
         note = nil
+        noteErrorCode = nil
         Task {
             if await pro.buy() { finish() }
         }
@@ -207,11 +242,14 @@ struct ProSheet: View {
 
     private func restore() {
         note = nil
+        noteErrorCode = nil
         Task {
             switch await pro.restore() {
             case .restored: finish()
             case .nothingToRestore: note = ProCopy.nothingToRestore
-            case let .failed(failure): note = failure.sentence
+            case let .failed(failure):
+                noteErrorCode = pro.restoreAnalyticsErrorCode ?? -1
+                note = failure.sentence
             case .cancelled: break
             }
         }

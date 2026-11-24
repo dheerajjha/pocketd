@@ -55,6 +55,8 @@ final class AppModel {
     /// only this flag knows whether to put it back on the next foreground.
     var serverShouldRun = false
     var lastServerError: String?
+    var pendingServerAnalyticsError: Int?
+    var serverAnalyticsErrorRevision = UUID()
 
     // MARK: - Brain: what is on this phone and what is in memory
 
@@ -422,6 +424,7 @@ final class AppModel {
     /// a flag that says not to — which is why the package's suite cannot reach
     /// a real project even by accident.
     private(set) var analytics: any AnalyticsSink = AnalyticsForBuild.make()
+    @ObservationIgnored lazy var productAnalytics = ProductAnalytics(sink: analytics)
 
     /// Set when the app has just done its job and has earned the question.
     ///
@@ -674,6 +677,10 @@ final class AppModel {
         // Here rather than in `bootstrap`, because a Siri question can arrive
         // before the scene's first task has run.
         IntentInbox.onDeliver = { [weak self] question in self?.questionArrived(question) }
+        NotificationCentre.shared.analyticsStatus = { [weak self] status in
+            self?.productAnalytics.context.notifications = status
+        }
+        NotificationCentre.shared.analyticsEvent = { [weak self] event in self?.record(event) }
     }
 
     func bootstrap() async {
@@ -719,7 +726,7 @@ final class AppModel {
         // separating a genuinely new install from someone updating into the
         // first version that had any analytics in it. Recorded a line earlier,
         // every existing user reports a first launch on release day.
-        analytics.record(.appOpened(
+        record(.appOpened(
             isFirstLaunch: FirstLaunch.claim(evidenceOfPriorUse: hasCompletedOnboarding)
         ))
 
@@ -763,6 +770,7 @@ final class AppModel {
                 let served = await engine.loadedModel()?.id
                 await MainActor.run {
                     self.log = entries
+                    self.productAnalytics.observeRequests(entries, consent: self.analyticsConsent)
                     // Not user-initiated: this fires because some client asked
                     // for a different model.
                     self.syncLoadedModel(resident)

@@ -11,6 +11,7 @@ extension AppModel {
         serverShouldRun = true
         UserDefaults.standard.set(true, forKey: Keys.serverShouldRun)
         lastServerError = nil
+        pendingServerAnalyticsError = nil
         // Before the listener opens, so the very first request from another
         // device already gets what Server settings says. Here rather than only
         // in `applyConfiguration`, because a launch never applies anything: the
@@ -26,7 +27,7 @@ extension AppModel {
             // restart after every suspension — iOS closes the socket without
             // telling anyone and `reconcileAfterForeground` puts it back — and
             // "the listener came up" is what this event honestly means.
-            analytics.record(.serverStarted)
+            record(.serverStarted)
             // A code is only worth showing until someone has used one. After
             // that the laptop has the key and the phone should stop displaying
             // six digits it no longer needs.
@@ -36,6 +37,8 @@ extension AppModel {
             await advertise()
         } catch {
             lastServerError = friendlyMessage(for: error)
+            pendingServerAnalyticsError = (error as NSError).code
+            serverAnalyticsErrorRevision = UUID()
         }
     }
 
@@ -49,7 +52,7 @@ extension AppModel {
         // The price is that starts outnumber stops, and the difference is
         // suspensions rather than anything anyone did.
         if let since = servingSince {
-            analytics.record(.serverStopped(servedSeconds: Date().timeIntervalSince(since)))
+            record(.serverStopped(servedSeconds: Date().timeIntervalSince(since)))
             servingSince = nil
         }
         await server.stop()
@@ -75,7 +78,11 @@ extension AppModel {
     }
 
     func applyConfiguration(_ new: ServerConfiguration) async {
+        let old = configuration
         configuration = new
+        if old.requiresAuth != new.requiresAuth { record(.settingChanged(setting: .authentication, enabled: new.requiresAuth)) }
+        if old.reasoningEnabled != new.reasoningEnabled { record(.settingChanged(setting: .reasoning, enabled: new.reasoningEnabled)) }
+        if old.keepAwakeWhileServing != new.keepAwakeWhileServing { record(.settingChanged(setting: .keepAwake, enabled: new.keepAwakeWhileServing)) }
         // The context limit moves the memory ceiling, so every fit badge and
         // the download gate have to be recomputed against the new one.
         governor?.updateThermalTolerance(new.thermalTolerance)
@@ -85,8 +92,11 @@ extension AppModel {
         do {
             try await server.apply(new)
             lastServerError = nil
+            pendingServerAnalyticsError = nil
         } catch {
             lastServerError = friendlyMessage(for: error)
+            pendingServerAnalyticsError = (error as NSError).code
+            serverAnalyticsErrorRevision = UUID()
         }
         governor?.updateBatteryFloor(new.pauseBelowBatteryLevel)
         // Not covered by the observer: toggling keep-awake in Settings produces
@@ -98,6 +108,14 @@ extension AppModel {
 
     func clearLog() async {
         await server.log.clear()
+    }
+
+    /// The error can be created by a background rebind while Settings says
+    /// Applied. Count it only when a screen containing the notice appears.
+    func recordVisibleServerError() {
+        guard lastServerError != nil, let code = pendingServerAnalyticsError else { return }
+        pendingServerAnalyticsError = nil
+        record(.errorShown(area: .server, code: code))
     }
 
     /// The server's own settings, handed to the engine that answers it.

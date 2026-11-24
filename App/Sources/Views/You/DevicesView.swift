@@ -24,6 +24,7 @@ struct OtherDevicesView: View {
     @Environment(AppModel.self) private var model
     @Environment(Navigator.self) private var navigator
     @Environment(ToastCenter.self) private var toasts
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(ProStore.self) private var pro: ProStore?
 
     /// The promo is for the first visit only, and "first" has to survive a
@@ -65,6 +66,21 @@ struct OtherDevicesView: View {
             // switch's "Pro" capsule and the Pro sheet say what this is for.
             await pro?.settle()
             if !promoSeen, !isOn, pro?.isPro ?? true { showsPromo = true }
+        }
+        .onChange(of: model.serverAnalyticsErrorRevision) { _, _ in
+            if analyticsNoticeIsVisible { model.recordVisibleServerError() }
+        }
+        .onChange(of: analyticsNoticeIsVisible, initial: true) { _, visible in
+            if visible { model.recordVisibleServerError() }
+        }
+    }
+
+    private var analyticsNoticeIsVisible: Bool {
+        guard scenePhase == .active, !model.needsOnboarding, !model.deskMode,
+              !navigator.isAskPresented, !showsPromo, !showsRequests else { return false }
+        switch navigator.path.last {
+        case .youPage(.devices), .youPage(.deskMode): return true
+        default: return false
         }
     }
 
@@ -167,6 +183,7 @@ struct OtherDevicesView: View {
             Button {
                 guard let url = model.serverURL else { return }
                 UIPasteboard.general.string = url.absoluteString
+                model.record(.shareUsed(kind: .address))
                 Haptics.success()
                 toasts.show("Address copied", symbol: "doc.on.doc")
             } label: {

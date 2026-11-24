@@ -101,6 +101,10 @@ struct MixpanelAnalytics: AnalyticsSink {
         Mixpanel.mainInstance().track(event: event.name, properties: Self.properties(of: event))
     }
 
+    func record(_ event: AnalyticsEvent, context: AnalyticsContext) {
+        Mixpanel.mainInstance().track(event: event.name, properties: Self.properties(of: event, context: context))
+    }
+
     /// Stop, and forget.
     ///
     /// Nothing in this build calls it — there is no opt-out — and it is
@@ -152,8 +156,8 @@ struct MixpanelAnalytics: AnalyticsSink {
     /// every event property against `AnalyticsSchema`; `install_env` enters
     /// through that same map so the test covers the field the SDK receives.
     /// Registering it as a Mixpanel superproperty would bypass that check.
-    private static func properties(of event: AnalyticsEvent) -> Properties {
-        let values = event.properties(installEnvironment: Self.installEnvironment)
+    private static func properties(of event: AnalyticsEvent, context: AnalyticsContext? = nil) -> Properties {
+        let values = event.properties(installEnvironment: Self.installEnvironment, context: context)
         return values.mapValues { (value: AnalyticsValue) -> MixpanelType in
             switch value {
             case let .string(text): return text

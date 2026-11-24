@@ -65,7 +65,22 @@ extension AppModel {
         case .alreadyConnected:
             outcome = .connected
         case .askIOS:
+            let permission: AnalyticsPermission = switch ability {
+            case .calendar: .calendar
+            case .reminders: .reminders
+            case .health: .health
+            case .localServer: .calendar // excluded by readsPersonalData above
+            }
+            record(.permissionPrompted(permission: permission))
             outcome = await askIOS(for: ability)
+            let result: AnalyticsPermissionOutcome = switch outcome {
+            case .connected: ability == .health ? .completed : .granted
+            case .blocked: .blocked
+            case .unavailable: .unavailable
+            case .couldNotAsk: .failed
+            default: .denied
+            }
+            record(.permissionResult(permission: permission, outcome: result))
         case .openSettings:
             openSystemSettings()
             outcome = .openedSettings

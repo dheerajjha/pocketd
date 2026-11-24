@@ -28,12 +28,15 @@ struct RoutineResultView: View {
     private var task: ScheduledTask? { model.scheduledTasks.first { $0.id == taskID } }
 
     var body: some View {
+        Group {
         if let task {
             page(task)
                 .onAppear { model.markRoutineResultsSeen() }
         } else {
             gone
         }
+        }
+        .onAppear { model.record(.screenViewed(screen: .routineResult)) }
     }
 
     // MARK: - The page

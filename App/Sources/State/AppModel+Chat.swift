@@ -79,7 +79,7 @@ extension AppModel {
         cancelBriefGeneration()
         // After the guard rather than at the top of the method: a tap with an
         // empty draft, or with nothing resident to answer it, sends no message.
-        analytics.record(.chatMessageSent(modelID: loadedModelID ?? ""))
+        record(.chatMessageSent(modelID: loadedModelID ?? ""))
 
         // Decided here, while `text` is still in hand and before `draft` is
         // cleared. Only when the model is actually being given tools: on a
@@ -103,7 +103,7 @@ extension AppModel {
             pendingToolOffer = nil
         }
         if let offered = pendingToolOffer {
-            analytics.record(.abilityOfferShown(ability: offered.ability.rawValue))
+            record(.abilityOfferShown(ability: offered.ability.rawValue))
         }
 
         let images = attachments
@@ -248,6 +248,7 @@ extension AppModel {
                           self.currentConversationID == target.conversation else { return }
                     self.discardEmptyReply()
                     self.generationError = Self.replyFailureSentence(for: error)
+                    self.record(.errorShown(area: .chat, code: (error as NSError).code))
                     self.replyFailureRemedy = Self.remedy(for: error)
                     if case let InferenceError.privateCloud(.limitReached(reset), _) = error,
                        self.isUsingPrivateCloudCompute {
@@ -278,6 +279,7 @@ extension AppModel {
                         self.discardEmptyReply()
                         if self.generationError == nil {
                             self.generationError = "That one didn't work."
+                            self.record(.errorShown(area: .chat, code: -1))
                             self.replyFailureRemedy = .tryAgain
                         }
                     }

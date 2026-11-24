@@ -81,6 +81,7 @@ struct DiagnosticsView: View {
 
     private func copy() {
         UIPasteboard.general.string = text
+        model.record(.shareUsed(kind: .diagnostics))
         Haptics.success()
         copied = true
         toasts.show("Log copied")

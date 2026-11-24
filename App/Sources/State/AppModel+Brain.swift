@@ -149,11 +149,11 @@ extension AppModel {
         // counting is the moment someone was told this model will not fit on
         // their phone and said go ahead anyway, and that only ever arrives
         // through the parameter.
-        if allowingOversized { analytics.record(.oversizeOverride(modelID: model.id)) }
+        if allowingOversized { record(.oversizeOverride(modelID: model.id)) }
         // The total rather than the weights alone: the projector comes down
         // with them, and a vision model without one is a text model. It is the
         // figure `/api/pull` reports, for the same reason.
-        analytics.record(.modelDownloadStarted(
+        record(.modelDownloadStarted(
             modelID: model.id,
             sizeBytes: model.totalDownloadBytes
         ))
@@ -209,7 +209,7 @@ extension AppModel {
                             // transfer out of active by the time it lands here,
                             // so a cancelled download is not also counted as a
                             // failed one.
-                            self.analytics.record(.modelDownloadFailed(modelID: model.id, reason: .other))
+                            self.record(.modelDownloadFailed(modelID: model.id, reason: .other))
                             self.transfers[model.id] = nil
                         }
                         self.downloadTasks[model.id] = nil
@@ -229,7 +229,7 @@ extension AppModel {
                     // where the stream ended, for the reason that check exists:
                     // a stream that finishes without throwing is not proof that
                     // anything arrived.
-                    self.analytics.record(.modelDownloadCompleted(
+                    self.record(.modelDownloadCompleted(
                         modelID: model.id,
                         durationSeconds: started.duration(to: .now) / .seconds(1)
                     ))
@@ -283,7 +283,7 @@ extension AppModel {
                     // counts as a failure here: `offline` and `timed_out` are
                     // in the taxonomy because the Wi-Fi going is how this
                     // usually fails, not because it is an edge case.
-                    self.analytics.record(.modelDownloadFailed(
+                    self.record(.modelDownloadFailed(
                         modelID: model.id,
                         reason: AnalyticsMapping.downloadReason(for: error)
                     ))
@@ -340,7 +340,7 @@ extension AppModel {
         // A percentage rather than the byte count beside it: the question is
         // how much of a download someone tolerated before giving up, and that
         // is the same question whether the file was 300 MB or 3 GB.
-        analytics.record(.modelDownloadCancelled(
+        record(.modelDownloadCancelled(
             modelID: model.id,
             percentComplete: Int((transfers[model.id]?.fraction ?? 0) * 100)
         ))
@@ -523,7 +523,7 @@ extension AppModel {
         do {
             try await engine.load(model: model)
             loaded = true
-            analytics.record(.modelLoadSucceeded(
+            record(.modelLoadSucceeded(
                 modelID: model.id,
                 ramClass: ramClass,
                 loadMilliseconds: Int(started.duration(to: .now) / .milliseconds(1))
@@ -555,7 +555,7 @@ extension AppModel {
             // rather than as a throw, so `out_of_memory` here undercounts and
             // the missing cases are invisible by construction. See
             // `AnalyticsMapping.loadReason`.
-            analytics.record(.modelLoadFailed(
+            record(.modelLoadFailed(
                 modelID: model.id,
                 ramClass: ramClass,
                 reason: AnalyticsMapping.loadReason(for: error)
