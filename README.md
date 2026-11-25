@@ -47,6 +47,9 @@ rather than quietly sending your voice to a server. Finishing sends the final
 words to the same ready brain. If you chose Private Cloud Compute, only the text
 goes to Apple; the audio stays on the phone. If the brain changes, is unavailable,
 or dictation can’t finish, the words stay in the box for you to edit or send.
+If you already have words or a photo in the box, the mic beside Send adds to
+that draft. Tap Send when it’s ready. If the mic stops before you finish,
+**Continue dictating** keeps the words you already have.
 An answer that touches your calendar, reminders or health comes back as one
 card: a sentence, and under it a timeline of events, a checklist you can tick
 off without leaving the card, or a small grid of health numbers. A reminder or an

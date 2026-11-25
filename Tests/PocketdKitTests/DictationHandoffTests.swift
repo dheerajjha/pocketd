@@ -13,11 +13,12 @@ struct DictationHandoffTests {
         var sent: [String] = []
         var reviews: [String] = []
         var finalDrafts: [String] = []
+        var hasAttachments = false
         var destination: DictationHandoff.Destination = .local(modelID: "fixture", selection: UUID())
         var endAudioCount = 0
 
         mutating func reserve() -> UUID {
-            handoff.begin(draft: draft, in: conversation, destination: destination)
+            handoff.begin(draft: draft, in: conversation, destination: destination, hasAttachments: hasAttachments)
         }
 
         mutating func begin() -> UUID {
@@ -28,7 +29,7 @@ struct DictationHandoffTests {
         }
 
         mutating func receive(_ event: DictationHandoff.Event, for id: UUID) {
-            switch handoff.receive(event, for: id, draft: draft, in: conversation, destination: destination) {
+            switch handoff.receive(event, for: id, draft: draft, in: conversation, destination: destination, hasAttachments: hasAttachments) {
             case .preview(let words): draft = words
             case .submit(let words): draft = words; sent.append(words)
             case .reviewFinal(let words): draft = words; finalDrafts.append(words)
@@ -164,7 +165,8 @@ struct DictationHandoffTests {
         #expect(box.reviews.isEmpty)
         box.receive(.release, for: new)
         box.receive(.final("Buy apples."), for: new)
-        #expect(box.sent == ["Buy apples."])
+        #expect(box.sent.isEmpty)
+        #expect(box.finalDrafts == ["buy Buy apples."])
     }
 
     @Test("A changed draft wins even if a recognition callback beats the UI change notification",
@@ -373,5 +375,186 @@ struct DictationHandoffTests {
         box.destination = cloud
         box.receive(.final("A question?"), for: id)
         #expect(box.finalDrafts == ["A question?"] && box.sent.isEmpty)
+    }
+
+    @Test("One mic turn, two nonoverlapping audio requests: the iPhone blue-folder / green-notebook sequence")
+    func witnessedSequence() throws {
+        let blue = "The blue folder is near the window", green = "The green notebook is on the shelf"
+        var box = Composer(), audio = DictationAudioRequests()
+        let id = box.begin()
+        // Synthetic 10 ms PCM envelopes matching the operator's clip times:
+        // 4.27 s A, 4.64 s inter-clip gap + B's 3.20 s lead-in, then 3.93 s B.
+        // This tests the production buffer router, not a recording of the phone.
+        func write(_ frames: Int, level: Float) throws -> [Int] {
+            try (0..<frames).map { _ in
+                let write = audio.write(level: level, seconds: 0.01, spareReady: true)
+                return try #require(write).part
+            }
+        }
+        let a = try write(427, level: 0.6)
+        #expect(Set(a) == [0])
+        box.receive(.partial(blue), for: id)
+        #expect(box.draft == blue)
+        let quiet = try write(784, level: 0.02)
+        #expect(Set(quiet) == [0, 1] && quiet == quiet.sorted())
+        #expect(audio.state(at: 0).sealed && !audio.state(at: 1).ready)
+        let b = try write(393, level: 0.55)
+        #expect(Set(b) == [1] && audio.state(at: 1).ready)
+        let old = audio.finish(at: 0)
+        #expect(old?.hasNext == true)
+        #expect(!audio.acceptsResult(from: 0) && audio.acceptsResult(from: 1))
+        let obsolete = audio.finish(at: 0)
+        #expect(obsolete == nil)
+        // B's audio was already collected. Even entirely untimed callbacks
+        // in each independent request cannot make the second replace the first.
+        box.receive(.nextRequest(final: blue, timing: .init()), for: id)
+        for hypothesis in ["The green", "The green note", "The green notebook", green, green] {
+            box.receive(.partial(hypothesis), for: id)
+            #expect(box.draft == blue + " " + hypothesis)
+        }
+        #expect(box.handoff.isHeld && box.sent.isEmpty)
+        audio.close()
+        #expect(audio.state(at: 1).sealed)
+        let afterStop = audio.write(level: 1, seconds: 0.01, spareReady: true)
+        #expect(afterStop == nil)
+        box.receive(.release, for: id)
+        let last = audio.finish(at: 1)
+        #expect(last?.hasNext == false && !audio.acceptsResult(from: 1))
+        box.receive(.final(green), for: id)
+        box.receive(.final(green), for: id)
+        #expect(box.sent == [blue + " " + green])
+    }
+
+    @Test("Overlapping audio corrects words; disjoint audio survives a suffix-only result; cumulative finals don't duplicate it")
+    func timedHypotheses() {
+        func at(_ start: Double, _ duration: Double) -> DictationTiming { .init(speechStart: start, speechDuration: duration) }
+        for cumulative in [false, true] {
+            var box = Composer()
+            let id = box.begin()
+            box.receive(.partial("blew", timing: at(0.2, 0.3)), for: id)
+            box.receive(.partial("blue", timing: at(0.2, 0.32)), for: id)
+            box.receive(.partial("blue folder", timing: at(0.2, 0.8)), for: id)
+            box.receive(.partial("green", timing: at(2.0, 0.4)), for: id)
+            box.receive(.partial("green", timing: at(2.0, 0.4)), for: id)
+            #expect(box.draft == "blue folder green")
+            box.receive(.release, for: id)
+            if cumulative {
+                box.receive(.final("Blue folder. Green.", timing: at(0.2, 2.3)), for: id)
+                #expect(box.sent == ["Blue folder. Green."])
+            } else {
+                box.receive(.final("Green.", timing: at(2.0, 0.5)), for: id)
+                #expect(box.finalDrafts == ["blue folder Green."] && box.sent.isEmpty)
+            }
+        }
+    }
+
+    @Test("An overlapping rolling window keeps only the earlier formatted words, including UTF-16 ranges")
+    func rollingWindow() {
+        var box = Composer()
+        let id = box.begin()
+        let first = DictationTiming(segments: [.init(start: 0.2, duration: 0.3, substringRange: NSRange(location: 0, length: 2)),
+                                              .init(start: 0.7, duration: 0.3, substringRange: NSRange(location: 4, length: 6))])
+        box.receive(.partial("🟦, folder", timing: first), for: id)
+        box.receive(.partial("folder green", timing: .init(speechStart: 0.7, speechDuration: 1.4)), for: id)
+        #expect(box.draft == "🟦, folder green")
+    }
+
+    @Test("Identical words spoken twice survive; duplicate revisions of either request do not")
+    func repeatedSpeech() {
+        var box = Composer()
+        let id = box.begin()
+        let timing = DictationTiming(speechStart: 0, speechDuration: 0.4)
+        box.receive(.partial("again", timing: timing), for: id)
+        box.receive(.nextRequest(final: "again", timing: timing), for: id)
+        box.receive(.partial("again", timing: timing), for: id) // new request starts its clock at zero
+        box.receive(.partial("again", timing: timing), for: id)
+        box.receive(.release, for: id)
+        box.receive(.final("again", timing: timing), for: id)
+        #expect(box.sent == ["again again"])
+    }
+
+    @Test("Starting with typed words appends to that exact draft and waits for Send", arguments: ["My note:", "My note: ", "My note:\n"])
+    func appendToDraft(_ prefix: String) {
+        var box = Composer()
+        box.draft = prefix
+        let id = box.begin(), base = prefix + (prefix.last!.isWhitespace ? "" : " ")
+        box.receive(.partial("blue"), for: id)
+        box.receive(.partial("blue folder"), for: id)
+        #expect(box.draft == base + "blue folder")
+        box.receive(.release, for: id)
+        box.receive(.final("Blue folder."), for: id)
+        #expect(box.finalDrafts == [base + "Blue folder."] && box.sent.isEmpty)
+    }
+
+    @Test("Continue after a finished recognizer starts a new mic turn with the first phrase intact")
+    func continueAfterFinal() {
+        var box = Composer()
+        let old = box.begin()
+        box.receive(.final("Blue folder."), for: old)
+        #expect(box.handoff.canContinue && box.sent.isEmpty)
+        box.handoff.cancel() // explicit Continue; it does not deliver the old finish gesture
+        let new = box.begin()
+        box.receive(.release, for: old)
+        box.receive(.partial("green"), for: new)
+        box.receive(.release, for: new)
+        box.receive(.final("Green notebook."), for: new)
+        #expect(box.finalDrafts == ["Blue folder. Green notebook."] && box.sent.isEmpty)
+    }
+
+    @Test("Silence/timeout can't submit existing text, and a failed earlier phrase isn't promoted by a later final")
+    func incompleteAppend() {
+        var box = Composer()
+        box.draft = "Keep this"
+        let id = box.begin()
+        box.receive(.release, for: id)
+        box.receive(.final(""), for: id)
+        #expect(box.draft == "Keep this" && box.sent.isEmpty)
+        let next = box.begin()
+        box.receive(.partial("blue"), for: next)
+        box.receive(.timedOut, for: next)
+        #expect(box.draft == "Keep this blue" && box.sent.isEmpty)
+        var fresh = Composer()
+        let turn = fresh.begin()
+        fresh.receive(.partial("blue"), for: turn)
+        fresh.receive(.nextRequest(final: nil, timing: .init()), for: turn)
+        fresh.receive(.release, for: turn)
+        fresh.receive(.final("green"), for: turn)
+        #expect(fresh.finalDrafts == ["blue green"] && fresh.sent.isEmpty)
+    }
+
+    @Test("Only a silent trailing request can finish with the confirmed earlier words alone")
+    func silentTail() {
+        for hasPartial in [false, true] {
+            var box = Composer()
+            let id = box.begin()
+            box.receive(.nextRequest(final: "Blue folder.", timing: .init()), for: id)
+            if hasPartial { box.receive(.partial("green"), for: id) }
+            box.receive(.release, for: id)
+            box.receive(.emptyTail, for: id)
+            #expect(box.sent == (hasPartial ? [] : ["Blue folder."]))
+            #expect(box.draft == (hasPartial ? "Blue folder. green" : "Blue folder."))
+        }
+    }
+
+    @Test("Deleting the draft during finalization wins; a pre-existing or newly staged photo is never auto-sent")
+    func attachmentsAndDeletion() {
+        for startsWithPhoto in [false, true] {
+            var box = Composer()
+            box.hasAttachments = startsWithPhoto
+            let id = box.begin()
+            box.receive(.partial("blue"), for: id)
+            box.hasAttachments = true
+            box.receive(.release, for: id)
+            box.receive(.final("Blue"), for: id)
+            #expect(box.sent.isEmpty && box.finalDrafts == ["Blue"])
+        }
+        var box = Composer()
+        box.draft = "Prefix"
+        let id = box.begin()
+        box.receive(.partial("blue"), for: id)
+        box.receive(.release, for: id)
+        box.draft = ""
+        box.receive(.final("late"), for: id)
+        #expect(box.draft.isEmpty && box.sent.isEmpty && box.finalDrafts.isEmpty)
     }
 }

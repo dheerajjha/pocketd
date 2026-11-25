@@ -29,6 +29,8 @@ generated from `project.yml` by XcodeGen) adds llama.cpp through LocalLLMClient 
 ## Cancellation and dictation
 - An interrupted scheduled prompt stays due. A cancelled stream can end without throwing, even after emitting words; neither that prefix nor an empty result is a completed run.
 - Tap the Ask mic to start and again to finish, or hold and release. Only confirmed final words may send, once, to the same ready brain and selection intent. PCC must be explicitly chosen, effective and resident. A changed or unavailable destination, interruption or missing final leaves the draft editable.
+- Dictating into existing words or a staged photo adds to the draft for an explicit Send. Within a mic turn, revise overlapping audio rather than appending hypotheses. Keep separate request IDs across long pauses; segment timestamps can be absent or start again at zero in a new request.
+- Constructing or discarding a composer must not open the microphone. `AVAudioEngine.inputNode` creates the input on first access; release only the tap, engine and session acquired by an explicit authorized Start.
 
 ## Conversation entry
 - Main Ask resumes the explicitly chosen chat. Pages reuse their own discussions (routines by ID); a Shortcut question gets its invocation's thread. A supplied question must not take an existing draft or its photos, or cut off a previous reply. `ConversationEntryTests` cover the policy and old transcript format.

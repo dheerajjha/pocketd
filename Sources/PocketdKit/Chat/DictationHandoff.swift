@@ -66,7 +66,10 @@ public struct DictationHandoff: Sendable {
     public enum Phase: Equatable, Sendable { case idle, starting, listening, awaitingFinish, finishing }
 
     public enum Event: Sendable {
-        case partial(String), final(String), release, timedOut, failed(String)
+        case partial(String, timing: DictationTiming = .init()), final(String, timing: DictationTiming = .init())
+        /// A disjoint, sealed audio request finished while the same mic turn continues.
+        case nextRequest(final: String?, timing: DictationTiming), emptyTail
+        case release, timedOut, failed(String)
     }
 
     public enum Action: Equatable, Sendable {
@@ -79,6 +82,10 @@ public struct DictationHandoff: Sendable {
     private var destination: Destination = .review
     private var conversation: UUID?
     private var expectedDraft = ""
+    private var prefix = ""
+    private var earlierSpeech = ""
+    private var transcript = DictationTranscript()
+    private var requiresReview = false
     private var earlyFinal: String?
     private var captureStarted = false
 
@@ -98,13 +105,17 @@ public struct DictationHandoff: Sendable {
         return isListening ? .listening : .awaitingFinish
     }
 
-    public mutating func begin(draft: String, in conversation: UUID, destination: Destination) -> UUID {
+    public mutating func begin(draft: String, in conversation: UUID, destination: Destination, hasAttachments: Bool = false) -> UUID {
         let id = UUID()
         self.id = id
         self.conversation = conversation
         self.destination = destination
         isHeld = true
         expectedDraft = draft
+        prefix = draft
+        earlierSpeech = ""
+        transcript = DictationTranscript()
+        requiresReview = !draft.isEmpty || hasAttachments
         earlyFinal = nil
         captureStarted = false
         return id
@@ -124,6 +135,10 @@ public struct DictationHandoff: Sendable {
 
     public mutating func cancel() { self = Self() }
 
+    /// Recognition ended on its own. Finish the question or explicitly start
+    /// a new recording whose immutable draft prefix includes this one.
+    public var canContinue: Bool { isHeld && earlyFinal != nil }
+
     /// Sticky for this turn: losing the destination at release (or between
     /// partials) cannot be undone by its return before the recognizer's final.
     public mutating func observeDestination(_ current: Destination) {
@@ -135,13 +150,15 @@ public struct DictationHandoff: Sendable {
         self.conversation == conversation && expectedDraft == draft
     }
 
-    public mutating func receive(_ event: Event, for id: UUID, draft: String, in conversation: UUID, destination current: Destination) -> Action? {
+    public mutating func receive(_ event: Event, for id: UUID, draft: String, in conversation: UUID, destination current: Destination,
+                                 hasAttachments: Bool = false) -> Action? {
         guard self.id == id else { return nil }
         guard owns(draft: draft, in: conversation) else {
             cancel()
             return .cancel
         }
         observeDestination(current)
+        requiresReview = requiresReview || hasAttachments
 
         // A duplicate or trailing error cannot demote an already confirmed
         // transcript while the button is still held.
@@ -158,20 +175,31 @@ public struct DictationHandoff: Sendable {
             guard captureStarted else { cancel(); return .cancel }
             isHeld = false
             return .endAudio
-        case .partial(let text):
+        case let .partial(text, timing):
             guard captureStarted, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-            expectedDraft = text
-            return .preview(text)
-        case .final(let text):
+            transcript.update(text, timing: timing, confirmed: false)
+            expectedDraft = composedDraft
+            return .preview(expectedDraft)
+        case let .nextRequest(final, timing):
             guard captureStarted else { return nil }
-            let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !words.isEmpty else { return unfinished() }
-            if isHeld {
-                earlyFinal = words
-                expectedDraft = words
-                return .preview(words)
+            if let final { transcript.update(final, timing: timing, confirmed: true) }
+            if final?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false { requiresReview = true }
+            let heard = transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !heard.isEmpty {
+                requiresReview = requiresReview || !transcript.allConfirmed
+                earlierSpeech = DictationTranscript.join(earlierSpeech, heard)
             }
-            return confirmed(words)
+            transcript = DictationTranscript()
+            expectedDraft = composedDraft
+            return .preview(expectedDraft)
+        case let .final(text, timing):
+            guard captureStarted else { return nil }
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return unfinished() }
+            transcript.update(text, timing: timing, confirmed: true)
+            return finishTranscript()
+        case .emptyTail:
+            guard captureStarted, !earlierSpeech.isEmpty, transcript.text.isEmpty else { return unfinished() }
+            return finishTranscript()
         case .timedOut:
             return unfinished()
         case .failed(let reason):
@@ -180,9 +208,28 @@ public struct DictationHandoff: Sendable {
         }
     }
 
+    private var composedDraft: String {
+        let current = transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return DictationTranscript.join(prefix, DictationTranscript.join(earlierSpeech, current))
+    }
+
+    private mutating func finishTranscript() -> Action {
+        guard !earlierSpeech.isEmpty || transcript.hasConfirmed else { return unfinished() }
+        // The final might cover only the last phrase. Earlier provisional
+        // words stay visible, but must not silently become a submitted action.
+        requiresReview = requiresReview || (!transcript.text.isEmpty && !transcript.allConfirmed)
+        let words = composedDraft
+        if isHeld {
+            earlyFinal = words
+            expectedDraft = words
+            return .preview(words)
+        }
+        return confirmed(words)
+    }
+
     private mutating func confirmed(_ words: String) -> Action {
         defer { cancel() }
-        return destination == .review ? .reviewFinal(words) : .submit(words)
+        return requiresReview || destination == .review ? .reviewFinal(words) : .submit(words)
     }
 
     private mutating func unfinished() -> Action {

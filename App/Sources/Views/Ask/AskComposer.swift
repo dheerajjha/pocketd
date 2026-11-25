@@ -56,6 +56,17 @@ struct AskComposer<Accessory: View>: View {
                 Primer(primer)
                     .padding(.horizontal, PDSpacing.xxs)
                     .transition(.opacity)
+            } else if dictation.canContinue {
+                HStack {
+                    Primer("The mic has stopped.")
+                    TextLink("Continue dictating", symbol: "mic") {
+                        guard dictation.canContinue, acceptsDictation,
+                              dictation.owns(draft: model.draft, in: model.currentConversationID) else { return }
+                        cancelDictation()
+                        startListening()
+                    }
+                    .accessibilityIdentifier("ask.mic.continue")
+                }
             } else if micPhase != .idle {
                 Primer(micPhase == .starting ? "Starting microphone…" : micPhase == .finishing ? "Finishing dictation…" : "Tap the stop button to finish.")
                     .padding(.horizontal, PDSpacing.xxs)
@@ -68,7 +79,7 @@ struct AskComposer<Accessory: View>: View {
                 placeholder: "Ask anything…",
                 micPhase: micPhase,
                 canSend: canSend,
-                showsMic: voice.isSupported && !model.isGenerating,
+                showsMic: !awaitingDispatch && !model.isGenerating && (dictation.id != nil || voice.isSupported),
                 onMic: startOrJoinMic,
                 onMicEnd: { receive(.release, for: $0) },
                 onMicCancel: { id in
@@ -219,6 +230,8 @@ struct AskComposer<Accessory: View>: View {
 
     private var micPhase: DictationHandoff.Phase { dictation.phase(isListening: voice.isListening) }
 
+    private var awaitingDispatch: Bool { model.waitingQuestion != nil || IntentInbox.questions.isWaiting }
+
     private var dictationDestination: DictationHandoff.Destination {
         .resolve(chosen: model.brainChoice, effective: model.effectiveBrain, residentID: model.loadedModelID,
                  canAnswer: model.brainStatus.canAnswer, cloud: model.cloudStatus, selection: model.brainChoiceIntent)
@@ -232,7 +245,7 @@ struct AskComposer<Accessory: View>: View {
     // Check again at delivery, on the same actor as the draft write and send.
     private var acceptsDictation: Bool {
         scenePhase != .background && UIApplication.shared.applicationState != .background && navigator.isAskPresented && navigator.askHandoff == nil
-            && !model.askComposerFocusRequested && !model.isGenerating
+            && !model.askComposerFocusRequested && !model.isGenerating && !awaitingDispatch
     }
 
     private func stillWantsMic(_ id: UUID) -> Bool {
@@ -244,7 +257,8 @@ struct AskComposer<Accessory: View>: View {
         guard acceptsDictation, dictation.id == nil else { return nil }
         isFocused = false
         levels = []
-        let id = dictation.begin(draft: model.draft, in: model.currentConversationID, destination: dictationDestination)
+        let id = dictation.begin(draft: model.draft, in: model.currentConversationID, destination: dictationDestination,
+                                 hasAttachments: !model.attachments.isEmpty)
         voiceStart = Task { @MainActor in
             if let delay {
                 do { try await Task.sleep(for: delay) } catch { return }
@@ -295,7 +309,8 @@ struct AskComposer<Accessory: View>: View {
         guard acceptsDictation, micPhase == .starting || UIApplication.shared.applicationState == .active else {
             cancelDictation(); return
         }
-        switch dictation.receive(event, for: id, draft: model.draft, in: model.currentConversationID, destination: dictationDestination) {
+        switch dictation.receive(event, for: id, draft: model.draft, in: model.currentConversationID, destination: dictationDestination,
+                                 hasAttachments: !model.attachments.isEmpty) {
         case .preview(let words):
             model.draft = words
         case .endAudio:

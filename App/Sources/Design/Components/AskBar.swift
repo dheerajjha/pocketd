@@ -45,7 +45,7 @@ struct AskBar: View {
 
     private var micLabel: String {
         switch micPhase {
-        case .idle: "Speak"
+        case .idle: canSend ? "Add dictation" : "Speak"
         case .starting: "Cancel dictation"
         case .listening, .awaitingFinish: "Finish dictation"
         case .finishing: "Finishing dictation"
@@ -144,7 +144,10 @@ struct AskBar: View {
             .buttonStyle(PDPressStyle())
             .accessibilityLabel("Send")
             .accessibilityIdentifier("ask.send")
-        } else if showsMic || micActive || micPress.isDown {
+        }
+        // Mic stays at the trailing edge when Send appears beside it. It is
+        // still the same 44pt target after a partial changes the draft.
+        if showsMic || micActive || micPress.isDown {
             Image(systemName: micPhase == .finishing ? "ellipsis" : micActive ? "stop.fill" : "mic")
                 .font(Font.pd.body)
                 .foregroundStyle(micActive ? Color.pd.onPrimary : Color.pd.inkSecondary)
@@ -168,7 +171,7 @@ struct AskBar: View {
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(micLabel)
-                .accessibilityHint(micActive ? "" : "Double-tap to start, and again to finish")
+                .accessibilityHint(micActive ? "" : canSend ? "Adds words to your draft without sending it" : "Double-tap to start, and again to finish")
                 .accessibilityIdentifier("ask.mic")
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction {
