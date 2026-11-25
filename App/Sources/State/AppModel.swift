@@ -713,7 +713,9 @@ final class AppModel {
         governor.start()
 
         await store.load()
-        await engine.updateDefaultSampling(configuration.sampling)
+        // The phone can restore a download without ever starting its LAN server.
+        // Use the saved context for that first model load as well as later requests.
+        await pushServerSettingsToEngine()
         installed = await store.installed()
         unavailableModels = await store.unavailable()
         await restoreInterruptedDownloads()

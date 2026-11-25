@@ -55,6 +55,7 @@ struct BrainAdvancedView: View {
                 ValueRow(title: "Other devices use", value: servedName ?? "A download, when one asks")
             }
         } else if let record = residentDownload {
+            let window = min(record.contextLength, model.configuration.maxContextTokens)
             YouSection("In use", footnote: "Other devices ask for this brain by its identifier.") {
                 ValueRow(title: "Brain", value: record.displayName)
                 RowDivider(inset: 0)
@@ -72,9 +73,9 @@ struct BrainAdvancedView: View {
                     ValueRow(title: "Picture part", value: pdBytes(record.projectorSizeBytes))
                 }
                 RowDivider(inset: 0)
-                ValueRow(title: "Memory in use", value: pdBytes(record.estimatedResidentBytes))
+                ValueRow(title: "Estimated model memory", value: pdBytes(record.memoryEstimate(atContext: window).totalBytes))
                 RowDivider(inset: 0)
-                ValueRow(title: "Context window", value: "\(Format.count(model.configuration.maxContextTokens)) tokens")
+                ValueRow(title: "Context window", value: "\(Format.count(window)) tokens")
                 RowDivider(inset: 0)
                 ValueRow(
                     title: "Reads your day",
@@ -93,10 +94,10 @@ struct BrainAdvancedView: View {
         }
     }
 
-    /// The download in memory for the phone, from the catalogue.
+    /// The installed record also has the weight dimensions read from the file.
     private var residentDownload: ModelRecord? {
         guard let id = model.loadedModelID, id != ModelRecord.builtInID, id != ModelRecord.privateCloudComputeID else { return nil }
-        return model.catalog.first { $0.id == id }
+        return model.installed.first { $0.id == id } ?? model.catalog.first { $0.id == id }
     }
 
     /// The download the server holds while the phone uses Apple's model.
