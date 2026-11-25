@@ -149,6 +149,52 @@ struct HubSearchOnPhoneTests {
         #expect(HuggingFaceSearch.offers(files, for: phone(6, entitled: true)).count == 2)
     }
 
+    @Test("LiquidAI’s same-size Q4 choices identify the actual downloads")
+    func sameRoundedSize() {
+        let repository = "LiquidAI/LFM2.5-1.2B-Instruct-GGUF"
+        let plain = HuggingFaceSearch.File(path: "LFM2.5-1.2B-Instruct-Q4_0.gguf", sizeBytes: 695_751_488)
+        let qad = HuggingFaceSearch.File(path: "LFM2.5-1.2B-Instruct-QAD-Q4_0.gguf", sizeBytes: 695_755_488)
+        let files = HuggingFaceSearch.offers([qad, plain], for: phone(6)).map(\.file)
+        #expect(files == [plain, qad])
+        #expect(plain.quantization == qad.quantization)
+        let size = ByteCountFormatter.string(fromByteCount: plain.sizeBytes, countStyle: .file)
+        #expect(ByteCountFormatter.string(fromByteCount: qad.sizeBytes, countStyle: .file) == size)
+
+        let titles = HuggingFaceSearch.fileChoiceTitles(in: repository, files: files)
+        #expect(titles[plain.path] == "Q4_0")
+        #expect(titles[qad.path] == "QAD-Q4_0")
+        #expect(plain.downloadLabel(size: size) == "Download \(plain.path), \(size)")
+        #expect(qad.downloadLabel(size: size) == "Download \(qad.path), \(size)")
+        #expect(qad.downloadIdentifier(repository: repository, totalBytes: qad.sizeBytes) ==
+            "hub.download.LiquidAI/LFM2.5-1.2B-Instruct-GGUF/LFM2.5-1.2B-Instruct-QAD-Q4_0.gguf@695755488")
+        #expect(files.map { HuggingFaceSearch.record(repository: repository, file: $0).id } == [
+            "liquidai-lfm2.5-1.2b-instruct-q4-0", "liquidai-lfm2.5-1.2b-instruct-qad-q4-0"
+        ])
+    }
+
+    @Test("arbitrary variant names survive shortening, even when the sizes and legacy identifiers collide")
+    func arbitraryVariants() {
+        let paths = ["Model-Q4_K_M.gguf", "Model-a-b-Q4_K_M.gguf", "Model-a_b-Q4_K_M.gguf", "Model-unusual.gguf"]
+        let files = paths.map { HuggingFaceSearch.File(path: $0, sizeBytes: 1_000_000) }
+        let repository = "publisher/Model-gguf"
+        let titles = HuggingFaceSearch.fileChoiceTitles(in: repository, files: files)
+        #expect(paths.compactMap { titles[$0] } == ["Q4_K_M", "a-b-Q4_K_M", "a_b-Q4_K_M", "unusual"])
+        #expect(Set(files.map { $0.downloadIdentifier(repository: repository, totalBytes: $0.sizeBytes) }).count == files.count)
+        // A projected download announces the total, not the weights alone.
+        let record = HuggingFaceSearch.record(repository: repository, file: files[0], projector: .init(path: "mmproj-F16.gguf", sizeBytes: 5_000_000))
+        #expect(files[0].downloadIdentifier(repository: repository, totalBytes: record.totalDownloadBytes).hasSuffix("@6000000"))
+    }
+
+    @Test("mixed names keep their full paths, including long filenames")
+    func fullFileNames() {
+        let longPath = "another/" + String(repeating: "calibration-", count: 12) + "Q4_0.gguf"
+        let paths = ["Model-Q4_0.gguf", "Q4_0.gguf", longPath, "Model-.gguf"]
+        let files = paths.map { HuggingFaceSearch.File(path: $0, sizeBytes: 1_000_000) }
+        let titles = HuggingFaceSearch.fileChoiceTitles(in: "publisher/Model-GGUF", files: files)
+        #expect(paths.compactMap { titles[$0] } == paths)
+        #expect(files[2].downloadLabel(size: "1 MB").contains(longPath))
+    }
+
     @Test("QA's search: 9B repos and 10 GB files are not offered on a phone, or on the simulator")
     func nineBillionIsTooBig() {
         let simulator = DeviceBudget(physicalMemoryBytes: 32 * 1024 * 1024 * 1024, hasIncreasedMemoryLimit: false, environment: .simulator)

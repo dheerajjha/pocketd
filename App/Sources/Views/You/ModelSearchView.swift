@@ -213,16 +213,17 @@ private struct RepositoryFilesView: View {
                 PillButton(title: "Try again", symbol: "arrow.clockwise") { attempt += 1 }
             }
         case let .ready(weights, projector):
+            let titles = HuggingFaceSearch.fileChoiceTitles(in: repository.id, files: weights)
             YouSection(
-                "Sizes",
+                "Download options",
                 footnote: projector == nil
-                    ? "Bigger files answer a little better and need more memory."
-                    : "Bigger files answer a little better and need more memory. Each size includes the part that reads pictures."
+                    ? "Smallest downloads first."
+                    : "Smallest downloads first. Each size includes the extra file for pictures."
             ) {
                 let offers = HuggingFaceSearch.offers(weights, for: model.budget, includingTooBig: true)
                 ForEach(Array(offers.enumerated()), id: \.element.id) { index, offer in
                     if index > 0 { RowDivider(inset: 0) }
-                    row(for: offer, projector: projector)
+                    row(for: offer, title: titles[offer.file.path] ?? offer.file.path, projector: projector)
                 }
             }
             if let url = URL(string: "https://huggingface.co/\(repository.id)") {
@@ -234,16 +235,17 @@ private struct RepositoryFilesView: View {
     }
 
     @ViewBuilder
-    private func row(for offer: HuggingFaceSearch.Offer, projector: HuggingFaceSearch.File?) -> some View {
+    private func row(for offer: HuggingFaceSearch.Offer, title: String, projector: HuggingFaceSearch.File?) -> some View {
         let file = offer.file
         let record = record(for: file, projector: projector)
+        let size = pdBytes(record.totalDownloadBytes)
         // Offered only when the file fits comfortably on its own and as the
         // whole download, which also counts the picture part.
         let isOffered = offer.isOffered && model.fit(for: record) == .comfortable
         let installed = model.isInstalled(record)
         let downloading = model.transfer(for: record.id)?.isActive == true
 
-        RowShell(title: pdBytes(record.totalDownloadBytes), detail: detail(file: file)) {
+        RowShell(title: title, detail: title == "Q4_K_M" ? pdSeparated("\(size) · Usual choice") : size) {
             if installed {
                 quiet("On this iPhone")
             } else if downloading {
@@ -252,17 +254,11 @@ private struct RepositoryFilesView: View {
                 quiet(offer.tooBigNote ?? "Too big for this iPhone")
             } else {
                 PillButton(title: "Get", symbol: "arrow.down") { onAdd(record) }
-                    .accessibilityLabel("Download the \(pdBytes(record.totalDownloadBytes)) size")
+                    .accessibilityLabel(file.downloadLabel(size: size))
+                    .accessibilityIdentifier(file.downloadIdentifier(repository: repository.id, totalBytes: record.totalDownloadBytes))
             }
         }
-    }
-
-    /// The file's own label, kept because two sizes are otherwise told apart
-    /// by nothing — plus a steer for the one most people want.
-    private func detail(file: HuggingFaceSearch.File) -> String {
-        var parts = [file.quantization == "unknown" ? "Unlabelled" : file.quantization]
-        if file.quantization == "Q4_K_M" { parts.append("Usual choice") }
-        return pdSeparated(parts.joined(separator: " · "))
+        .accessibilityElement(children: .contain)
     }
 
     private func quiet(_ text: String) -> some View {

@@ -56,6 +56,29 @@ public struct HuggingFaceSearch: Sendable {
         }
 
         public var isProjector: Bool { ModelRecord.isProjector(filename: path) }
+
+        public func downloadLabel(size: String) -> String { "Download \(path), \(size)" }
+
+        /// Preserve publisher punctuation here; the installed model ID normalizes it.
+        public func downloadIdentifier(repository: String, totalBytes: Int64) -> String {
+            "hub.download.\(repository)/\(path)@\(totalBytes)"
+        }
+    }
+
+    /// Drop only the repository stem already visible above the list, and only
+    /// when *every* filename shares it. Otherwise `Model-Q4_0.gguf` and a
+    /// sibling literally named `Q4_0.gguf` could both be shortened to `Q4_0`.
+    public static func fileChoiceTitles(in repository: String, files: [File]) -> [String: String] {
+        let name = repository.split(separator: "/").last.map(String.init) ?? ""
+        let stem = name.lowercased().hasSuffix("-gguf") ? String(name.dropLast(5)) : name
+        let prefix = stem + "-"
+        let suffix = ".gguf"
+        let canShorten = !stem.isEmpty && files.allSatisfy {
+            $0.path.hasPrefix(prefix) && $0.path.hasSuffix(suffix) && $0.path.count > prefix.count + suffix.count
+        }
+        return files.reduce(into: [:]) { titles, file in
+            titles[file.path] = canShorten ? String(file.path.dropFirst(prefix.count).dropLast(suffix.count)) : file.path
+        }
     }
 
     private let session: URLSession
