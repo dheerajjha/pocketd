@@ -542,10 +542,13 @@ final class AppModel {
         let store = ModelStore(directory: directory, budget: budget)
         self.store = store
 
-        self.conversations = ConversationStore(
-            directory: (try? ConversationStore.defaultDirectory())
-                ?? directory.appendingPathComponent("Conversations")
-        )
+        let chatDirectory: URL = {
+            #if DEBUG && targetEnvironment(simulator)
+            if let fixture = EditorUITestFixture.directory { return fixture }
+            #endif
+            return (try? ConversationStore.defaultDirectory()) ?? directory.appendingPathComponent("Conversations")
+        }()
+        self.conversations = ConversationStore(directory: chatDirectory)
 
         // The process's one task store, shared with the background refresh
         // rather than built again here. Two stores over one folder made the
@@ -753,6 +756,9 @@ final class AppModel {
         let restored = mainConversationID.map { id in history.first { $0.id == id } ?? Conversation(id: id) } ?? history.first
         IntentInbox.questions.didReadHistory(current: currentConversationID, latest: restored?.id)
         if let restored { displayConversation(restored) }
+        #if DEBUG && targetEnvironment(simulator)
+        if EditorUITestFixture.mode != nil { attachments = [EditorUITestFixture.photo] }
+        #endif
         hasRestoredConversations = true
 
         // Driving the idle timer from the observer is what also catches the

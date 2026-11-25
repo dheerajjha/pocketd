@@ -24,7 +24,7 @@ struct ConversationSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(Navigator.self) private var navigator
 
-    @State private var toasts = ToastCenter()
+    let toasts: ToastCenter
 
     var body: some View {
         @Bindable var navigation = navigator
@@ -111,17 +111,35 @@ struct ConversationSheet: View {
 private struct NewConversationButton: View {
     @Environment(AppModel.self) private var model
     @Environment(Navigator.self) private var navigator
+    @Environment(ToastCenter.self) private var toasts: ToastCenter?
 
     var body: some View {
         Button {
-            navigator.pendingAsk = nil
-            navigator.askHandoff = nil
             Haptics.tap()
-            Task { await model.newConversation() }
+            navigator.startNewChat(in: model, toasts: toasts)
         } label: { Image(systemName: "square.and.pencil") }
         .accessibilityLabel("New conversation")
         .accessibilityIdentifier("ask.new")
         .disabled(model.conversation.isEmpty && model.draft.isEmpty && model.attachments.isEmpty)
+    }
+}
+
+extension Navigator {
+    /// Both New buttons use the same failure surface and ownership check. A
+    /// dismissed sheet or newer selection cannot be switched by a late save.
+    func startNewChat(in model: AppModel, toasts: ToastCenter?) {
+        let ticket = beginManualSelection()
+        Task {
+            let result = await model.newConversation(while: { manualSelection == ticket && isAskPresented && !isHistoryPresented })
+            guard finishManualSelection(ticket) else { return }
+            if result == .saveFailed { toasts?.showSaveFailure() }
+        }
+    }
+}
+
+extension ToastCenter {
+    func showSaveFailure() {
+        show(ConversationChange.saveFailureMessage, symbol: "exclamationmark.circle", tint: .pd.caution, seconds: 5)
     }
 }
 

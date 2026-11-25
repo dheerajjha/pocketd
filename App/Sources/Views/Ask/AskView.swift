@@ -28,7 +28,7 @@ struct AskView: View {
         ConversationContent(
             writes: writes,
             forcedThinking: stagesPendingStates,
-            onExample: ask(_:),
+            onExample: ask(_:in:),
             onConnect: connect(_:),
             reminderActions: .init(state: reminderActions, complete: completeReminder(_:)),
             onUndo: undo(_:),
@@ -37,7 +37,7 @@ struct AskView: View {
         )
         .pdBottomBar {
             AskComposer {
-                AskBarAccessory(stagedNotice: stagedNotice)
+                AskBarAccessory(stagedNotice: stagedNotice, onSuggestion: ask(_:in:))
             }
             .padding(.horizontal, PDSpacing.gutter)
             .padding(.top, PDSpacing.xs)
@@ -82,20 +82,17 @@ struct AskView: View {
 
     // MARK: - Actions
 
-    /// An example from the empty conversation: asked at once, or — for
-    /// "Remind me to…" — started in the box with the cursor after it.
-    private func ask(_ example: AskSuggestion) {
-        if let stem = example.stem {
-            // The same hand-off a "Remind me to…" chip on Today makes: in the
-            // box, cursor after it. Not `askComposerFocusRequested`, which
-            // opens the microphone where the phone can listen.
-            let thread = model.currentConversationID
-            if !model.deliver(stem, in: thread) { toasts?.show("Your draft was kept. Send or clear it first.") }
-            navigator.presentAsk(in: thread, focus: true)
-        } else {
-            model.draft = example.text
-            model.send()
+    /// Examples and follow-ups stay with the thread that drew them. Neither
+    /// can appropriate text or photos the person hasn't chosen to send.
+    private func ask(_ suggestion: AskSuggestion, in thread: UUID) {
+        guard navigator.isAskPresented, !navigator.isHistoryPresented, model.currentConversationID == thread else { return }
+        let accepted = model.deliver(suggestion.stem ?? suggestion.text, in: thread,
+                                     sendNow: suggestion.sends, usingCloud: model.isUsingPrivateCloudCompute)
+        if !accepted {
+            guard !model.isGenerating else { return }
+            toasts?.show(ConversationDraft.occupiedMessage, seconds: 4)
         }
+        navigator.presentAsk(in: thread, focus: !accepted || !suggestion.sends || !model.draft.isEmpty)
     }
 
     /// Through the one door. "Connected" only when iOS said yes.
@@ -192,7 +189,7 @@ struct AskView: View {
 private struct ConversationContent: View {
     let writes: [PersonalDataWrite]
     let forcedThinking: Bool
-    let onExample: (AskSuggestion) -> Void
+    let onExample: (AskSuggestion, UUID) -> Void
     let onConnect: (Ability) -> Void
     let reminderActions: AnswerCardView.ReminderActions
     let onUndo: (PersonalDataWrite) -> Void
@@ -206,10 +203,11 @@ private struct ConversationContent: View {
 
     var body: some View {
         if model.conversation.isEmpty && !forcedThinking {
+            let thread = model.currentConversationID
             ScrollView {
                 AskEmptyState(
                     readsYourDay: model.brainStatus != .cannotReadYourDay,
-                    onExample: onExample,
+                    onExample: { onExample($0, thread) },
                     onConnect: onConnect,
                     offSource: offSource
                 )
@@ -258,6 +256,7 @@ private struct ConversationContent: View {
 private struct AskBarAccessory: View {
     /// A notice to draw instead of the model's own. DEBUG launch argument only.
     let stagedNotice: AskNotice?
+    let onSuggestion: (AskSuggestion, UUID) -> Void
 
     @Environment(AppModel.self) private var model
     @Environment(Navigator.self) private var navigator
@@ -289,9 +288,9 @@ private struct AskBarAccessory: View {
             } else if let notice = stagedNotice ?? model.askNotice {
                 AskNoticeView(notice: notice)
             } else if let followUp {
+                let thread = model.currentConversationID
                 SuggestionChip(followUp.text, symbol: followUp.symbol) {
-                    model.draft = followUp.text
-                    model.send()
+                    onSuggestion(followUp, thread)
                 }
             }
         }

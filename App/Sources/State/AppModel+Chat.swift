@@ -702,15 +702,15 @@ extension AppModel {
     /// The shell selected the thread. Claim its empty editor and dispatch on
     /// this actor, not on a later appearance of the sheet.
     func deliver(_ text: String, in id: UUID, sendNow: Bool = false, usingCloud: Bool = false) -> Bool {
-        guard currentConversationID == id, !isGenerating,
-              draft.isEmpty, attachments.isEmpty else { return false }
-        draft = text
-        guard sendNow, usingCloud == isUsingPrivateCloudCompute else {
-            scheduleConversationSave()
-            return true
+        visibleDraft.acceptSuggestion(in: id, busy: isGenerating) {
+            draft = text
+            if sendNow, usingCloud == isUsingPrivateCloudCompute { send() }
+            else { scheduleConversationSave() }
         }
-        send()
-        return true
+    }
+
+    private var visibleDraft: ConversationDraft {
+        ConversationDraft(thread: currentConversationID, text: draft, photos: attachments)
     }
 
     func canOpenDuringReply(_ request: AskEntryRequest) -> Bool {
@@ -721,23 +721,20 @@ extension AppModel {
     /// Wait for the outgoing draft to be safely saved before swapping. The
     /// requester rechecks navigation after the await — a Back, close, a new
     /// tap or another selected thread must not receive a delayed submission.
-    func prepareAsk(_ request: AskEntryRequest, while valid: () -> Bool) async -> UUID? {
-        guard valid(), hasRestoredConversations else { return nil }
-        if isGenerating { return canOpenDuringReply(request) ? currentConversationID : nil }
+    func prepareAsk(_ request: AskEntryRequest, while valid: () -> Bool) async -> ConversationChange {
+        guard valid(), hasRestoredConversations else { return .superseded }
+        if isGenerating { return canOpenDuringReply(request) ? .opened(currentConversationID) : .superseded }
         let current = snapshotConversation()
         let target = request.entry.destination(current: current, history: history, main: mainConversationID,
                                                needsEmptyDraft: request.action.needsEmptyDraft)
-        if target.id != current.id {
-            saveTask?.cancel()
-            do { try await conversations.save(current) } catch { return nil }
-            let saved = await conversations.all()
-            guard valid(), !isGenerating, currentConversationID == current.id,
-                  current.draft == draft, (current.draftImages ?? []) == attachments else { return nil }
-            history = saved
-            displayConversation(saved.first { $0.id == target.id } ?? target)
+        if target.id == current.id {
+            if request.entry == .main { mainConversationID = current.id }
+            return .opened(current.id)
         }
-        if request.entry == .main { mainConversationID = currentConversationID }
-        return currentConversationID
+        let wasSaved = history.contains { $0.id == target.id }
+        return await changeConversation(from: current, generation: generationSerial, makeMain: request.entry == .main, while: { valid() && !isGenerating }) { saved in
+            saved.first { $0.id == target.id } ?? (wasSaved ? nil : target)
+        }
     }
 
     // MARK: - History
@@ -807,19 +804,46 @@ extension AppModel {
 
     /// Saves immediately, for the paths where there may be no later chance —
     /// backgrounding, or switching away from a conversation.
-    func flushConversation() async {
+    @discardableResult
+    func flushConversation() async -> Bool {
         saveTask?.cancel()
-        try? await conversations.save(snapshotConversation())
-        history = await conversations.all()
+        do { history = try await conversations.saveAndList(snapshotConversation()); return true }
+        catch { return false }
     }
 
-    func newConversation() async {
-        let outgoing = currentConversationID
-        if isGenerating { stopGenerating() }
-        await flushConversation()
-        guard currentConversationID == outgoing, !isGenerating else { return }
-        displayConversation(Conversation())
-        mainConversationID = currentConversationID
+    private func changeConversation(from outgoing: Conversation, generation: Int, makeMain: Bool, while valid: () -> Bool,
+                                    select: ([Conversation]) -> Conversation?) async -> ConversationChange {
+        let editor = ConversationDraft(thread: outgoing.id, text: outgoing.draft, photos: outgoing.draftImages ?? [])
+        var expectedGeneration = generation, snapshot = outgoing
+        func ownsEditor() -> Bool { !Task.isCancelled && valid() && visibleDraft == editor && generationSerial == expectedGeneration }
+        guard ownsEditor() else { return .superseded }
+        saveTask?.cancel()
+        if isGenerating {
+            // Explicit New/History may stop a live answer, but only after
+            // proving the draft can be saved and the destination still exists.
+            // Capture once more after stopping: words or a final answer may
+            // have arrived during the first write. No polling or retry loop.
+            let saved: [Conversation]
+            do { saved = try await conversations.saveAndList(outgoing) } catch { return .saveFailed }
+            guard ownsEditor(), select(saved) != nil else { return .superseded }
+            if isGenerating { stopGenerating() }
+            expectedGeneration = generationSerial
+            saveTask?.cancel()
+            snapshot = snapshotConversation()
+        }
+        return await ConversationChange.afterSaving(snapshot, to: conversations, while: ownsEditor) { saved in
+            guard let selected = select(saved) else { return nil }
+            history = saved
+            displayConversation(selected)
+            if makeMain { mainConversationID = selected.id }
+            return selected.id
+        }
+    }
+
+    @discardableResult
+    func newConversation(while valid: () -> Bool = { true }) async -> ConversationChange {
+        let fresh = Conversation()
+        return await changeConversation(from: snapshotConversation(), generation: generationSerial, makeMain: true, while: valid) { _ in fresh }
     }
 
     func displayConversation(_ selected: Conversation) {
@@ -841,21 +865,13 @@ extension AppModel {
         conversationStartedAt = selected.createdAt
     }
 
-    func openConversation(_ id: UUID) async {
-        if id == currentConversationID { mainConversationID = id; return }
-        let outgoing = currentConversationID
-        await flushConversation()
-        guard currentConversationID == outgoing, let found = history.first(where: { $0.id == id }) else { return }
-        // Stopped for the same reason `loadModel` and `offloadModel` stop: the
-        // transcript the reply is being written into is about to be replaced,
-        // and a generation that outlived the swap has nowhere honest to put the
-        // rest of its answer. Placed after the guard above so a conversation
-        // that could not be opened costs nobody a reply, and before the swap so
-        // the save it schedules still describes the transcript being left.
-        let interrupted = isGenerating
-        if interrupted { stopGenerating() }
-        displayConversation(found)
-        mainConversationID = id
+    @discardableResult
+    func openConversation(_ id: UUID, while valid: () -> Bool = { true }) async -> ConversationChange {
+        guard valid() else { return .superseded }
+        if id == currentConversationID { mainConversationID = id; return .opened(id) }
+        return await changeConversation(from: snapshotConversation(), generation: generationSerial, makeMain: true, while: valid) { saved in
+            saved.first { $0.id == id }
+        }
     }
 
     func deleteConversation(_ id: UUID) async {

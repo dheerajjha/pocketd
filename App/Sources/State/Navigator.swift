@@ -132,7 +132,7 @@ final class Navigator {
     /// The one stack. Empty is Today, which is the whole thesis of v2 in one
     /// line: the first thing anyone sees is their own day.
     var path: [Route] = [] {
-        didSet { if oldValue != path { pendingAsk = nil } }
+        didSet { if oldValue != path { pendingAsk = nil; manualSelection = nil } }
     }
 
     /// Whether the conversation sheet is up.
@@ -142,17 +142,48 @@ final class Navigator {
     /// it returns you there. A pushed conversation would spend that place's
     /// Back button on itself.
     var isAskPresented = false {
-        didSet { if !isAskPresented { pendingAsk = nil; askHandoff = nil; isHistoryPresented = false } }
+        didSet {
+            if oldValue != isAskPresented { manualSelection = nil }
+            if !isAskPresented { pendingAsk = nil; askHandoff = nil; isHistoryPresented = false }
+        }
     }
 
-    var isHistoryPresented = false
+    var isHistoryPresented = false {
+        didSet { if oldValue != isHistoryPresented { manualSelection = nil } }
+    }
+
+    @ObservationIgnored private(set) var manualSelection: UUID?
+
+    func beginManualSelection() -> UUID {
+        pendingAsk = nil
+        askHandoff = nil
+        let ticket = UUID()
+        manualSelection = ticket
+        return ticket
+    }
+
+    func finishManualSelection(_ ticket: UUID) -> Bool {
+        guard manualSelection == ticket else { return false }
+        manualSelection = nil
+        return true
+    }
 
     var pendingAsk: AskEntryRequest?
 
     func requestAsk(_ entry: ConversationEntry, _ action: AskEntryRequest.Action) {
         // A generic re-entry while Ask is on screen means the visible thread.
+        manualSelection = nil
         askHandoff = nil
         pendingAsk = AskEntryRequest(entry: entry == .main && isAskPresented ? .current : entry, action: action)
+    }
+
+    /// A terminal result retires only the tap that produced it. Readiness or
+    /// another foreground event must not retry a failed disk write by itself.
+    @discardableResult
+    func finishPendingAsk(_ id: UUID) -> Bool {
+        guard pendingAsk?.id == id else { return false }
+        pendingAsk = nil
+        return true
     }
 
     /// One focus request for the sheet, after routing and dispatch have settled.

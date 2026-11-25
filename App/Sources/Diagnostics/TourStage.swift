@@ -63,7 +63,7 @@ enum TourStage {
         navigator.go(.today)
 
         guard await beat(10.0, "ask") else { return }
-        await model.newConversation()
+        guard case .opened = await model.newConversation() else { return }
         navigator.go(.ask)
 
         guard await beat(11.2, "question") else { return }

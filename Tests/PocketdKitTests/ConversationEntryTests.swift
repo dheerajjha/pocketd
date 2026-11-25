@@ -79,4 +79,80 @@ struct ConversationEntryTests {
         draft.draft = ""; draft.draftImages = nil; try await store.save(draft)
         #expect(await store.all().map(\.id) == [id])
     }
+
+    @Test("A real failed write cannot leave an unsaved draft/photo; a later explicit retry can")
+    @MainActor func readOnlyDeparture() async throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer {
+            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+            try? fm.removeItem(at: dir)
+        }
+        let store = ConversationStore(directory: dir)
+        let other = Conversation(messages: [.user("History B")])
+        try await store.save(other)
+        #expect(await store.all().map(\.id) == [other.id])
+
+        let original = Conversation(draft: "Unsent A", draftImages: [Data([1, 2, 3])])
+        var visible = original, stops = 0, opens = 0
+        try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        // Only a privileged runner that can bypass the mode bits needs an
+        // additional directory-at-file obstruction for a genuine write error.
+        let blocked = dir.appendingPathComponent(original.id.uuidString + ".json")
+        let privileged = fm.isWritableFile(atPath: dir.path)
+        if privileged { try fm.createDirectory(at: blocked, withIntermediateDirectories: false) }
+        for destination in [Conversation(), other] {
+            let change = await ConversationChange.afterSaving(original, to: store, while: { true }) { _ in
+                stops += 1; opens += 1; visible = destination; return destination.id
+            }
+            #expect(change == .saveFailed && visible == original && stops == 0 && opens == 0)
+        }
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+        if privileged { try fm.removeItem(at: blocked) }
+        #expect(await store.all().map(\.id) == [other.id]) // Recovery itself did not send or switch.
+        let retried = await ConversationChange.afterSaving(original, to: store, while: { true }) { history in
+            guard let target = history.first(where: { $0.id == other.id }) else { return nil }
+            opens += 1; visible = target; return target.id
+        }
+        #expect(retried == .opened(other.id) && opens == 1 && visible.id == other.id)
+        let recovered = try #require(await store.all().first { $0.id == original.id })
+        #expect(recovered.draft == original.draft && recovered.draftImages == original.draftImages)
+    }
+
+    @Test("A successful save never commits a navigation that was superseded during I/O")
+    @MainActor func staleDeparture() async throws {
+        let fm = FileManager.default, dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        let store = ConversationStore(directory: dir), original = Conversation(draft: "Before editing")
+        let file = dir.appendingPathComponent(original.id.uuidString + ".json")
+        var opens = 0
+        // Revoke ownership at the actual disk commit: deterministic, without
+        // a sleep or an assumption about which actor wins a scheduling race.
+        let result = await ConversationChange.afterSaving(original, to: store, while: { !fm.fileExists(atPath: file.path) }) { _ in
+            opens += 1; return UUID()
+        }
+        #expect(result == .superseded && opens == 0)
+        #expect(await store.all().first?.draft == original.draft)
+    }
+
+    @Test("A direct follow-up sends only its own words in the displayed thread, never typed text or staged photos")
+    func directSuggestions() {
+        let id = UUID(), photo = Data([0xA1])
+        var transcript = [ChatMessage.user("Previous question"), .assistant("Previous answer")]
+        let clean = ConversationDraft(thread: id, text: "", photos: [])
+        for occupied in [ConversationDraft(thread: id, text: "Unsent", photos: []),
+                         ConversationDraft(thread: id, text: "", photos: [photo]),
+                         ConversationDraft(thread: id, text: "Unsent", photos: [photo])] {
+            let accepted = occupied.acceptSuggestion(in: id, busy: false) { transcript.append(.user("Unexpected")) }
+            #expect(!accepted && transcript.count == 2)
+        }
+        let stale = clean.acceptSuggestion(in: UUID(), busy: false) { transcript.append(.user("Wrong thread")) }
+        let busy = clean.acceptSuggestion(in: id, busy: true) { transcript.append(.user("Interrupt")) }
+        #expect(!stale && !busy)
+        let accepted = clean.acceptSuggestion(in: id, busy: false) { transcript.append(.user("What's on tomorrow?")) }
+        #expect(accepted && transcript.map(\.content) == ["Previous question", "Previous answer", "What's on tomorrow?"])
+        #expect(transcript.last?.images == [])
+    }
 }

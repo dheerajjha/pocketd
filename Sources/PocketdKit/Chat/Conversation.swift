@@ -136,6 +136,13 @@ public actor ConversationStore {
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
+    /// No successful-looking history snapshot if the outgoing editor wasn't
+    /// saved. Both operations happen in one turn of the store actor.
+    public func saveAndList(_ outgoing: Conversation) throws -> [Conversation] {
+        try save(outgoing)
+        return all()
+    }
+
     public func save(_ conversation: Conversation) throws {
         // An empty conversation is what you are looking at before you have said
         // anything. Writing one would put a "New conversation" row in the

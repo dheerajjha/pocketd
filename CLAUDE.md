@@ -32,6 +32,7 @@ generated from `project.yml` by XcodeGen) adds llama.cpp through LocalLLMClient 
 
 ## Conversation entry
 - Main Ask resumes the explicitly chosen chat. Pages reuse their own discussions (routines by ID); a Shortcut question gets its invocation's thread. A supplied question must not take an existing draft or its photos, or cut off a previous reply. `ConversationEntryTests` cover the policy and old transcript format.
+- New, History and page switches require a successful save of the outgoing editor. A failed save keeps its text/photos visible and retires that tap; in-sheet examples and follow-ups use the same empty-draft guard as a supplied question.
 
 ## Apple Private Cloud Compute
 - Only an explicit phone selection may send a request to PCC. Preserve the local defaults, a separate cloud model ID, and downloaded-only LAN serving. Recheck the signed build, Apple's actual readiness, and the per-user quota rather than guessing from the device name or a previous launch. See `docs/apple-private-cloud-compute.md` for device and signing verification.

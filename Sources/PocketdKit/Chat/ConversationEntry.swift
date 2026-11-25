@@ -76,3 +76,41 @@ public enum ConversationEntry: Equatable, Sendable {
         }
     }
 }
+
+/// The editor contents that a supplied question must not replace, and that
+/// must still match the saved copy before navigation may displace them.
+public struct ConversationDraft: Equatable, Sendable {
+    public static let occupiedMessage = "Your draft was kept. Send it or clear its text and photos before asking."
+    public let thread: UUID
+    public let text: String
+    public let photos: [Data]
+
+    public init(thread: UUID, text: String, photos: [Data]) {
+        self.thread = thread; self.text = text; self.photos = photos
+    }
+
+    @discardableResult
+    public func acceptSuggestion(in target: UUID, busy: Bool, perform: () -> Void) -> Bool {
+        guard thread == target, !busy, text.isEmpty, photos.isEmpty else { return false }
+        perform()
+        return true
+    }
+}
+
+public enum ConversationChange: Equatable, Sendable {
+    case opened(UUID), superseded, saveFailed
+
+    public static let saveFailureMessage = "Couldn't save this conversation. Your draft is still here. Check available storage, then try again."
+
+    /// The only place a destructive switch can commit. A write failure is
+    /// terminal for this tap; a successful write does not authorize switching
+    /// a different or newly edited thread after the await.
+    @MainActor public static func afterSaving(_ outgoing: Conversation, to store: ConversationStore,
+                                             while current: () -> Bool, open: ([Conversation]) -> UUID?) async -> Self {
+        guard current() else { return .superseded }
+        let saved: [Conversation]
+        do { saved = try await store.saveAndList(outgoing) } catch { return .saveFailed }
+        guard current(), let id = open(saved) else { return .superseded }
+        return .opened(id)
+    }
+}

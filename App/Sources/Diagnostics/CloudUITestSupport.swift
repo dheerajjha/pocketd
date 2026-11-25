@@ -2,6 +2,29 @@
 import Foundation
 import PocketdKit
 
+/// The draft-safety UI tests use a separate temporary store and one generated
+/// blue PNG. They neither open real chat files nor ask for Photos access.
+enum EditorUITestFixture {
+    enum Mode: String { case readOnly, writable }
+    static let mode: Mode? = {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: "-pocketd.editorFixture"), args.indices.contains(i + 1) else { return nil }
+        return Mode(rawValue: args[i + 1])
+    }()
+    static let directory: URL? = {
+        guard let mode else { return nil }
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("pocketd-editor-fixture-" + mode.rawValue)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        if mode == .readOnly {
+            try? fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+            if fm.isWritableFile(atPath: dir.path) { return dir.appendingPathComponent(UUID().uuidString) }
+        }
+        return dir
+    }()
+    static let photo = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMQDd8HAAGvASspU2xoAAAAAElFTkSuQmCC")!
+}
+
 /// A simulator fixture at PhoneBrain's cloud-engine boundary. Neither reading
 /// its status nor asking it a question creates an Apple model or a session.
 enum CloudUITestSupport {
@@ -83,6 +106,17 @@ enum CloudUITestSupport {
             guard request.modelID == id else { throw InferenceError.modelMismatch(requested: request.modelID, loaded: id) }
             try checkAvailability()
             guard loaded else { throw InferenceError.noModelLoaded }
+
+            if EditorUITestFixture.mode == .writable, scenario == .available, toolsAllowed,
+               request.origin == .onDeviceChat, let question = request.messages.last,
+               question.role == .user, question.content == "How active was I today?", question.images.isEmpty,
+               request.messages.dropLast().contains(where: { $0.role == .user && $0.content == "How did I sleep last night?" }) {
+                return AsyncThrowingStream { stream in
+                    stream.yield(.token("Fixture followed up on the sleep answer without photos."))
+                    stream.yield(.finished(reason: .stop, usage: TokenUsage()))
+                    stream.finish()
+                }
+            }
 
             // Only the test's eight-digit challenge is reflected, never arbitrary
             // prompt/history or personal data. A background brief must not

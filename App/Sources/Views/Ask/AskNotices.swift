@@ -89,7 +89,7 @@ struct AskNoticeView: View {
     private func act() {
         if case .replyFailed = notice {
             switch model.replyFailureRemedy {
-            case .startNewChat?: Task { await model.newConversation() }
+            case .startNewChat?: navigator.startNewChat(in: model, toasts: toasts)
             case .tryAgain?: model.retryLastQuestion()
             case .chooseLocalBrain?: navigator.openYou(.brain)
             case .openSettings?:
@@ -100,7 +100,7 @@ struct AskNoticeView: View {
         }
         switch notice.action {
         case .startNewChat:
-            Task { await model.newConversation() }
+            navigator.startNewChat(in: model, toasts: toasts)
         case let .connect(ability):
             connect(ability)
         case .chooseBrain:

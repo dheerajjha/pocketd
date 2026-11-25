@@ -58,6 +58,14 @@ public final class ShortcutQuestionInbox {
 
     public func isOpening(_ id: UUID) -> Bool { phase == .opening && question?.id == id }
 
+    /// A failed route is not a pending Send. An older failure cannot retire
+    /// another invocation, even with the same words.
+    public func abandonOpening(_ id: UUID) {
+        guard isOpening(id) else { return }
+        question = nil
+        phase = .arrived
+    }
+
     /// Recheck the ID after any asynchronous conversation switch. An older
     /// callback must not submit, overwrite or clear a newer arrival.
     public func stage(_ id: UUID, in conversation: UUID) -> String? {

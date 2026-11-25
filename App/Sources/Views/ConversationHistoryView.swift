@@ -21,6 +21,7 @@ struct ConversationHistoryView: View {
     @State private var renaming: Conversation?
     @State private var newTitle = ""
     @State private var deleting: Conversation?
+    @State private var toasts = ToastCenter()
 
     private struct Day: Identifiable {
         var id: String { title }
@@ -77,7 +78,11 @@ struct ConversationHistoryView: View {
             }
         }
         .presentationDetents([.large])
-        .task { await model.flushConversation() }
+        .toast(toasts, bottomInset: PDSpacing.l)
+        .task {
+            let saved = await model.flushConversation()
+            if !saved, !Task.isCancelled, navigator.isHistoryPresented { toasts.showSaveFailure() }
+        }
         .presentationBackground(Color.pd.canvas)
         .alert("Rename", isPresented: Binding(
             get: { renaming != nil },
@@ -150,11 +155,17 @@ struct ConversationHistoryView: View {
     private func row(for conversation: Conversation) -> some View {
         let isOpen = conversation.id == model.currentConversationID
         Button {
-            navigator.pendingAsk = nil
-            navigator.askHandoff = nil
+            let ticket = navigator.beginManualSelection()
             Task {
-                await model.openConversation(conversation.id)
-                dismiss()
+                let result = await model.openConversation(conversation.id, while: {
+                    navigator.manualSelection == ticket && navigator.isHistoryPresented
+                })
+                guard navigator.finishManualSelection(ticket) else { return }
+                switch result {
+                case .opened: dismiss()
+                case .saveFailed: toasts.showSaveFailure()
+                case .superseded: break
+                }
             }
         } label: {
             HStack(spacing: PDSpacing.s) {

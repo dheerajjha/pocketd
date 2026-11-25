@@ -160,6 +160,7 @@ private struct Shell: View {
     @Environment(\.requestReview) private var requestReview
 
     @State private var toasts = ToastCenter()
+    @State private var askToasts = ToastCenter()
 
     /// How far above the bottom of the screen a toast sits.
     ///
@@ -196,7 +197,7 @@ private struct Shell: View {
         // a scene that becomes active twice from acting twice.
         .onAppear { collectArrivals() }
         .onChange(of: navigator.isAskPresented) { _, shown in
-            if !shown { model.askComposerFocusRequested = false }
+            if !shown { model.askComposerFocusRequested = false; askToasts.dismiss() }
         }
         .task(id: readyAskID) {
             if let request = navigator.pendingAsk, readyAskID == request.id { await openAsk(request) }
@@ -281,7 +282,7 @@ private struct Shell: View {
     /// toolbar and history — and its own toasts, since anything raised in here
     /// would otherwise be drawn on this view's overlay, underneath the sheet.
     private var conversation: some View {
-        ConversationSheet()
+        ConversationSheet(toasts: askToasts)
     }
 
     // MARK: Arrivals
@@ -313,14 +314,22 @@ private struct Shell: View {
             if case let .shortcut(question) = request.action { return IntentInbox.questions.isOpening(question.id) }
             return true
         }
-        guard let thread = await model.prepareAsk(request, while: valid), valid(), model.currentConversationID == thread else {
-            if valid(), !model.isGenerating {
-                navigator.pendingAsk = nil
-                toasts.show("Couldn't open that conversation. Try again.")
+        let outcome = await model.prepareAsk(request, while: valid)
+        if outcome == .saveFailed {
+            let visible = valid()
+            if case let .shortcut(question) = request.action { IntentInbox.questions.abandonOpening(question.id) }
+            if navigator.finishPendingAsk(request.id), visible {
+                (navigator.isAskPresented ? askToasts : toasts).showSaveFailure()
             }
             return
         }
-        navigator.pendingAsk = nil
+        guard case let .opened(thread) = outcome, valid(), model.currentConversationID == thread else {
+            if valid(), navigator.finishPendingAsk(request.id), case let .shortcut(question) = request.action {
+                IntentInbox.questions.abandonOpening(question.id)
+            }
+            return
+        }
+        guard navigator.finishPendingAsk(request.id) else { return }
         switch request.action {
         case .keyboard:
             navigator.presentAsk(in: thread, focus: true)
@@ -329,10 +338,10 @@ private struct Shell: View {
             if model.draft.isEmpty && model.attachments.isEmpty { model.askComposerFocusRequested = true }
             navigator.isAskPresented = true
         case let .draft(text):
-            _ = model.deliver(text, in: thread)
+            if !model.deliver(text, in: thread) { askToasts.show(ConversationDraft.occupiedMessage, seconds: 4) }
             navigator.presentAsk(in: thread, focus: true)
         case let .send(text, cloud):
-            _ = model.deliver(text, in: thread, sendNow: true, usingCloud: cloud)
+            if !model.deliver(text, in: thread, sendNow: true, usingCloud: cloud) { askToasts.show(ConversationDraft.occupiedMessage, seconds: 4) }
             navigator.presentAsk(in: thread, focus: !model.draft.isEmpty)
         case let .shortcut(question):
             model.openShortcutQuestion(question)

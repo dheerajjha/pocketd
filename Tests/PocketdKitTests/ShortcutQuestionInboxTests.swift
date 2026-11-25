@@ -99,6 +99,24 @@ struct ShortcutQuestionInboxTests {
         }
     }
 
+    @Test("A failed opening is spent; repeated readiness cannot send it or consume a newer invocation")
+    func failedNavigation() throws {
+        let inbox = ShortcutQuestionInbox()
+        inbox.didReadHistory(current: chat, latest: nil)
+        inbox.receive(.init("same", chosen: .builtIn))
+        let failed = try #require(inbox.takeForPresentation(in: chat))
+        inbox.abandonOpening(failed.id)
+        #expect(!inbox.isOpening(failed.id) && inbox.takeForPresentation(in: chat) == nil)
+        #expect(inbox.stage(failed.id, in: chat) == nil)
+        #expect(!inbox.claimSend(in: chat, draft: "same", chosen: .builtIn, usingCloud: false, cloudIsBlocked: false, ready: true))
+        inbox.receive(.init("same", chosen: .builtIn))
+        let fresh = try #require(inbox.takeForPresentation(in: chat))
+        inbox.abandonOpening(failed.id)
+        let text = try #require(inbox.stage(fresh.id, in: chat))
+        #expect(inbox.claimSend(in: chat, draft: text, chosen: .builtIn, usingCloud: false, cloudIsBlocked: false, ready: true))
+        #expect(!inbox.claimSend(in: chat, draft: text, chosen: .builtIn, usingCloud: false, cloudIsBlocked: false, ready: true))
+    }
+
     @Test("Neither an active local fallback nor a blocked quota authorizes a later cloud send")
     func fallbackAndQuota() throws {
         for resident in [ModelRecord.builtInID, ModelRecord.privateCloudComputeID] {

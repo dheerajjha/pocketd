@@ -3,6 +3,75 @@ import XCTest
 
 @MainActor
 final class ShortcutCloudHandoffTests: XCTestCase {
+    private let kept = "Your draft was kept. Send it or clear its text and photos before asking."
+    private let notSaved = "Couldn't save this conversation. Your draft is still here. Check available storage, then try again."
+
+    private func draftFixture(_ mode: String, preview: Bool = false) -> (XCUIApplication, String) {
+        continueAfterFailure = false
+        let app = XCUIApplication(), id = UUID().uuidString
+        app.launchArguments = ["-pocketd.editorFixture", mode, "-pocketd.mainConversation", id,
+                               "-pocketd.testPCC", "available", "-pocketd.brainChoice", "privateCloudCompute",
+                               "-pocketd.completedOnboarding", "YES", "-pocketd.demoHealth", "-pocketd.proOverride", "off",
+                               "-pocketd.analyticsConsent", "refused", "-pocketd.serverShouldRun", "NO",
+                               "-pocketd.calendarTools", "NO", "-pocketd.reminderTools", "NO", "-pocketd.healthTools", "NO"]
+        if preview { app.launchArguments.append("-pocketd.previewChat") }
+        app.launch()
+        tap("Ask about your day", in: app)
+        return (app, id)
+    }
+
+    private func tap(_ name: String, in app: XCUIApplication) {
+        let button = app.buttons[name].firstMatch
+        XCTAssertTrue(button.waitForExistence(timeout: 12))
+        if !button.isHittable, let scroll = app.scrollViews.allElementsBoundByIndex.first(where: \.isHittable) {
+            scroll.swipeUp()
+        }
+        XCTAssertTrue(button.wait(for: \.isHittable, toEqual: true, timeout: 12))
+        button.tap()
+    }
+
+    private func label(_ text: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", text)).firstMatch
+    }
+
+    func testReadOnlyNewAndPageRequestKeepTheOnlyCopyOfTheDraft() {
+        let (app, _) = draftFixture("readOnly"), marker = "Amber \(UUID().uuidString.prefix(8))"
+        let field = app.descendants(matching: .any).matching(identifier: "ask.composer").firstMatch
+        XCTAssertTrue(app.buttons["Remove photo 1"].waitForExistence(timeout: 12))
+        tap("What's on today?", in: app) // photo alone is an occupied editor
+        XCTAssertTrue(label(kept, in: app).waitForExistence(timeout: 5))
+        XCTAssertFalse(label("You: What's on today?", in: app).exists)
+        field.tap(); field.typeText(marker)
+        tap("Anything overdue?", in: app)
+        XCTAssertEqual(field.value as? String, marker); XCTAssertTrue(app.buttons["Remove photo 1"].exists)
+        tap("ask.new", in: app)
+        XCTAssertTrue(label(notSaved, in: app).waitForExistence(timeout: 6))
+        XCTAssertEqual(field.value as? String, marker); XCTAssertTrue(app.buttons["Remove photo 1"].exists)
+        tap("ask.close", in: app); tap("How did I sleep?", in: app)
+        XCTAssertTrue(label(notSaved, in: app).waitForExistence(timeout: 6)); XCTAssertFalse(field.exists)
+        // A failed pending route cannot block or revive on the next explicit entry.
+        tap("Ask about your day", in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 12)); XCTAssertEqual(field.value as? String, marker)
+        XCTAssertTrue(app.buttons["Remove photo 1"].exists); XCTAssertFalse(label("You: How did I sleep?", in: app).exists)
+    }
+
+    func testFollowUpLeavesTextAndPhotoAloneThenSendsExactlyOnceInTheSameThread() {
+        let (app, id) = draftFixture("writable", preview: true), question = "How active was I today?"
+        let field = app.descendants(matching: .any).matching(identifier: "ask.composer").firstMatch
+        tap(question, in: app)
+        XCTAssertTrue(label(kept, in: app).waitForExistence(timeout: 5)); XCTAssertTrue(app.buttons["Remove photo 1"].exists)
+        XCTAssertFalse(label("You: " + question, in: app).exists)
+        tap("Remove photo 1", in: app); field.tap(); field.typeText("Unsent Copper Fox")
+        tap(question, in: app)
+        XCTAssertEqual(field.value as? String, "Unsent Copper Fox"); XCTAssertFalse(label("You: " + question, in: app).exists)
+        field.tap(); field.typeKey("a", modifierFlags: .command); field.typeKey(XCUIKeyboardKey.delete.rawValue, modifierFlags: [])
+        tap(question, in: app)
+        XCTAssertTrue(label("Fixture followed up on the sleep answer without photos.", in: app).waitForExistence(timeout: 12))
+        tap("ask.history", in: app)
+        let row = app.buttons["ask.history.row." + id]
+        XCTAssertTrue(row.waitForExistence(timeout: 10)); XCTAssertEqual(row.value as? String, "Open now · 4 questions")
+    }
+
     /// Both surfaces go through the real shell, composer and conversation
     /// store. Only inference and Health are fixtures; no permissions needed.
     func testTodayQuestionSeparatesFromMainAndHistoryRestoresExplicitSelection() {
