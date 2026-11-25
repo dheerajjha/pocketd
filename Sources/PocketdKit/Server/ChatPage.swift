@@ -101,7 +101,7 @@ enum ChatPage {
     <div id="log"><div class="wrap" id="wrap">
       <div class="empty" id="empty">
         <h2>Your phone is the server</h2>
-        <div>Everything you type here is answered on the device in your pocket.</div>
+        <div>Keep Pocketd open on your iPhone while you chat.</div>
       </div>
     </div></div>
 
@@ -138,12 +138,9 @@ enum ChatPage {
     let system = localStorage.getItem("pocketd.system") || "";
     let maxTokens = parseInt(localStorage.getItem("pocketd.maxTokens") || "512", 10);
     let contextLimit = 4096;
-    let controller = null;
+    let active = null;        // exactly one browser submission, including an explicit retry
     let attachments = [];     // data: URIs staged for the next message
     let visionModels = new Set();
-    let live = null;          // the assistant bubble currently streaming into
-    let pending = "";         // text not yet flushed to the DOM
-    let raf = 0;
 
     function setStatus(text) {
       $("dotText").textContent = text;
@@ -159,12 +156,13 @@ enum ChatPage {
 
     // --- pairing -------------------------------------------------------------
     async function ensureKey() {
-      const probe = await fetch("/v1/models", { headers: headers() });
+      let probe;
+      try { probe = await fetch("/v1/models", { headers: headers() }); }
+      catch (_) { $("dot").style.background = "#ff453a"; setStatus("phone unreachable"); return; }
       if (probe.ok) { await loadModels(probe); return; }
       // A stored key that no longer works — the phone's key was regenerated —
       // is indistinguishable from having none, so drop it and re-pair.
-      if (probe.status === 401) { apiKey = null; localStorage.removeItem(KEY); }
-      $("pair").showModal();
+      if (probe.status === 401) { apiKey = null; localStorage.removeItem(KEY); $("pair").showModal(); }
     }
 
     $("pgo").onclick = async () => {
@@ -262,6 +260,22 @@ enum ChatPage {
         meta.textContent = m.meta;
         col.appendChild(meta);
       }
+      if (m.role === "assistant" && canRetry(m) && m === messages[messages.length-1] && !active) {
+        const user = messages[messages.length-2];
+        if (user && user.role === "user") {
+          if (contextRows(messages.slice(0, -1)).some(row => row.imagesOmitted)) {
+            const note = document.createElement("div");
+            note.className = "meta";
+            note.textContent = "The original images weren’t saved. Reattach them to send this question again.";
+            col.appendChild(note);
+          } else {
+            const retry = document.createElement("button");
+            retry.textContent = "Retry";
+            retry.onclick = () => { if (!active && messages[messages.length-1] === m && canRetry(m)) generate(m); };
+            col.appendChild(retry);
+          }
+        }
+      }
       wrap.appendChild(col);
       return { wrap, bubble: b, col };
     }
@@ -273,7 +287,7 @@ enum ChatPage {
       if (!messages.length) {
         const e = document.createElement("div");
         e.className = "empty";
-        e.innerHTML = "<h2>Your phone is the server</h2><div>Everything you type here is answered on the device in your pocket.</div>";
+        e.innerHTML = "<h2>Your phone is the server</h2><div>Keep Pocketd open on your iPhone while you chat.</div>";
         $("wrap").appendChild(e);
       }
       for (const m of messages) $("wrap").appendChild(bubbleFor(m).wrap);
@@ -291,16 +305,25 @@ enum ChatPage {
       if (force || nearBottom()) $("log").scrollTop = $("log").scrollHeight;
     }
 
-    function flush() {
-      raf = 0;
-      if (!live || !pending) return;
+    function paint(run) {
+      run.raf = 0;
+      if (active !== run) return;
       const stick = nearBottom();
-      messages[messages.length - 1].content += pending;
-      pending = "";
-      live.innerHTML = render(messages[messages.length - 1].content);
+      run.bubble.innerHTML = render(run.reply.content);
       if (stick) $("log").scrollTop = $("log").scrollHeight;
     }
-    function schedule() { if (!raf) raf = requestAnimationFrame(flush); }
+
+    const interrupted = "Reply interrupted. Reopen Pocketd on your iPhone, then retry.";
+    function canRetry(m) { return ["interrupted", "cancelled", "error"].includes(m.state); }
+    function usable(m) {
+      // Old transcripts predate finish reasons. Preserve their ordinary replies,
+      // but never send known errors, deliberate stops, or interrupted prefixes.
+      return m.content && !m.error && (m.state === "complete" || m.state === "length" || (!m.state && m.meta !== "stopped"));
+    }
+    function contextRows(rows) {
+      return rows.filter((m, i) => m.role === "assistant" ? usable(m) :
+        m.role === "user" && (rows[i+1]?.role !== "assistant" || usable(rows[i+1])));
+    }
 
     // --- context budget ------------------------------------------------------
     // Mirrors ContextGuard on the server: 3 characters per token, 4 tokens per
@@ -309,7 +332,7 @@ enum ChatPage {
     function estimateTokens() {
       let chars = system.length;
       let count = system ? 1 : 0;
-      for (const m of messages) { chars += m.content.length; count++; }
+      for (const m of contextRows(active ? messages.slice(0, -1) : messages)) { chars += m.content.length; count++; }
       return Math.ceil(chars / 3) + count * 4;
     }
     function updateBudget() {
@@ -325,35 +348,46 @@ enum ChatPage {
     }
 
     // --- sending -------------------------------------------------------------
-    async function send() {
+    function send() {
       const text = $("input").value.trim();
-      if (!text || controller) return;
+      if (!text || active) return;
       $("input").value = "";
       $("input").style.height = "auto";
 
       const staged = attachments.slice();
       attachments = [];
       drawThumbs();
+      // Only the latest turn is retryable; never fork under newer replies.
+      if (messages.length) delete messages[messages.length-1].options;
       messages.push({ role: "user", content: text, images: staged });
-      messages.push({ role: "assistant", content: "" });
+      const reply = { role: "assistant", content: "", options: { model: $("models").value, system, maxTokens } };
+      messages.push(reply);
+      generate(reply);
+    }
+
+    async function generate(reply) {
+      if (active) return;
+      const run = { reply, controller: new AbortController(), chunks: 0, bytes: 0, misses: 0,
+                    stopped: false, finish: null, error: null, invalid: false, raf: 0, checkpoint: 0 };
+      active = run;
+      reply.state = "streaming";
+      delete reply.error;
+      reply.meta = reply.content ? "Retrying…" : "";
+      save();  // persist the question before fetching, even if no first token ever arrives
       draw();
-      live = $("wrap").lastElementChild.querySelector(".bubble span");
-      pending = "";
+      run.bubble = $("wrap").lastElementChild.querySelector(".bubble span");
 
       $("send").style.display = "none";
       $("stop").style.display = "";
-      controller = new AbortController();
-
+      const options = reply.options || { model: $("models").value, system, maxTokens };
       const body = {
-        model: $("models").value,
+        model: options.model,
         messages: [],
         stream: true,
-        max_tokens: maxTokens,
+        max_tokens: options.maxTokens,
       };
-      if (system) body.messages.push({ role: "system", content: system });
-      for (const m of messages.slice(0, -1)) {
-        // A turn that failed before producing anything is not context.
-        if (m.role === "assistant" && !m.content) continue;
+      if (options.system) body.messages.push({ role: "system", content: options.system });
+      for (const m of contextRows(messages.slice(0, -1))) {
         if (m.images && m.images.length) {
           // The /v1 dialect's typed content parts. The /api dialect's shape
           // is a flat images[] array instead; the server accepts both, and
@@ -368,81 +402,94 @@ enum ChatPage {
       }
 
       const started = performance.now();
-      let chunks = 0;
-      let failed = null;
-
       try {
         const r = await fetch("/v1/chat/completions", {
           method: "POST", headers: headers(), body: JSON.stringify(body),
-          signal: controller.signal,
+          mode: "same-origin", redirect: "error", signal: run.controller.signal,
         });
         if (!r.ok) {
-          let detail = "HTTP " + r.status;
-          try { const e = await r.json(); if (e.error) detail = e.error.message; } catch (_) {}
-          failed = detail;
-          if (r.status === 401) {
+          run.error = "HTTP " + r.status;
+          try { const e = await r.json(); if (typeof e.error?.message === "string" && e.error.message) run.error = e.error.message; } catch (_) {}
+          if (r.status === 401 && active === run) {
             // Almost always the phone's key was regenerated. Say so and put
             // the way back on screen rather than leaving a bare error.
             apiKey = null;
             localStorage.removeItem(KEY);
-            failed = "This phone's API key changed. Tap Connect to pair again.";
+            run.error = "This phone's API key changed. Tap Connect to pair again.";
             $("connect").style.display = "";
           }
         } else {
-          const reader = r.body.getReader();
-          const dec = new TextDecoder();
-          let buf = "";
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buf += dec.decode(value, { stream: true });
-            const lines = buf.split("\n");
-            buf = lines.pop();
-            for (const line of lines) {
-              if (!line.startsWith("data: ")) continue;
-              const p = line.slice(6);
-              if (p === "[DONE]") continue;
-              let j;
-              try { j = JSON.parse(p); } catch (_) { continue; }
-              // The server yields an error frame into the stream when
-              // generation fails after the headers are gone. Ignoring it makes
-              // a server fault look like the model simply stopping.
-              if (j.error) { failed = j.error.message || "server error"; continue; }
-              const d = j.choices && j.choices[0] && j.choices[0].delta;
-              if (d && d.content) { pending += d.content; chunks++; schedule(); }
+          await receive(r.body, run);
+        }
+      } catch (_) {
+        // A dropped connection and an aborted read both throw. Only the Stop
+        // control sets run.stopped; neither a socket error nor EOF proves success.
+      } finally {
+        cancelAnimationFrame(run.raf);
+        clearTimeout(run.checkpoint);
+        if (active === run) {
+          active = null;
+          $("send").style.display = "";
+          $("stop").style.display = "none";
+          // [DONE] also follows server errors. The engine's finish reason is
+          // authoritative, even if the connection drops after that complete frame.
+          if (run.error) reply.state = "error";
+          else if (run.stopped) reply.state = "stopped";
+          else if (run.finish === "cancelled") reply.state = "cancelled";
+          else if (!run.invalid && run.finish === "stop") reply.state = "complete";
+          else if (!run.invalid && run.finish === "length") reply.state = "length";
+          else reply.state = "interrupted";
+          const secs = Math.max(0.001, (performance.now()-started)/1000);
+          if (reply.state === "error") { reply.error = run.error; reply.meta = ""; }
+          if (reply.state === "stopped") reply.meta = "Stopped by you.";
+          if (reply.state === "cancelled") reply.meta = "Pocketd cancelled this reply.";
+          if (reply.state === "interrupted") reply.meta = interrupted;
+          if (reply.state === "complete" || reply.state === "length") {
+            if (!run.chunks) reply.content = ""; // a successful empty retry cannot certify an older prefix
+            reply.meta = reply.state === "length" ? "Response limit reached." : run.chunks
+              ? `${run.chunks} chunks · ${(run.chunks / secs).toFixed(1)}/s · ${secs.toFixed(1)}s` : "Finished without text.";
+          }
+          if (!canRetry(reply)) delete reply.options;
+          save(); draw();
+        }
+      }
+    }
+
+    async function receive(body, run) {
+      const reader = body.getReader(), decoder = new TextDecoder();
+      let buffer = "", data = [];
+      try {
+        while (active === run && !run.controller.signal.aborted) {
+          const {done, value} = await reader.read();
+          if (done || active !== run || run.controller.signal.aborted) return;
+          run.bytes += value.length; run.misses = 0;
+          buffer += decoder.decode(value, {stream:true});
+          let nl;
+          while ((nl = buffer.indexOf("\n")) >= 0) {
+            const line = buffer.slice(0,nl).replace(/\r$/, "");
+            buffer = buffer.slice(nl+1);
+            if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+            if (line !== "" || !data.length) continue;
+            const payload = data.join("\n"); data = [];
+            if (payload === "[DONE]") return;
+            let frame;
+            try { frame = JSON.parse(payload); } catch (_) { run.invalid = true; continue; }
+            if (frame?.error) { run.error = typeof frame.error.message === "string" && frame.error.message || "Server error"; continue; }
+            const choice = frame?.choices?.[0];
+            if (!choice || run.error) continue; // optional usage-only frame
+            const text = choice.delta?.content;
+            if (typeof text === "string" && text.length) {
+              // On a retry retain the previous partial until replacement text arrives.
+              run.reply.content = (run.chunks ? run.reply.content : "") + text;
+              run.chunks++;
+              if (!run.raf) run.raf = requestAnimationFrame(() => paint(run));
+              if (run.chunks === 1) save();
+              else if (!run.checkpoint) run.checkpoint = setTimeout(() => { run.checkpoint = 0; if (active === run) save(); }, 1000);
             }
+            if (choice.finish_reason != null) run.finish = choice.finish_reason;
           }
         }
-      } catch (e) {
-        if (e.name !== "AbortError") failed = String(e);
-      } finally {
-        // Everything below MUST run on every path. An early return here was
-        // leaving `controller` set, and `send()` guards on it — so one failed
-        // request bricked the composer until the page was reloaded.
-        if (raf) { cancelAnimationFrame(raf); raf = 0; }
-        flush();
-        controller = null;
-        live = null;
-        $("send").style.display = "";
-        $("stop").style.display = "none";
-
-        const last = messages[messages.length - 1];
-        const secs = (performance.now() - started) / 1000;
-        if (failed) {
-          // On `last.error`, never appended to `last.content`. The next
-          // send builds history from the transcript, so an error written
-          // into the message came back to the model as its own prior turn
-          // — and it would then apologise for a transport failure it had
-          // never produced.
-          last.error = failed;
-        } else if (chunks) {
-          last.meta = `${chunks} chunks · ${(chunks / secs).toFixed(1)}/s · ${secs.toFixed(1)}s`;
-        } else {
-          last.meta = "stopped";
-        }
-        draw();
-        save();
-      }
+      } finally { reader.releaseLock(); }
     }
 
     function save() {
@@ -454,7 +501,7 @@ enum ChatPage {
       } catch (e) {
         try {
           localStorage.setItem("pocketd.chat", JSON.stringify(
-            messages.slice(-40).map((m) => ({ role: m.role, content: m.content, meta: m.meta }))
+            messages.slice(-40).map(({images, ...m}) => images?.length ? {...m, imagesOmitted:true} : m)
           ));
         } catch (_) {}
       }
@@ -500,8 +547,17 @@ enum ChatPage {
     };
 
     $("send").onclick = send;
-    $("stop").onclick = () => controller && controller.abort();
-    $("clear").onclick = () => { messages = []; save(); draw(); };
+    $("stop").onclick = () => {
+      if (!active) return;
+      active.stopped = true;
+      active.reply.state = "stopped"; active.reply.meta = "Stopped by you.";
+      save(); active.controller.abort();
+    };
+    $("clear").onclick = () => {
+      if (active) { active.controller.abort(); active = null; }
+      $("send").style.display = ""; $("stop").style.display = "none";
+      messages = []; save(); draw();
+    };
     $("sys").onclick = () => {
       const v = prompt("System prompt (blank for none):", system);
       if (v !== null) { system = v; localStorage.setItem("pocketd.system", v); updateBudget(); }
@@ -515,11 +571,26 @@ enum ChatPage {
     });
 
     try { messages = JSON.parse(localStorage.getItem("pocketd.chat") || "[]"); } catch (e) {}
+    if (!Array.isArray(messages)) messages = [];
+    if (messages.some(m => m.state === "streaming")) {
+      for (const m of messages) {
+        if (m.state === "streaming") { m.state = "interrupted"; m.meta = interrupted; }
+      }
+      save();
+    }
+    window.addEventListener("pagehide", () => { if (active) save(); });
+    document.addEventListener("visibilitychange", () => { if (document.hidden && active) save(); });
     draw();
     ensureKey();
-    setInterval(async () => {
+    let probing = false;
+    async function checkHealth() {
+      if (probing) return;
+      probing = true;
+      const run = active, bytes = run?.bytes, probe = new AbortController();
+      const deadline = setTimeout(() => probe.abort(), 6000);
       try {
-        const h = await (await fetch("/health")).json();
+        const h = await (await fetch("/health", {signal:probe.signal, cache:"no-store"})).json();
+        if (run) run.misses = 0;
         const up = h.status === "ok";
         $("dot").style.background = up ? "#30d158" : "#ff9f0a";
         setStatus(up ? "" : "degraded");
@@ -529,8 +600,13 @@ enum ChatPage {
         // Colour alone told a sighted user nothing specific and a screen
         // reader nothing at all.
         setStatus("phone unreachable");
-      }
-    }, 5000);
+        // A suspended phone can leave TCP open. Two failed probes without
+        // stream progress release the composer. Slow but reachable inference
+        // has no token deadline, and reconnecting never posts a question.
+        if (run && active === run && run.bytes === bytes && ++run.misses >= 2) run.controller.abort();
+      } finally { clearTimeout(deadline); probing = false; }
+    }
+    setInterval(checkHealth, 5000);
     </script>
     </body></html>
     """#

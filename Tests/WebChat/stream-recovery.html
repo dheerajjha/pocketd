@@ -1,0 +1,155 @@
+<!doctype html>
+<meta charset="utf-8"><title>Pocketd browser stream fixture</title>
+<h1>Browser chat stream recovery</h1><ol id="cases"></ol><output id="result">Running…</output>
+<!-- Use a fresh loopback origin, never a live Pocketd address. Place this file beside chat.html:
+     (cat Sources/PocketdKit/Server/ChatPage.swift; echo 'print(ChatPage.html)') | swift - > "$fixture/chat.html"
+     Serve the two files with python3 -m http.server --bind 127.0.0.1 --directory "$fixture".
+     The iframe runs the emitted page verbatim. Only its HTTP transport is replaced. -->
+<script>
+(async () => {
+  const result = document.querySelector('#result');
+  const assert = (condition, description) => { if (!condition) throw Error(description); };
+  let frame, win, next, stream, reachable = true;
+  const posts = [], unexpected = [];
+  const report = name => { const li = document.createElement('li'); li.textContent = name; document.querySelector('#cases').append(li); };
+  const sse = object => 'data: ' + JSON.stringify(object) + '\r\n\r\n';
+  const delta = text => sse({choices:[{index:0,delta:{content:text}}]});
+  const finish = reason => sse({choices:[{index:0,delta:{},finish_reason:reason}]});
+  const done = 'data: [DONE]\r\n\r\n';
+  const good = text => ({wire:delta(text) + finish('stop') + sse({choices:[],usage:{total_tokens:5}}) + done});
+  const el = id => win.document.getElementById(id);
+  const last = () => win.document.querySelector('#wrap').lastElementChild;
+  const retry = () => [...last().querySelectorAll('button')].find(b => b.textContent === 'Retry');
+  const saved = () => JSON.parse(localStorage.getItem('pocketd.chat'));
+  const body = () => posts.at(-1).messages;
+  const rows = () => [...win.document.querySelectorAll('.msg')];
+  const wait = (condition, what) => new Promise((resolve, reject) => {
+    if (condition()) { resolve(); return; }
+    const observer = new MutationObserver(() => { if (condition()) { clearTimeout(timer); observer.disconnect(); resolve(); } });
+    const timer = setTimeout(() => { observer.disconnect(); reject(Error(what)); }, 4500);
+    observer.observe(win.document.documentElement, {subtree:true,childList:true,characterData:true,attributes:true});
+  });
+  const idle = () => wait(() => el('stop').style.display === 'none', 'composer did not settle');
+  const send = async (text, plan) => { next = plan; el('input').value = text; el('send').click(); if (!plan.hold) await idle(); };
+  const fresh = () => el('clear').click();
+  const json = (v,status=200) => new Response(JSON.stringify(v),{status,headers:{'Content-Type':'application/json'}});
+  function transport(url, init = {}) {
+    if (url === '/v1/models') return Promise.resolve(json({data:[{id:'fixture-model',capabilities:['vision']}]}));
+    if (url === '/health') return reachable ? Promise.resolve(json({status:'ok'})) : Promise.reject(TypeError('fixture offline'));
+    if (url !== '/v1/chat/completions' || !next || init.method !== 'POST') {
+      unexpected.push(true); return Promise.reject(Error('unexpected request'));
+    }
+    const plan = next; next = null;
+    posts.push(JSON.parse(init.body)); // only synthetic fixture inputs, kept in memory
+    if (plan.status) return Promise.resolve(json({error:{message:plan.message}},plan.status));
+    if (plan.offline) return Promise.reject(TypeError('fixture offline'));
+    return Promise.resolve(new Response(new ReadableStream({start(c) {
+      stream = c;
+      init.signal.addEventListener('abort', () => c.error(new DOMException('Aborted','AbortError')), {once:true});
+      // Split CRLF, JSON, and multibyte UTF-8 across chunk boundaries.
+      const bytes = new TextEncoder().encode(plan.wire || '');
+      for (let i=0;i<bytes.length;i+=3) c.enqueue(bytes.slice(i,i+3));
+      if (!plan.hold) c.close();
+    }}),{headers:{'Content-Type':'text/event-stream'}}));
+  }
+  try {
+    assert(location.hostname === '127.0.0.1' && !localStorage.length, 'Use a fresh, isolated loopback fixture origin');
+    const page = await (await fetch('./chat.html')).text();
+    async function mount() {
+      frame?.remove(); frame = document.createElement('iframe'); document.body.append(frame);
+      win = frame.contentWindow; win.document.open(); win.fetch = transport;
+      win.document.write(page); win.document.close();
+      await wait(() => el('models')?.value === 'fixture-model','model fixture did not load');
+    }
+    await mount();
+    await send('First question', good('First answer'));
+    assert(saved().at(-1).state === 'complete' && !retry(), 'clean stop terminal not recognized');
+    await send('Question to retry',{wire:delta('Partial café')});
+    assert(saved().at(-1).state === 'interrupted' && last().textContent.includes('Partial café') && retry(), 'early EOF marked complete');
+    const postCount = posts.length;
+    await mount();
+    assert(posts.length === postCount && retry() && last().textContent.includes('Reopen Pocketd'), 'reload lost or resent interruption');
+    win.prompt = () => 'Future instructions'; el('sys').click();
+    el('input').value = 'unsent draft';
+    next = {offline:true}; retry().click(); await idle();
+    assert(last().textContent.includes('Partial café') && retry(), 'offline retry erased the previous partial');
+    next = good('Replacement'); const button = retry(); button.click(); button.click(); await idle();
+    assert(posts.length === postCount+2 && rows().length === 4 && el('input').value === 'unsent draft', 'retry duplicated a turn or erased a draft');
+    assert(posts.at(-1).model === 'fixture-model' && JSON.stringify(body()) === JSON.stringify([
+      {role:'user',content:'First question'},{role:'assistant',content:'First answer'},{role:'user',content:'Question to retry'}
+    ]), 'retry sent a partial, metadata, or duplicate user turn');
+    assert(last().querySelector('.bubble').textContent === 'Replacement' && !retry(), 'replacement appended to previous attempt');
+    win.prompt = () => ''; el('sys').click();
+    report('Clean stop, partial UTF-8 + EOF, reload, failed retry, and exactly-once manual retry');
+
+    fresh(); await send('Transport error',{hold:true,wire:delta('prefix')});
+    await wait(() => last().textContent.includes('prefix'),'missing partial'); stream.error(TypeError('fixture lost connection')); await idle();
+    assert(saved().at(-1).state === 'interrupted' && last().textContent.includes('prefix'), 'read error lost partial');
+    await send('Next question',{wire:done});
+    assert(body().length === 1 && body()[0].content === 'Next question', 'failed pair replayed in a later question');
+    assert(saved().at(-1).state === 'interrupted' && retry(), '[DONE] alone certified a reply');
+    await send('Server error',{wire:delta('server prefix')+sse({error:{message:'Fixture decode failed'}})+done});
+    assert(saved().at(-1).state === 'error' && last().textContent.includes('Fixture decode failed') && last().textContent.includes('server prefix'), 'server error overwritten');
+    await send('Thermal',{status:503,message:'Device is cooling down'});
+    assert(last().textContent.includes('Device is cooling down') && saved().at(-1).state === 'error', '503 masked as suspension');
+    localStorage.setItem('pocketd.key','fixture-only-key'); await mount();
+    await send('Pair again',{status:401,message:'Wrong key'});
+    assert(localStorage.getItem('pocketd.key') === null && el('connect').style.display !== 'none' && last().textContent.includes('pair again'), '401 did not retain pairing recovery');
+    assert(!JSON.stringify(posts).includes('fixture-only-key'), 'key found in submitted chat body');
+    report('Transport failure, bare [DONE], server error + [DONE], thermal 503 and pairing 401');
+
+    fresh(); await send('Finish before disconnect',{wire:delta('Delivered')+finish('stop')});
+    assert(saved().at(-1).state === 'complete' && !retry(),'lost trailing [DONE] discarded a valid finish');
+    await send('Torn finish frame',{wire:delta('torn prefix')+finish('stop').trimEnd()});
+    assert(saved().at(-1).state === 'interrupted' && retry(),'an incomplete SSE frame certified success');
+    report('A complete finish frame counts; a torn one does not');
+
+    fresh(); await send('Length',{wire:delta('bounded answer')+finish('length')+done});
+    assert(saved().at(-1).state === 'length' && last().textContent.includes('limit reached') && !retry(), 'length treated as interruption');
+    await send('Server cancellation',{wire:delta('cancel prefix')+finish('cancelled')+done});
+    assert(saved().at(-1).state === 'cancelled' && last().textContent.includes('cancelled') && retry(), 'remote cancellation shown as success or user Stop');
+    await send('User stop',{wire:delta('stopped prefix'),hold:true});
+    await wait(() => last().textContent.includes('stopped prefix'),'no Stop fixture text');
+    el('stop').click(); await idle();
+    assert(saved().at(-1).state === 'stopped' && last().textContent.includes('Stopped by you') && !retry(), 'user Stop lost');
+    await send('After stop',good('OK'));
+    assert(body().every(m => !m.content.includes('prefix')) && body().some(m => m.content === 'bounded answer'), 'next turn replayed incomplete text or lost capped context');
+    report('Token limit, server cancellation, user Stop, and later request history');
+
+    fresh(); await send('Stalled socket',{wire:delta('stalled prefix'),hold:true});
+    await wait(() => last().textContent.includes('stalled prefix'),'no stalled fixture text');
+    reachable = false; await win.checkHealth(); await win.checkHealth(); await idle();
+    assert(saved().at(-1).state === 'interrupted' && retry(), 'unreachable open socket did not release composer');
+    const before = posts.length; reachable = true; await win.checkHealth();
+    assert(posts.length === before,'reconnect silently sent another request');
+    next = {wire:delta('unsaved partial'),hold:true}; retry().click();
+    await wait(() => last().textContent.includes('unsaved partial'),'no mid-request reload text');
+    win.dispatchEvent(new win.Event('pagehide')); await mount();
+    assert(retry() && saved().at(-1).state === 'interrupted' && last().textContent.includes('unsaved partial') && posts.length === before+1,'mid-stream reload lost or reissued turn');
+    report('Silent stall, reconnect without replay, and recovery of a pending turn after pagehide');
+
+    fresh(); await send('Old thread',{wire:delta('old partial'),hold:true});
+    await wait(() => last().textContent.includes('old partial'),'no new-chat fixture text');
+    fresh(); await send('New thread',good('New answer'));
+    assert(rows().length === 2 && body().length === 1 && !JSON.stringify(saved()).includes('old partial'),'old request leaked into New chat');
+    fresh();
+    // Simulate an origin that can still store the transcript but not image data.
+    const setItem = win.Storage.prototype.setItem;
+    win.Storage.prototype.setItem = function(key, value) {
+      if (key === 'pocketd.chat' && JSON.parse(value).some(row => row.images?.length)) throw new DOMException('fixture quota','QuotaExceededError');
+      return setItem.call(this,key,value);
+    };
+    const transfer = new win.DataTransfer();
+    transfer.items.add(new win.File(['<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'],'fixture.svg',{type:'image/svg+xml'}));
+    el('file').files = transfer.files; el('file').dispatchEvent(new win.Event('change'));
+    await wait(() => el('thumbs').querySelector('img'),'fixture attachment not staged');
+    await send('Image question',{wire:delta('image prefix')});
+    assert(body()[0].content[1].type === 'image_url' && saved()[0].imagesOmitted,'quota fixture did not retain text-only state');
+    const imagePosts = posts.length; await mount();
+    assert(saved().at(-1).state === 'interrupted' && !retry() && last().textContent.includes('Reattach') && posts.length === imagePosts,'missing image silently replayed');
+    report('New chat cancels the previous turn; storage quota preserves interruption and cannot silently discard inputs on retry');
+    assert(!unexpected.length,'Unexpected network request from fixture');
+    result.dataset.state = 'passed'; result.textContent = 'All browser stream fixtures passed.';
+  } catch (e) { result.dataset.state = 'failed'; result.textContent = e.message; }
+})();
+</script>
