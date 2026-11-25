@@ -242,28 +242,21 @@ actor EventAccess {
     /// `window` with both ends `nil` is the only shape that also returns
     /// reminders with no due date — which for most people is most of them.
     func reminders(in window: DateWindow, limit: Int = EventAccess.rowLimit) async -> PersonalDataLookup<ReminderRow> {
+        await reminders(for: .list(in: window, limit: limit))
+    }
+
+    func reminders(for query: OpenReminderQuery) async -> PersonalDataLookup<ReminderRow> {
         let authorization = standing(.reminders)
         guard authorization.canRead else { return .unauthorized(authorization) }
 
+        let window = query.window
         let predicate = store.predicateForIncompleteReminders(
             withDueDateStarting: window.start,
             ending: window.end,
             calendars: nil
         )
 
-        let matches = await fetchRows(matching: predicate)
-            // Undated last: they are open forever and would otherwise crowd out
-            // the ones with a deadline under the row cap.
-            .sorted { left, right in
-                switch (left.due, right.due) {
-                case let (l?, r?): (l, left.title) < (r, right.title)
-                case (nil, _?): false
-                case (_?, nil): true
-                case (nil, nil): left.title < right.title
-                }
-            }
-
-        return .rows(Array(matches.prefix(limit)), truncated: matches.count > limit)
+        return query.select(from: await fetchRows(matching: predicate))
     }
 
     // MARK: - Reads for the detail pages
@@ -308,8 +301,7 @@ actor EventAccess {
         guard authorization.canRead else { return .unauthorized(authorization) }
 
         let predicate = store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: nil)
-        let rows = await fetchRows(matching: predicate)
-            .compactMap(\.cardTarget)
+        let rows = (await fetchRows(matching: predicate) ?? []).compactMap(\.cardTarget)
         return .rows(Array(rows.prefix(limit)), truncated: rows.count > limit)
     }
 
@@ -321,11 +313,11 @@ actor EventAccess {
     /// callback, on whatever queue EventKit chose, precisely so that no
     /// `EKReminder` is ever captured by the continuation and carried onto this
     /// actor.
-    private func fetchRows(matching predicate: NSPredicate) async -> [ReminderRow] {
+    private func fetchRows(matching predicate: NSPredicate) async -> [ReminderRow]? {
         let calendar = Calendar.current
-        return await withCheckedContinuation { (continuation: CheckedContinuation<[ReminderRow], Never>) in
+        return await withCheckedContinuation { (continuation: CheckedContinuation<[ReminderRow]?, Never>) in
             store.fetchReminders(matching: predicate) { reminders in
-                continuation.resume(returning: (reminders ?? []).map { Self.row($0, calendar: calendar) })
+                continuation.resume(returning: reminders?.map { Self.row($0, calendar: calendar) })
             }
         }
     }

@@ -111,6 +111,41 @@ public enum PersonalDataLookup<Row: Sendable>: Sendable {
     case unauthorized(PersonalDataAuthorization)
 }
 
+/// A display budget can never establish that a write target is unique. Both
+/// selections start with EventKit's complete result; only a list sorts and caps it.
+public enum OpenReminderQuery: Sendable {
+    case list(in: DateWindow, limit: Int)
+    case writeMatches(title: String?)
+
+    public var window: DateWindow {
+        switch self {
+        case .list(let window, _): window
+        case .writeMatches: DateWindow(start: nil, end: nil) // includes undated and overdue reminders, in every list
+        }
+    }
+
+    public func select(from fetched: [ReminderRow]?) -> PersonalDataLookup<ReminderRow> {
+        switch self {
+        case .list(_, let limit):
+            let sorted = (fetched ?? []).sorted { left, right in
+                switch (left.due, right.due) {
+                case let (l?, r?): (l, left.title) < (r, right.title)
+                case (nil, _?): false
+                case (_?, nil): true
+                case (nil, nil): left.title < right.title
+                }
+            }
+            return .rows(Array(sorted.prefix(limit)), truncated: sorted.count > limit)
+        case .writeMatches(let title):
+            // A nil EventKit callback isn't proof there are zero duplicates.
+            guard let fetched else { return .rows([], truncated: true) }
+            guard let title = PersonalDataWrites.usableTitle(title) else { return .rows([], truncated: false) }
+            let key = PersonalDataWrites.normalise(title)
+            return .rows(fetched.filter { PersonalDataWrites.normalise($0.title.attackerControlledValue()) == key }, truncated: false)
+        }
+    }
+}
+
 // MARK: - The tool bodies
 
 /// Everything the calendar and reminder tools do, minus EventKit.

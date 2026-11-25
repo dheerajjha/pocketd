@@ -77,13 +77,13 @@ extension AppModel {
     /// - Returns: the completion, for the toast and its Undo, or nil when the
     ///   tick did not land (the reminder was deleted elsewhere, or access was
     ///   withdrawn); the page then re-reads and the row is simply gone or back.
-    func completeReminder(id: String, title: String) async -> ReminderCompletion? {
-        guard RequestOrigin.onDeviceChat.mayWritePersonalData else { return nil }
-        guard await EventAccess.shared.completeReminder(identifier: id) == .written else { return nil }
+    func completeReminder(_ reminder: DayReminder) async -> ReminderCompletion? {
+        guard RequestOrigin.onDeviceChat.mayWritePersonalData, reminderToolsEnabled else { return nil }
+        guard await EventAccess.shared.completeReminder(reminder) == .written else { return nil }
         // The Due tile and the brief count this reminder until the day is read
         // again, and they are one swipe away.
         dayMayHaveChanged()
-        return ReminderCompletion(reminderID: id, title: title)
+        return ReminderCompletion(reminderID: reminder.id, title: reminder.title)
     }
 
     /// Puts a ticked-off reminder back, from the toast's Undo.

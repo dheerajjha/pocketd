@@ -183,7 +183,7 @@ enum AskPreviewChat {
             title: title,
             when: when,
             origin: .onDeviceChat,
-            existing: { await EventAccess.shared.reminders(in: DateWindow(start: nil, end: nil)) },
+            existing: { await EventAccess.shared.reminders(for: .writeMatches(title: title)) },
             write: { await EventAccess.shared.createReminder($0) }
         )
         return AnswerCardBuilders.reminders(#"{"action":"create"}"#, payload)

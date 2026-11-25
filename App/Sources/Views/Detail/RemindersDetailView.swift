@@ -20,11 +20,7 @@ struct RemindersDetailView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var agenda: ReminderAgenda?
-    /// Ticked here and still on screen, showing their filled circle.
-    @State private var ticking: Set<String> = []
-    /// Ticked off and gone from the page, until the next reading drops them
-    /// for real.
-    @State private var gone: Set<String> = []
+    @State private var ticks = ReminderAgendaTicks()
     @State private var expanded: Set<ReminderAgenda.Group> = []
 
     private var reads = true
@@ -68,16 +64,10 @@ struct RemindersDetailView: View {
     }
 
     private func read() async {
-        guard reads else { return }
+        guard reads, let revision = ticks.beginRead() else { return }
         let fresh = await model.reminderAgenda()
-        // A tick re-reads the day the moment it lands, which re-reads this
-        // page — and the row would vanish before its filled circle had been
-        // seen. The tick reads again itself once its beat is over.
-        guard ticking.isEmpty else { return }
+        guard ticks.acceptRead(revision) else { return }
         agenda = fresh
-        // What the store no longer has is gone for real now; what it still
-        // has came back (an Undo, or a tick that did not land) and shows.
-        gone = []
     }
 
     // MARK: - Content
@@ -88,7 +78,7 @@ struct RemindersDetailView: View {
             ConnectSourceLink(ability: .reminders, availability: agenda.availability)
         } else {
             ForEach(agenda.sections) { section in
-                let rows = section.reminders.filter { !gone.contains($0.id) }
+                let rows = section.reminders.filter { ticks.phase(for: $0.id) != .hidden }
                 if !rows.isEmpty {
                     PageSection(section.group.title) {
                         let isOpen = expanded.contains(section.group)
@@ -97,7 +87,7 @@ struct RemindersDetailView: View {
                             ReminderRow(
                                 reminder: reminder,
                                 group: section.group,
-                                isTicked: ticking.contains(reminder.id)
+                                phase: ticks.phase(for: reminder.id)
                             ) {
                                 tick(reminder)
                             }
@@ -128,35 +118,23 @@ struct RemindersDetailView: View {
     // MARK: - Ticking off
 
     private func tick(_ reminder: DayReminder) {
-        guard reads, !ticking.contains(reminder.id) else { return }
-        Haptics.success()
-        withAnimation(reduceMotion ? nil : PDMotion.gentle) {
-            _ = ticking.insert(reminder.id)
-        }
+        guard reads else { return }
         Task {
-            let started = ContinuousClock.now
-            let completion = await model.completeReminder(id: reminder.id, title: reminder.title)
-            // The circle stays filled for a beat even when the store answered
-            // at once, or the row vanishes before anyone sees why.
-            let waited = started.duration(to: .now)
-            if waited < Self.tickPause {
-                try? await Task.sleep(for: Self.tickPause - waited)
-            }
-            withAnimation(reduceMotion ? nil : PDMotion.standard) {
-                ticking.remove(reminder.id)
-                if completion != nil { gone.insert(reminder.id) }
-            }
-            if let completion {
+            switch await ticks.complete(reminder, onConfirmed: Haptics.success, save: model.completeReminder(_:)) {
+            case .ignored: return
+            case .completed(let completion):
+                try? await Task.sleep(for: Self.tickPause)
+                withAnimation(reduceMotion ? nil : PDMotion.standard) { ticks.hideChecked(reminder.id) }
                 toasts.show(
                     completion.sentence,
                     symbol: "checkmark.circle",
                     tint: .pd.positive,
-                    action: ToastAction(title: "Undo") { undo(completion) }
+                    action: ToastAction(title: "Undo") { undo(completion, matching: reminder) }
                 )
-            } else {
+            case .failed:
                 Haptics.warning()
                 toasts.show(
-                    "Pocketd couldn't tick that off. Try again.",
+                    "Pocketd couldn’t confirm that tick. Check Reminders or try again.",
                     symbol: "exclamationmark.circle",
                     tint: .pd.caution
                 )
@@ -165,13 +143,13 @@ struct RemindersDetailView: View {
         }
     }
 
-    private func undo(_ completion: ReminderCompletion) {
+    private func undo(_ completion: ReminderCompletion, matching reminder: DayReminder) {
         Task {
-            if await model.undoCompletion(completion) {
+            if await model.undoCompletion(completion, matching: reminder) {
                 toasts.show(completion.undoneSentence, symbol: "arrow.uturn.backward")
             } else {
                 toasts.show(
-                    "That one can't be undone now. It's ticked off in Reminders.",
+                    "Pocketd couldn’t confirm Undo. Check Reminders.",
                     symbol: "exclamationmark.circle",
                     tint: .pd.caution
                 )
@@ -191,8 +169,10 @@ struct RemindersDetailView: View {
 private struct ReminderRow: View {
     let reminder: DayReminder
     let group: ReminderAgenda.Group
-    let isTicked: Bool
+    let phase: ReminderAgendaTicks.Phase
     let onTick: () -> Void
+
+    private var isTicked: Bool { phase == .checked }
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -217,11 +197,17 @@ private struct ReminderRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: PDSpacing.xxs) {
             Button(action: onTick) {
-                Image(systemName: isTicked ? "checkmark.circle.fill" : "circle")
-                    .font(Font.pd.lead)
-                    .foregroundStyle(isTicked ? Color.pd.positive : Color.pd.inkTertiary)
-                    .contentTransition(.symbolEffect(.replace))
-                    .pdHitTarget()
+                Group {
+                    if phase == .saving {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: isTicked ? "checkmark.circle.fill" : "circle")
+                            .font(Font.pd.lead)
+                            .foregroundStyle(isTicked ? Color.pd.positive : Color.pd.inkTertiary)
+                            .contentTransition(.symbolEffect(.replace))
+                    }
+                }
+                .pdHitTarget()
             }
             .buttonStyle(PDPressStyle())
             // The 44pt target overhangs the card's padding on the left and
@@ -229,7 +215,7 @@ private struct ReminderRow: View {
             // circle away from its words and every row taller.
             .padding(.leading, -PDSpacing.xs - 2)
             .padding(.vertical, -PDSpacing.xs - 2)
-            .disabled(isTicked)
+            .disabled(phase != .open)
             .accessibilityHidden(true)
 
             if typeSize.isAccessibilitySize {
@@ -248,10 +234,10 @@ private struct ReminderRow: View {
         .opacity(isTicked ? 0.55 : 1)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(spokenTitle)
-        .accessibilityValue(spokenDue)
-        .accessibilityHint("Ticks it off")
+        .accessibilityValue(phase == .saving ? "Saving" : isTicked ? "Done" : spokenDue)
+        .accessibilityHint(phase == .open ? "Ticks it off" : "")
         .accessibilityAddTraits(.isButton)
-        .accessibilityAction { onTick() }
+        .accessibilityAction { if phase == .open { onTick() } }
     }
 
     private var title: some View {

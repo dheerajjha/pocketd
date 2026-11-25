@@ -189,7 +189,13 @@ public enum PersonalDataWrites {
 
         let candidate = NewReminder(title: title, due: due, dueHasTime: dueHasTime, repeats: repeats)
 
-        if case let .rows(rows, _) = await existing(), let clash = duplicate(of: candidate, in: rows, calendar: calendar) {
+        let rows: [ReminderRow]
+        switch await existing() {
+        case .rows(let found, truncated: false): rows = found
+        case .rows(_, truncated: true): return ["text": Self.incompleteReminderLookup]
+        case .unauthorized(let authorization): return ["text": authorization.explanation(for: .reminders)]
+        }
+        if let clash = duplicate(of: candidate, in: rows, calendar: calendar) {
             // Not an error and not a second reminder. The case this is for is a
             // model that calls the tool, does not recognise the result, and
             // calls it again — and the user finding the same thing twice in
@@ -241,7 +247,8 @@ public enum PersonalDataWrites {
 
         let rows: [ReminderRow]
         switch await existing() {
-        case let .rows(found, _): rows = found
+        case .rows(let found, truncated: false): rows = found
+        case .rows(_, truncated: true): return ["text": Self.incompleteReminderLookup]
         case let .unauthorized(authorization): return ["text": authorization.explanation(for: .reminders)]
         }
 
@@ -344,6 +351,8 @@ public enum PersonalDataWrites {
 
     // MARK: - Shared judgement
 
+    private static let incompleteReminderLookup = "I could not check every open reminder, so I made no change."
+
     /// Moves a due time that has already gone today to the next day.
     ///
     /// A reminder set in the past cannot fire, and somebody asking to be
@@ -401,7 +410,7 @@ public enum PersonalDataWrites {
             // A daily "take the pills" and a one-off "take the pills" at the
             // same hour are different things, and filing the second over the
             // first would silently drop the repetition.
-            guard candidate.repeats == row.repeats else { return false }
+            guard candidate.repeats == row.repeats, candidate.dueHasTime == row.dueHasTime else { return false }
             switch (candidate.due, row.due) {
             case (nil, nil): return true
             case let (mine?, theirs?): return calendar.isDate(mine, equalTo: theirs, toGranularity: .minute)
@@ -410,16 +419,19 @@ public enum PersonalDataWrites {
         }
     }
 
-    /// Loose title comparison, in one place so the duplicate check and the
-    /// complete lookup cannot disagree about what "the same reminder" means.
+    /// Whole-title equality. Punctuation *inside* a name and symbols (e.g.
+    /// “Learn C++” versus “Learn C#”) can select different records.
     static func matches(_ left: String, _ right: String) -> Bool {
         normalise(left) == normalise(right)
     }
 
     static func normalise(_ text: String) -> String {
-        text.lowercased()
-            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-            .joined(separator: " ")
+        let name = text.precomposedStringWithCanonicalMapping.lowercased()
+            .replacingOccurrences(of: "’", with: "'")
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        var spoken = name[...]
+        while let last = spoken.last, ".!?".contains(last) { spoken.removeLast() }
+        return spoken.isEmpty ? name : String(spoken).trimmingCharacters(in: .whitespaces)
     }
 
     static func resolvedMinutes(_ requested: Int?) -> Int {

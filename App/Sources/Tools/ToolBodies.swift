@@ -71,16 +71,16 @@ enum ToolBodies {
         case .create:
             return await ModelPersonalDataWrites.createReminder(
                 title: title, when: when, origin: origin,
-                existing: { await EventAccess.shared.reminders(in: DateWindow(start: nil, end: nil)) },
+                existing: { await EventAccess.shared.reminders(for: .writeMatches(title: title)) },
                 write: { await EventAccess.shared.createReminder($0) }
             )
         case .complete:
             return await ModelPersonalDataWrites.completeReminder(
                 title: title, when: when, origin: origin,
-                existing: { await EventAccess.shared.reminders(in: DateWindow(start: nil, end: nil)) },
+                existing: { await EventAccess.shared.reminders(for: .writeMatches(title: title)) },
                 complete: { row in
-                    guard let identifier = row.identifier else { return .failed }
-                    return await EventAccess.shared.completeReminder(identifier: identifier)
+                    guard let target = row.cardTarget else { return .failed }
+                    return await EventAccess.shared.completeReminder(target)
                 }
             )
         }
