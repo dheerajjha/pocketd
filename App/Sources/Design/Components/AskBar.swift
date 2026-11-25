@@ -1,5 +1,6 @@
 import PocketdKit
 import SwiftUI
+import UIKit
 
 /// The composer, pinned above the tab bar.
 ///
@@ -7,28 +8,18 @@ import SwiftUI
 /// the bottom of it, which is what lets the last message scroll under it
 /// instead of being cut off by it.
 ///
-/// The mic is hold-to-talk and the send button only appears when there is
-/// something to send — two controls in the same slot, because a permanent
-/// disabled arrow next to a permanent mic is two dead controls at the exact
-/// place a person is looking for one live one. Each is drawn at 36pt and
-/// tappable at 44.
-///
-/// Hold-to-talk is a gesture VoiceOver cannot perform — its double-tap is a
-/// press and a release in the same instant, which started listening and
-/// stopped it again. So the mic also has an accessibility action: double-tap
-/// starts listening, and double-tap again stops and sends.
+/// Tap to start and tap again to finish, or hold and release. The 44pt mic
+/// target stays in place until finalization; a second tap must never hit a
+/// Send arrow over provisional words.
 struct AskBar: View {
     @Binding var text: String
     var placeholder: String = "Ask anything"
-    /// Held through permission prompts and an early recognition final, until
-    /// the person releases (or explicitly stops an accessibility/page mic).
-    var micSession: UUID?
-    var isListening: Bool = false
+    var micPhase: DictationHandoff.Phase = .idle
     var canSend: Bool = false
     /// Hidden entirely when the device cannot recognise speech on-device. A mic
     /// that would have to upload audio does not belong in this app.
     var showsMic: Bool = true
-    var onMic: () -> UUID? = { nil }
+    var onMic: () -> DictationHandoff.Press.Session? = { nil }
     var onMicEnd: (UUID) -> Void = { _ in }
     var onMicCancel: (UUID) -> Void = { _ in }
     var onSend: () -> Void = {}
@@ -39,9 +30,27 @@ struct AskBar: View {
     var focus: FocusState<Bool>.Binding?
 
     @FocusState private var isFocused: Bool
-    @GestureState private var touchingMic = false
     @State private var micPress = DictationHandoff.Press()
-    private var micIsHeld: Bool { micSession != nil }
+
+    private var micActive: Bool { micPhase != .idle }
+    private var fieldPlaceholder: String {
+        switch micPhase {
+        case .idle: placeholder
+        case .starting: "Starting microphone…"
+        case .listening: "Listening…"
+        case .awaitingFinish: "Tap to finish"
+        case .finishing: "Finishing dictation…"
+        }
+    }
+
+    private var micLabel: String {
+        switch micPhase {
+        case .idle: "Speak"
+        case .starting: "Cancel dictation"
+        case .listening, .awaitingFinish: "Finish dictation"
+        case .finishing: "Finishing dictation"
+        }
+    }
 
     var body: some View {
         HStack(spacing: PDSpacing.xs) {
@@ -60,7 +69,7 @@ struct AskBar: View {
                 .accessibilityLabel("Add a photo")
             }
 
-            TextField(isListening ? "Listening…" : placeholder, text: $text, axis: .vertical)
+            TextField(fieldPlaceholder, text: $text, axis: .vertical)
                 .font(Font.pd.body)
                 .foregroundStyle(Color.pd.ink)
                 .tint(Color.pd.accent)
@@ -69,7 +78,7 @@ struct AskBar: View {
                 // Multiline fields insert a newline on the software Return key.
                 // Sending is the separate control at the trailing edge.
                 .submitLabel(.return)
-                .disabled(micIsHeld)
+                .disabled(micActive && micPhase != .finishing)
                 // The placeholder is not a label: VoiceOver stops reading it
                 // the moment there is a character in the field, and a text
                 // field announced as nothing but its contents gives no clue
@@ -94,22 +103,17 @@ struct AskBar: View {
         // material, not two.
         .pdGlass(barShape)
         .overlay {
-            if isListening {
-                barShape.strokeBorder(Color.pd.accent, lineWidth: 1)
+            if micActive {
+                barShape.strokeBorder(Color.pd.accent, lineWidth: 1).allowsHitTesting(false)
             }
         }
         .animation(PDMotion.gentle, value: canSend)
-        .animation(PDMotion.gentle, value: isListening)
-        // System interruptions can cancel a drag without calling onEnded.
-        // A normal lift has already taken its session out of micPress.
-        .onChange(of: touchingMic) { _, down in
-            if !down { cancelPress() }
-        }
+        .animation(PDMotion.gentle, value: micPhase)
         .onDisappear(perform: cancelPress)
     }
 
     private func cancelPress() {
-        if let id = micPress.end() { onMicCancel(id) }
+        if let id = micPress.cancel() { onMicCancel(id) }
     }
 
     /// A capsule at one line. Once a question runs to two or more lines the
@@ -122,9 +126,9 @@ struct AskBar: View {
 
     @ViewBuilder
     private var trailingControl: some View {
-        // Keep this very gesture mounted through partials, early finals and
+        // Keep the same touch target mounted through partials, early finals and
         // even a recognition failure while the finger is still down.
-        if canSend && !micIsHeld && !micPress.isDown {
+        if canSend && !micActive && !micPress.isDown {
             Button {
                 Haptics.send()
                 onSend()
@@ -140,43 +144,75 @@ struct AskBar: View {
             .buttonStyle(PDPressStyle())
             .accessibilityLabel("Send")
             .accessibilityIdentifier("ask.send")
-        } else if showsMic || micIsHeld || micPress.isDown {
-            Image(systemName: isListening ? "waveform" : "mic")
+        } else if showsMic || micActive || micPress.isDown {
+            Image(systemName: micPhase == .finishing ? "ellipsis" : micActive ? "stop.fill" : "mic")
                 .font(Font.pd.body)
-                .foregroundStyle(isListening ? Color.pd.onPrimary : Color.pd.inkSecondary)
+                .foregroundStyle(micActive ? Color.pd.onPrimary : Color.pd.inkSecondary)
                 .frame(width: 36, height: 36)
                 .background(
-                    Circle().fill(isListening ? Color.pd.accent : Color.clear)
+                    Circle().fill(micActive ? Color.pd.accent : Color.clear)
                 )
                 .pdHitTarget()
-                // A long-press gesture rather than a Button, because this is
-                // hold-to-talk: the press start and the release are both
-                // events, and a Button only reports the end of one.
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .updating($touchingMic) { _, down, _ in down = true }
-                        .onChanged { _ in
-                            micPress.begin {
-                                if !micIsHeld { Haptics.tap() }
-                                return onMic()
-                            }
+                .overlay {
+                    MicContactTarget(down: { time in
+                        micPress.begin(at: time) {
+                            let session = onMic()
+                            if case .started = session { Haptics.tap() }
+                            return session
                         }
-                        .onEnded { _ in
-                            if let id = micPress.end() { onMicEnd(id) }
-                        }
-                )
-                .accessibilityLabel(isListening ? "Stop listening" : micIsHeld ? "Finish dictation" : "Speak")
-                .accessibilityHint(micIsHeld ? "Finishes this dictation" : "Double-tap to start, and again to stop")
+                    }, up: { time in
+                        if let id = micPress.end(at: time) { onMicEnd(id) }
+                    }, cancelled: cancelPress)
+                    .frame(width: PDMetric.minHitTarget, height: PDMetric.minHitTarget)
+                    .accessibilityHidden(true)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(micLabel)
+                .accessibilityHint(micActive ? "" : "Double-tap to start, and again to finish")
+                .accessibilityIdentifier("ask.mic")
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction {
-                    if let micSession {
-                        onMicEnd(micSession)
-                    } else {
-                        Haptics.tap()
-                        _ = onMic()
+                    switch onMic() {
+                    case .started: Haptics.tap()
+                    case .joined(let id): onMicEnd(id)
+                    case nil: break
                     }
                 }
+                .disabled(micPhase == .finishing)
         }
+    }
+}
+
+/// UIKit distinguishes a cancelled touch from a lift. A SwiftUI gesture state
+/// resetting to false represents both, including when a permission sheet opens.
+private struct MicContactTarget: UIViewRepresentable {
+    var down: (TimeInterval) -> Void
+    var up: (TimeInterval) -> Void
+    var cancelled: () -> Void
+
+    func makeUIView(context: Context) -> Control { Control() }
+    func updateUIView(_ control: Control, context: Context) { control.contact = self }
+
+    final class Control: UIControl {
+        var contact: MicContactTarget?
+        private var downInWindow: CGPoint = .zero
+
+        override func beginTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
+            downInWindow = touch.location(in: nil)
+            contact?.down(touch.timestamp)
+            return true
+        }
+
+        override func endTracking(_ touch: UITouch?, with event: UIEvent?) {
+            // Resigning field focus moves the whole bar with the keyboard. A
+            // stationary finger didn't slide away just because the bar moved.
+            guard let touch else { contact?.cancelled(); return }
+            let up = touch.location(in: nil)
+            if hypot(up.x - downInWindow.x, up.y - downInWindow.y) > PDMetric.minHitTarget { contact?.cancelled() }
+            else { contact?.up(touch.timestamp) }
+        }
+
+        override func cancelTracking(with event: UIEvent?) { contact?.cancelled() }
     }
 }
 
@@ -197,7 +233,7 @@ private struct AskBarPreview: View {
             Spacer()
             AskBar(text: $empty)
             AskBar(text: $typed, canSend: true, onAttach: {})
-            AskBar(text: $empty, micSession: UUID(), isListening: true)
+            AskBar(text: $empty, micPhase: .listening)
             AskBar(text: $empty, showsMic: false)
         }
         .padding(PDSpacing.gutter)

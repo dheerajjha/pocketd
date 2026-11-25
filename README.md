@@ -38,14 +38,15 @@ to open the app at all.
 Ask is the conversation, and it opens as a sheet over wherever you are: from
 the field at the bottom of Today or of a page, from the Ask Pocketd control in
 Control Center, on the Lock Screen or on the Action Button, or from Siri. Type
-a question, or hold the mic button and speak it; the mic on Today and on each
-page opens the conversation already listening. Speech recognition runs on the
+a question, tap the mic to start and tap it again to finish, or hold it while
+you speak and release to finish. The mic on Today and on each page opens the
+conversation already listening. Speech recognition runs on the
 device — `requiresOnDeviceRecognition` is set once and never unset — so on a
 phone or in a locale where that isn't available, the mic button hides itself
-rather than quietly sending your voice to a server. Releasing the mic sends
-the final words to the brain you chose. Even with Private Cloud Compute, the
-audio stays on the phone; it is the text that goes to Apple. If dictation can’t
-finish, the words already heard stay in the box for you to edit or send.
+rather than quietly sending your voice to a server. Finishing sends the final
+words to the same ready brain. If you chose Private Cloud Compute, only the text
+goes to Apple; the audio stays on the phone. If the brain changes, is unavailable,
+or dictation can’t finish, the words stay in the box for you to edit or send.
 An answer that touches your calendar, reminders or health comes back as one
 card: a sentence, and under it a timeline of events, a checklist you can tick
 off without leaving the card, or a small grid of health numbers. A reminder or an

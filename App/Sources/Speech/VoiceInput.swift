@@ -34,7 +34,7 @@ final class VoiceInput {
     /// something that reads as speech rather than static.
     private(set) var level: Float = 0
 
-    private(set) var authorization: Authorization = .unknown
+    var authorization: Authorization { Self.currentAuthorization() }
 
     /// Whether this device can even try, checked live rather than cached: a
     /// recognizer for the current locale exists and can run without reaching
@@ -74,25 +74,22 @@ final class VoiceInput {
     /// and reports whether listening can start. iOS shows each prompt at most
     /// once; calling this again after a decision re-reads that decision
     /// instead of asking again.
-    func requestAuthorization() async -> Bool {
-        guard !Task.isCancelled else { return false }
-        let speechStatus = await Self.speechAuthorization()
-        // Releasing a pending press cannot dismiss an OS prompt already on
-        // screen, but it must not start the next prompt or open the mic.
-        guard !Task.isCancelled else { return false }
+    func requestAuthorization(while requested: @MainActor () -> Bool) async -> Bool {
+        guard !Task.isCancelled, requested(), authorization != .denied else { return false }
+        var speechStatus = SFSpeechRecognizer.authorizationStatus()
+        if speechStatus == .notDetermined { speechStatus = await Self.speechAuthorization() }
+        // Cancelling a pending turn cannot dismiss a visible OS prompt, but
+        // it must not start the next prompt or open the mic.
+        guard !Task.isCancelled, requested() else { return false }
         // Asking for the microphone after Speech Recognition was refused
         // would show a permission sheet for a capability that refusal already
         // makes useless, right after the user just said no to the thing next
         // to it.
-        guard speechStatus == .authorized else {
-            authorization = .denied
-            return false
+        guard speechStatus == .authorized else { return false }
+        if AVAudioApplication.shared.recordPermission == .undetermined {
+            _ = await AVAudioApplication.requestRecordPermission()
         }
-        _ = await AVAudioApplication.requestRecordPermission()
-        guard !Task.isCancelled else { return false }
-        let current = Self.currentAuthorization()
-        authorization = current
-        return current == .granted
+        return !Task.isCancelled && requested() && authorization == .granted
     }
 
     /// Re-derives `authorization` from the two system permissions, without
@@ -121,20 +118,16 @@ final class VoiceInput {
             return
         }
 
-        let liveAuthorization = Self.currentAuthorization()
-        authorization = liveAuthorization
-        guard liveAuthorization == .granted else {
+        guard authorization == .granted else {
             onResult(.failed(Self.refusedSentence))
             return
         }
 
         let session = AVAudioSession.sharedInstance()
         do {
-            // .measurement is Apple's own recommendation for feeding a speech
-            // recognizer: it is the one mode that turns off the system's
-            // voice-tuned signal processing, which a recognizer trained on
-            // unprocessed audio does not expect.
-            try session.setCategory(.record, mode: .measurement, options: [.duckOthers])
+            // Measurement minimizes signal processing. A record-only session
+            // doesn't support ducking other apps' playback.
+            try session.setCategory(.record, mode: .measurement, options: [])
             try session.setActive(true)
         } catch {
             onResult(.failed("Couldn't start the microphone. Try again."))
@@ -388,21 +381,15 @@ final class VoiceInput {
     /// to find is either Microphone or Speech Recognition, and saying both
     /// sends them looking for one that is already on.
     static var refusedSentence: String {
-        if SFSpeechRecognizer.authorizationStatus() != .authorized {
+        let speech = SFSpeechRecognizer.authorizationStatus()
+        if speech == .denied || speech == .restricted {
             return "Speech Recognition is off for Pocketd in iOS Settings."
         }
-        if AVAudioApplication.shared.recordPermission != .granted {
+        if AVAudioApplication.shared.recordPermission == .denied {
             return "Microphone is off for Pocketd in iOS Settings."
         }
         return "Pocketd can't listen right now. Try again."
     }
 
     static let unavailableSentence = "Speech recognition isn't available on this iPhone right now."
-
-    /// Whether iOS has never asked for Speech Recognition — the moment a
-    /// primer goes up, before the system's own prompt.
-    static var hasNeverAsked: Bool {
-        SFSpeechRecognizer.authorizationStatus() == .notDetermined
-            || AVAudioApplication.shared.recordPermission == .undetermined
-    }
 }

@@ -1,40 +1,82 @@
 import Foundation
 
-/// Releasing the mic is permission to send; only the recognizer can supply the
-/// words to send. Either event can arrive first. Partials only belong in the
-/// draft, and only while this turn still owns that draft.
+/// Finishing the mic and receiving a final are separate events, in either order.
+/// Partials only belong in the draft, and only while this turn owns that draft.
 public struct DictationHandoff: Sendable {
-    /// A drag reports many changes, and its release can precede even the first
-    /// redraw. Keep the session returned on touch-down, not the one on screen
-    /// at touch-up. A tap on a page-initiated mic can adopt that session too.
+    /// One native contact, using touch timestamps rather than the time SwiftUI
+    /// redraws. A quick first tap leaves its new session running; any tap on a
+    /// running session (including a page handoff) finishes that exact session.
     public struct Press: Sendable {
-        public private(set) var isDown = false
-        private var session: UUID?
+        public enum Session: Sendable {
+            case started(UUID), joined(UUID)
+
+            public var id: UUID {
+                switch self { case .started(let id), .joined(let id): id }
+            }
+        }
+
+        public static let holdDuration: TimeInterval = 0.4
+        private var beganAt: TimeInterval?
+        private var session: Session?
+        public var isDown: Bool { beganAt != nil }
 
         public init() {}
 
-        public mutating func begin(_ startOrJoin: () -> UUID?) {
+        public mutating func begin(at time: TimeInterval, _ startOrJoin: () -> Session?) {
             guard !isDown else { return }
-            isDown = true
+            beganAt = time
             session = startOrJoin()
         }
 
-        public mutating func end() -> UUID? {
+        public mutating func end(at time: TimeInterval) -> UUID? {
             defer { self = Self() }
-            return session
+            guard let beganAt, let session else { return nil }
+            if case .started = session, time - beganAt < Self.holdDuration { return nil }
+            return session.id
+        }
+
+        public mutating func cancel() -> UUID? {
+            defer { self = Self() }
+            return session?.id
         }
     }
+
+    /// Finishing addresses the same ready brain as mic-down. The cloud is a
+    /// destination only when explicitly chosen, effective and resident.
+    public enum Destination: Equatable, Sendable {
+        case review, local(modelID: String, selection: UUID), explicitCloud(modelID: String, selection: UUID)
+
+        public static func resolve(
+            chosen: BrainChoice?, effective: BrainChoice?, residentID: String?,
+            canAnswer: Bool, cloud: AppleCloudStatus, selection: UUID
+        ) -> Self {
+            guard canAnswer, let effective, let id = residentID, !id.isEmpty,
+                  BrainChoice(residentID: id) == effective else { return .review }
+            if effective == .privateCloudCompute {
+                guard chosen == .privateCloudCompute, cloud.canChoose else { return .review }
+                return .explicitCloud(modelID: id, selection: selection)
+            }
+            // A ready on-device default is local. A fallback for a different
+            // saved selection is ambiguous until the person chooses to send.
+            guard chosen == nil || chosen == effective else { return .review }
+            return .local(modelID: id, selection: selection)
+        }
+    }
+
+    public enum Phase: Equatable, Sendable { case idle, starting, listening, awaitingFinish, finishing }
 
     public enum Event: Sendable {
         case partial(String), final(String), release, timedOut, failed(String)
     }
 
     public enum Action: Equatable, Sendable {
-        case preview(String), endAudio, submit(String), review(String), cancel
+        case preview(String), endAudio, submit(String), reviewFinal(String), review(String), cancel
     }
 
     public private(set) var id: UUID?
+    /// True until the person finishes, even with their finger up in tap mode.
     public private(set) var isHeld = false
+    private var destination: Destination = .review
     private var conversation: UUID?
     private var expectedDraft = ""
     private var earlyFinal: String?
@@ -42,10 +84,25 @@ public struct DictationHandoff: Sendable {
 
     public init() {}
 
-    public mutating func begin(draft: String, in conversation: UUID) -> UUID {
+    /// Consult the current turn at contact time, including before a redraw.
+    /// A third tap during finalization cannot restart the mic or send a partial.
+    public func startOrJoin(_ start: () -> UUID?) -> Press.Session? {
+        if let id { return isHeld ? .joined(id) : nil }
+        return start().map(Press.Session.started)
+    }
+
+    public func phase(isListening: Bool) -> Phase {
+        guard id != nil else { return .idle }
+        guard isHeld else { return .finishing }
+        guard captureStarted else { return .starting }
+        return isListening ? .listening : .awaitingFinish
+    }
+
+    public mutating func begin(draft: String, in conversation: UUID, destination: Destination) -> UUID {
         let id = UUID()
         self.id = id
         self.conversation = conversation
+        self.destination = destination
         isHeld = true
         expectedDraft = draft
         earlyFinal = nil
@@ -53,32 +110,44 @@ public struct DictationHandoff: Sendable {
         return id
     }
 
-    /// Called after the permission awaits, immediately before opening the mic.
+    /// Check before each OS prompt as well as before capture: the user may
+    /// have left the question while the previous prompt was on screen.
+    public func awaitsCapture(for id: UUID, draft: String, in conversation: UUID) -> Bool {
+        self.id == id && isHeld && !captureStarted && owns(draft: draft, in: conversation)
+    }
+
     public mutating func beginCapture(for id: UUID, draft: String, in conversation: UUID) -> Bool {
-        guard self.id == id, isHeld, !captureStarted, owns(draft: draft, in: conversation) else { return false }
+        guard awaitsCapture(for: id, draft: draft, in: conversation) else { return false }
         captureStarted = true
         return true
     }
 
     public mutating func cancel() { self = Self() }
 
+    /// Sticky for this turn: losing the destination at release (or between
+    /// partials) cannot be undone by its return before the recognizer's final.
+    public mutating func observeDestination(_ current: Destination) {
+        guard id != nil, destination != .review, current != destination else { return }
+        destination = .review
+    }
+
     public func owns(draft: String, in conversation: UUID) -> Bool {
         self.conversation == conversation && expectedDraft == draft
     }
 
-    public mutating func receive(_ event: Event, for id: UUID, draft: String, in conversation: UUID) -> Action? {
+    public mutating func receive(_ event: Event, for id: UUID, draft: String, in conversation: UUID, destination current: Destination) -> Action? {
         guard self.id == id else { return nil }
         guard owns(draft: draft, in: conversation) else {
             cancel()
             return .cancel
         }
+        observeDestination(current)
 
         // A duplicate or trailing error cannot demote an already confirmed
         // transcript while the button is still held.
         if let earlyFinal {
             guard case .release = event else { return nil }
-            cancel()
-            return .submit(earlyFinal)
+            return confirmed(earlyFinal)
         }
 
         switch event {
@@ -102,14 +171,18 @@ public struct DictationHandoff: Sendable {
                 expectedDraft = words
                 return .preview(words)
             }
-            cancel()
-            return .submit(words)
+            return confirmed(words)
         case .timedOut:
             return unfinished()
         case .failed(let reason):
             cancel()
             return .review(reason)
         }
+    }
+
+    private mutating func confirmed(_ words: String) -> Action {
+        defer { cancel() }
+        return destination == .review ? .reviewFinal(words) : .submit(words)
     }
 
     private mutating func unfinished() -> Action {

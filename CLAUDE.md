@@ -28,7 +28,7 @@ generated from `project.yml` by XcodeGen) adds llama.cpp through LocalLLMClient 
 
 ## Cancellation and dictation
 - An interrupted scheduled prompt stays due. A cancelled stream can end without throwing, even after emitting words; neither that prefix nor an empty result is a completed run.
-- Releasing the Ask mic ends audio input. Only the final result for that dictation may automatically send its draft. If finalization fails or times out, keep the words editable instead.
+- Tap the Ask mic to start and again to finish, or hold and release. Only confirmed final words may send, once, to the same ready brain and selection intent. PCC must be explicitly chosen, effective and resident. A changed or unavailable destination, interruption or missing final leaves the draft editable.
 
 ## Apple Private Cloud Compute
 - Only an explicit phone selection may send a request to PCC. Preserve the local defaults, a separate cloud model ID, and downloaded-only LAN serving. Recheck the signed build, Apple's actual readiness, and the per-user quota rather than guessing from the device name or a previous launch. See `docs/apple-private-cloud-compute.md` for device and signing verification.
