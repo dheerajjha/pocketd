@@ -31,7 +31,8 @@ struct ModelWriteIntent: Sendable {
         _ = strip("please|kindly")
         s = s.replacingOccurrences(of: #",?\s+(?:please|thanks|thank you)$"#, with: "", options: .regularExpression)
         if strip("remind me") {
-            guard !Self.matches(#"^(?:of|how|what|when|why|whether|about the time)\b"#, s) else { return nil }
+            guard let task = Self.reminderTask(s) else { return nil }
+            s = task
             change = .addReminder
         } else if strip("tick off|check off|mark off") {
             _ = strip("(?:the |my )?(?:reminder|task)(?: called| named)?"); change = .tickOff
@@ -66,6 +67,32 @@ struct ModelWriteIntent: Sendable {
     }
 
     private static let artifactNoun = #"^(?:app|application|system|template|example|handler|listener|script|api|function|schema|tutorial|bot)\b"#
+
+    // “Remind me” can mean “tell me again”. Require positive evidence of a
+    // task, not an ever-growing list of ways to ask a recall question.
+    private static func reminderTask(_ rest: String) -> String? {
+        let rest = rest.hasPrefix("again ") ? String(rest.dropFirst("again ".count)) : rest
+        if matches(#"^(?:not )?to\s+(?!(?:whom|which|what|whose)\b)\S"#, rest) { return rest }
+        // Also support an explicit time before the task: “tomorrow at 9 to
+        // buy milk”, or “in 20 minutes about the oven”. Don't interpret a
+        // date somewhere inside a recollection as the requested trigger.
+        guard matches(#"^(?:(?:at|on|in|by|every|next|this|today|tomorrow|tonight|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b|\d)"#, rest),
+              !matches(#"^(?:at|in|on|by) (?:what|which|whose|whom|who|where|when|how|whether)\b"#, rest),
+              let link = rest.range(of: #"\s+(?:to|about)\s+\S"#, options: .regularExpression) else { return nil }
+        switch MomentPhrase.resolve(String(rest[..<link.lowerBound])) {
+        case .moment, .repeating: return rest
+        case .recurring, .unresolved: return nil
+        }
+    }
+
+    /// Route a recall question by its subject, not by the word “remind”.
+    /// A question about an appointment can still read Calendar.
+    static func recallSubject(_ text: String) -> String? {
+        let s = fold(text).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let opening = s.range(of: #"^(?:(?:please|kindly)\s+)?(?:(?:(?:can|could|would|will) you|i(?: would|'d) like you to|i want you to)\s+)?(?:(?:please|kindly)\s+)?remind me\b[\s,]*"#, options: .regularExpression) else { return nil }
+        let rest = String(s[opening.upperBound...])
+        return reminderTask(rest) == nil ? rest : nil
+    }
 
     /// Account for the entire object of the command, not just one shared noun.
     /// Thus “Call Jun” cannot authorize “Call June”, an old title, or a time,

@@ -201,6 +201,7 @@ public enum PersonalDataWrites {
             ]
         }
 
+        guard ModelWriteTurn.beginMutation() else { return ["text": SystemToolPolicy.stoppedRefusal] }
         switch await write(candidate) {
         case .written:
             // The resolved time is echoed back deliberately. No phrase parser
@@ -255,6 +256,7 @@ public enum PersonalDataWrites {
             return ["text": "\(candidates.count) open reminders match \"\(title)\". Which one?"]
         }
 
+        guard ModelWriteTurn.beginMutation() else { return ["text": SystemToolPolicy.stoppedRefusal] }
         switch await complete(target) {
         case .written:
             return ["text": "Ticked off \"\(target.title.sanitisedForPrompt())\".", "completed": true]
@@ -322,6 +324,7 @@ public enum PersonalDataWrites {
             return ["text": "I could not work out when that event ends."]
         }
 
+        guard ModelWriteTurn.beginMutation() else { return ["text": SystemToolPolicy.stoppedRefusal] }
         switch await write(NewEvent(title: title, start: start, end: end, repeats: repeats)) {
         case .written:
             // The length is said every time, the default included. Left out

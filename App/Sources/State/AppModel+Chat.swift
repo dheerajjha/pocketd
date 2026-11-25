@@ -87,7 +87,7 @@ extension AppModel {
         // change nothing and the offer would be a lie about what happens next.
         pendingToolOffer = personalDataToolGate.registersTools
             ? ToolOffer.decide(
-                for: text,
+                for: SystemModelWrites.subjectForRouting(text),
                 enabled: .init(
                     calendar: calendarToolsEnabled,
                     reminders: reminderToolsEnabled,
@@ -183,6 +183,7 @@ extension AppModel {
             submittedQuestion: text
         )
         let writeTurn = request.modelWriteTurn
+        lastChatWriteTurn = writeTurn
 
         // The origin identifies the phone UI, not where inference happens.
         // PhoneBrain dispatches only to the provider the person selected.
@@ -201,7 +202,7 @@ extension AppModel {
                             // invalidates every view that reads it.
                             if self.activeToolName != nil { self.activeToolName = nil }
                             guard target.canWrite(to: self.currentConversationID, messages: self.conversation) else { return }
-                            if let receipt = writeTurn?.receipt { self.conversation[target.slot].content = receipt }
+                            if let receipt = writeTurn?.narrationReceipt { self.conversation[target.slot].content = receipt }
                             else { self.conversation[target.slot].content += chunk }
                             // After the words, not before: what is on disk
                             // when the app is killed is what was on screen.
@@ -215,7 +216,7 @@ extension AppModel {
                             guard self.isWriting(serial),
                                   target.canWrite(to: self.currentConversationID, messages: self.conversation)
                             else { return }
-                            if let receipt = writeTurn?.receipt { self.conversation[target.slot].content = receipt }
+                            if let receipt = writeTurn?.narrationReceipt { self.conversation[target.slot].content = receipt }
                             self.conversation[target.slot].cards.append(card)
                             // Once per generation, and only for a card that
                             // reported something. A question that reads the
@@ -250,10 +251,15 @@ extension AppModel {
                     // the user as though it were a reply.
                     guard !stopped, self.isWriting(serial),
                           self.currentConversationID == target.conversation else { return }
+                    if let receipt = writeTurn?.narrationReceipt, target.canWrite(to: self.currentConversationID, messages: self.conversation) {
+                        self.conversation[target.slot].content = receipt
+                    }
                     self.discardEmptyReply()
-                    self.generationError = Self.replyFailureSentence(for: error)
+                    // The change succeeded even if its narration didn't. The
+                    // receipt is the answer; “Try again” could file it twice.
+                    self.generationError = writeTurn?.preventsReplay == true ? nil : Self.replyFailureSentence(for: error)
                     self.record(.errorShown(area: .chat, code: (error as NSError).code))
-                    self.replyFailureRemedy = Self.remedy(for: error)
+                    self.replyFailureRemedy = Self.remedy(for: error, writeTurn: writeTurn)
                     if case let InferenceError.privateCloud(.limitReached(reset), _) = error,
                        self.isUsingPrivateCloudCompute {
                         self.cloudStatusRead = UUID()
@@ -272,7 +278,7 @@ extension AppModel {
                 // but instructions is no reply, and says so.
                 if target.canWrite(to: self.currentConversationID, messages: self.conversation) {
                     let reply = self.conversation[target.slot]
-                    let cleaned = writeTurn?.receipt ?? echo.clean(reply.content).text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let cleaned = writeTurn?.narrationReceipt ?? echo.clean(reply.content).text.trimmingCharacters(in: .whitespacesAndNewlines)
                     if cleaned != reply.content.trimmingCharacters(in: .whitespacesAndNewlines) {
                         self.conversation[target.slot].content = cleaned
                     }
@@ -284,11 +290,12 @@ extension AppModel {
                         if self.generationError == nil {
                             self.generationError = "That one didn't work."
                             self.record(.errorShown(area: .chat, code: -1))
-                            self.replyFailureRemedy = .tryAgain
+                            self.replyFailureRemedy = writeTurn?.preventsReplay == true ? nil : .tryAgain
                         }
                     }
                 }
                 self.inFlightTarget = nil
+                if writeTurn?.preventsReplay == true { self.pendingToolOffer = nil }
                 self.isGenerating = false
                 self.activeToolName = nil
                 self.resumeAutoRelease("generating")
@@ -333,12 +340,21 @@ extension AppModel {
     func stopGenerating() {
         // A stopped reply is still a reply: the partial text is on screen and
         // has to survive the same way a finished one does.
-        defer { scheduleConversationSave() }
+        var settling: (ModelWriteTurn, GenerationTarget, Date)?
+        let turn = lastChatWriteTurn
+        turn?.revoke()
         resumeAutoRelease("generating")
         applyIdleTimer(running: serverShouldRun)
         if isGenerating, let target = inFlightTarget,
            target.canWrite(to: currentConversationID, messages: conversation) {
-            conversation[target.slot].content = ReplyMarker.markingStopped(conversation[target.slot].content)
+            let wasSaving = turn?.preventsReplay == true
+            let pending = "Check your calendar or reminders to see whether the change was saved."
+            let text = turn?.narrationReceipt ?? (wasSaving ? pending : conversation[target.slot].content)
+            conversation[target.slot].content = ReplyMarker.markingStopped(text)
+            if wasSaving, let turn, let stamp = conversation[target.slot].sentAt {
+                pendingToolOffer = nil
+                settling = (turn, target, stamp)
+            }
         }
         // Cancellation is cooperative; reject the old task's final callback
         // too, including any save it would otherwise schedule after a delete.
@@ -348,6 +364,31 @@ extension AppModel {
         inFlightTarget = nil
         isGenerating = false
         activeToolName = nil
+        scheduleConversationSave()
+        if let (turn, target, stamp) = settling {
+            settleStoppedWrite(turn, at: target, sentAt: stamp, after: saveTask)
+        }
+    }
+
+    /// Stop ends narration immediately. EventKit may already have committed
+    /// on another actor; its eventual result belongs to this assistant slot,
+    /// even if the person has opened History or deleted the conversation.
+    private func settleStoppedWrite(_ turn: ModelWriteTurn, at target: GenerationTarget, sentAt: Date, after outgoingSave: Task<Void, Never>?) {
+        Task {
+            guard let receipt = await turn.settledReceipt() else { return }
+            var earlierSave = outgoingSave
+            if target.canWrite(to: currentConversationID, messages: conversation),
+               conversation[target.slot].sentAt?.timeIntervalSince1970.rounded(.down) == sentAt.timeIntervalSince1970.rounded(.down),
+               ReplyMarker.isMarkedStopped(conversation[target.slot].content) {
+                conversation[target.slot].content = ReplyMarker.markingStopped(receipt)
+                earlierSave = saveTask ?? outgoingSave
+            }
+            // The snapshot taken before the receipt may still be debouncing.
+            // Amend only an existing file after it; a Delete wins even if its
+            // actor hop hasn't yet moved the screen away from this thread.
+            await earlierSave?.value
+            try? await conversations.updateStoppedReceipt(receipt, at: target, sentAt: sentAt)
+        }
     }
 
     /// Whether the reply numbered `serial` is still the one being written.
@@ -398,7 +439,8 @@ extension AppModel {
     /// The remedy for an error, from its type — never from its words. `nil`
     /// where there is nothing to do but read the sentence: Pocketd declining,
     /// a language it does not speak yet, a picture it cannot see.
-    static func remedy(for error: any Error) -> ReplyRemedy? {
+    static func remedy(for error: any Error, writeTurn: ModelWriteTurn? = nil) -> ReplyRemedy? {
+        guard writeTurn?.preventsReplay != true else { return nil }
         if case let InferenceError.privateCloud(failure, afterWrite) = error {
             // An interrupted explanation does not roll back a change already
             // made on the phone. Don't offer a button that repeats that write.
@@ -429,7 +471,9 @@ extension AppModel {
     /// got — so the transcript shows the question once, with the answer that
     /// worked under it, rather than twice with a hole between.
     func retryLastQuestion() {
-        guard !isGenerating, let index = conversation.lastIndex(where: { $0.role == .user }) else { return }
+        guard !isGenerating, generationError != nil, replyFailureRemedy == .tryAgain,
+              lastChatWriteTurn?.preventsReplay != true,
+              let index = conversation.lastIndex(where: { $0.role == .user }) else { return }
         let question = conversation[index]
         conversation.removeSubrange(index...)
         draft = question.content
@@ -472,6 +516,7 @@ extension AppModel {
     /// on its own the router arms the calendar for "help me plan a party", and
     /// refusing that would be refusing a chat to a chat brain.
     static func dayRefusal(for question: String) -> DayRefusal? {
+        let question = SystemModelWrites.subjectForRouting(question)
         let lower = question.lowercased()
         let group: CapabilityGroup?
         if let offer = ToolOffer.decide(for: question, enabled: .init(calendar: false, reminders: false, health: false)) {
@@ -712,7 +757,7 @@ extension AppModel {
         var messages = conversation
         if isGenerating, let target = inFlightTarget,
            target.canWrite(to: currentConversationID, messages: messages) {
-            messages[target.slot].content = ReplyMarker.markingStopped(messages[target.slot].content)
+            messages[target.slot].content = ReplyMarker.markingStopped(lastChatWriteTurn?.narrationReceipt ?? messages[target.slot].content)
         }
         let stored = history.first(where: { $0.id == currentConversationID })
         return Conversation(

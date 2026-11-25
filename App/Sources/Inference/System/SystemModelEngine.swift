@@ -641,7 +641,7 @@ struct SystemModelAnswer {
                         if let delta = text.take(snapshot.content), !screensChange { continuation.yield(.token(delta)) }
                         if text.halted { break }
                     }
-                } onCancel: { run.stop() }
+                } onCancel: { run.stop(); request.modelWriteTurn?.revoke() }
             } catch {
                 run.stop()
                 if Task.isCancelled || error is CancellationError {
@@ -652,7 +652,9 @@ struct SystemModelAnswer {
                 if model.isCloud, #available(iOS 27.0, *) {
                     // No retry, no fallback. Cards and any writes already made
                     // are real even when their narration failed or was refused.
-                    let failure = AppleCloudTransport.inferenceError(for: error, afterWrite: run.anyWriteStarted)
+                    request.modelWriteTurn?.revoke()
+                    let afterWrite = request.modelWriteTurn?.preventsReplay ?? run.anyWriteStarted
+                    let failure = AppleCloudTransport.inferenceError(for: error, afterWrite: afterWrite)
                     if case let .privateCloud(reason, _) = failure {
                         DiagnosticLog.record(.failure(area: .model, code: reason.diagnosticCode))
                     } else if failure == .contextExhausted {

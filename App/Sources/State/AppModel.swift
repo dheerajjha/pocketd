@@ -268,6 +268,8 @@ final class AppModel {
     /// Where the reply being written goes, for the "Stopped." marker. See
     /// `stopGenerating()` and `snapshotConversation()`.
     @ObservationIgnored var inFlightTarget: GenerationTarget?
+    /// Kept through a narration failure so Retry can't replay a saved change.
+    @ObservationIgnored var lastChatWriteTurn: ModelWriteTurn?
 
     /// A question that arrived before a brain could answer it — from Siri, a
     /// Shortcut, the Control Center button, or the composer — sent the moment

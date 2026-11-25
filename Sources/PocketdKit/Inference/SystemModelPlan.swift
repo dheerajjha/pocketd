@@ -233,7 +233,12 @@ public extension SystemModelPlan {
     ) -> [CapabilityGroup] {
         guard request.origin.mayReachPersonalData else { return [] }
         let switchedOn = toolOrder.filter(enabled.contains)
-        let words = SystemModelPlan.words(in: request.messages.last(where: { $0.role == .user })?.content ?? "")
+        let question = request.messages.last(where: { $0.role == .user })?.content ?? ""
+        if let subject = ModelWriteIntent.recallSubject(question) {
+            guard case let .named(groups) = CapabilityRouter.decide(subject) else { return [] }
+            return switchedOn.filter(groups.contains)
+        }
+        let words = SystemModelPlan.words(in: question)
         if let change = request.modelWriteTurn?.intent?.change {
             return switchedOn.filter { $0 == (change == .addEvent ? .calendar : .reminders) }
         }
@@ -494,9 +499,12 @@ public enum SystemModelReads {
         guard request.origin.mayReachPersonalData,
               let last = request.messages.last(where: { $0.role == .user })
         else { return nil }
-        let question = SystemModelPlan.withoutReasoningSwitch(last.content)
+        let submitted = SystemModelPlan.withoutReasoningSwitch(last.content)
+        let recall = ModelWriteIntent.recallSubject(submitted)
+        let question = recall ?? submitted
         let words = SystemModelPlan.words(in: question)
-        guard !words.isEmpty, request.modelWriteTurn?.intent == nil, !SystemModelPlan.asksToChangeSomething(words) else { return nil }
+        guard !words.isEmpty, request.modelWriteTurn?.intent == nil,
+              recall != nil || !SystemModelPlan.asksToChangeSomething(words) else { return nil }
 
         let dayGroups: [CapabilityGroup] = SystemModelPlan.toolOrder
         let groups: [CapabilityGroup]
@@ -504,8 +512,10 @@ public enum SystemModelReads {
         case let .named(named):
             groups = dayGroups.filter(named.contains)
         case let .unsure(unsure):
+            if recall != nil { return nil }
             groups = unsure.contains(.calendar) ? [.calendar] : Array(dayGroups.filter(unsure.contains).prefix(1))
         case .unrelated:
+            if recall != nil { return nil }
             groups = SystemModelPlan.namesADay(words) ? [.calendar] : []
         }
         guard !groups.isEmpty else { return nil }
@@ -670,6 +680,10 @@ public enum SystemModelReads {
 /// needs, and the model's words are held back until the turn is over: if no
 /// write tool ran, its claim is never shown and one plain sentence says so.
 public enum SystemModelWrites {
+    /// Strip a conversational “remind me” when deciding which *source* the
+    /// question is about. This never changes the text submitted to a model.
+    public static func subjectForRouting(_ text: String) -> String { ModelWriteIntent.recallSubject(text) ?? text }
+
     /// Whether the request's last turn asks to change something. Only the
     /// chat may change things (`RequestOrigin.mayWritePersonalData`).
     public static func isChange(_ request: GenerationRequest) -> Bool {
@@ -677,9 +691,8 @@ public enum SystemModelWrites {
         guard request.origin.mayWritePersonalData,
               let last = request.messages.last(where: { $0.role == .user })
         else { return false }
-        return SystemModelPlan.asksToChangeSomething(
-            SystemModelPlan.words(in: SystemModelPlan.withoutReasoningSwitch(last.content))
-        )
+        let question = SystemModelPlan.withoutReasoningSwitch(last.content)
+        return ModelWriteIntent.recallSubject(question) == nil && SystemModelPlan.asksToChangeSomething(SystemModelPlan.words(in: question))
     }
 
     /// The request as a change is answered: its system turns and its last

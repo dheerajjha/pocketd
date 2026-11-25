@@ -7,11 +7,19 @@ public final class ModelWriteTurn: @unchecked Sendable, Equatable {
     @TaskLocal public static var current: ModelWriteTurn?
     let question: String?
     let intent: ModelWriteIntent?
+    let isRecall: Bool
     private let lock = NSLock()
-    private var spent = false
+    private enum Phase { case available, checking, saving, saved, finished }
+    private var phase = Phase.available
+    private var revoked = false
     private var receipts: [String] = []
+    private var waiters: [CheckedContinuation<String?, Never>] = []
 
-    init(question: String?) { self.question = question; intent = question.flatMap(ModelWriteIntent.init) }
+    init(question: String?) {
+        self.question = question
+        intent = question.flatMap(ModelWriteIntent.init)
+        isRecall = intent == nil && question.flatMap(ModelWriteIntent.recallSubject) != nil
+    }
 
     public typealias Payload = [String: any Sendable]
     public typealias Change = SystemToolPolicy.Change
@@ -30,10 +38,11 @@ public final class ModelWriteTurn: @unchecked Sendable, Equatable {
         guard let turn = current else { return ["text": refusal(for: change)] }
         enum Decision { case admitted, spent, refused }
         let decision: Decision = turn.lock.withLock {
-            if turn.spent { return .spent }
-            guard !Task.isCancelled, let intent = turn.intent, intent.change == change,
-                  intent.covers(title: title, when: when, minutes: minutes) else { return .refused }
-            turn.spent = true
+            if turn.phase != .available { return .spent }
+            guard !turn.revoked, !Task.isCancelled, let intent = turn.intent, intent.change == change,
+                   intent.covers(title: title, when: when, minutes: minutes) else { return .refused }
+            turn.phase = .checking
+            turn.receipts.removeAll() // a preceding refused proposal is not this operation's result
             return .admitted
         }
         switch decision {
@@ -46,8 +55,50 @@ public final class ModelWriteTurn: @unchecked Sendable, Equatable {
         }
         let result = await body()
         let actual = result["text"] as? String ?? refusal(for: change)
-        turn.lock.withLock { turn.receipts = [actual] }
+        let waiting = turn.lock.withLock {
+            turn.receipts = [actual]
+            turn.phase = didWrite(result) ? .saved : .finished
+            defer { turn.waiters.removeAll() }
+            return turn.waiters
+        }
+        for waiter in waiting { waiter.resume(returning: actual) }
         return result
+    }
+
+    /// Revoke future changes, including on a framework-owned task that hasn't
+    /// been cancelled. An OS save already in progress still owns its receipt.
+    public func revoke() { lock.withLock { revoked = true } }
+
+    /// Just before calling storage, *after* any suspending lookup. Direct
+    /// native actions have no model turn. No cancellation check after a save:
+    /// a successful commit is true even if the person just stopped narration.
+    static func beginMutation() -> Bool {
+        guard !Task.isCancelled else { return false }
+        guard let turn = current else { return true }
+        return turn.lock.withLock {
+            guard !turn.revoked, turn.phase == .checking else { return false }
+            turn.phase = .saving
+            return true
+        }
+    }
+
+    /// Recheck on the store actor after the hop to it, before touching the item.
+    public static var mayMutateStore: Bool {
+        guard let turn = current else { return true }
+        return !Task.isCancelled && turn.lock.withLock { !turn.revoked && turn.phase == .saving }
+    }
+
+    public var preventsReplay: Bool { lock.withLock { phase == .saving || phase == .saved } }
+
+    /// Stop or a transport error may win the race back to Ask. Wait only for
+    /// an actual mutation, never for a lookup or for the rest of the model.
+    public func settledReceipt() async -> String? {
+        await withCheckedContinuation { continuation in
+            lock.withLock {
+                if phase == .saving { waiters.append(continuation) }
+                else { continuation.resume(returning: receiptText) }
+            }
+        }
     }
 
     static func refusal(for change: Change) -> String {
@@ -58,11 +109,16 @@ public final class ModelWriteTurn: @unchecked Sendable, Equatable {
         }
     }
 
-    private func record(_ text: String) { lock.withLock { if !spent, !receipts.contains(text) { receipts.append(text) } } }
+    private func record(_ text: String) { lock.withLock { if phase == .available, !receipts.contains(text) { receipts.append(text) } } }
+    private var receiptText: String? { receipts.isEmpty ? nil : receipts.joined(separator: "\n") }
     /// Only trusted body results or local refusals. Once a write was attempted,
     /// Ask uses this as its transcript, even if the model had streamed an
     /// unrecognized preamble before the backend delivered the call.
-    public var receipt: String? { lock.withLock { receipts.isEmpty ? nil : receipts.joined(separator: "\n") } }
+    public var receipt: String? { lock.withLock { receiptText } }
+
+    /// An unwanted proposal while answering “remind me who…” cannot have
+    /// written anything. Don't replace the answer to that question with it.
+    public var narrationReceipt: String? { isRecall ? nil : receipt }
 
     /// A framework policy refused the call before it could enter the adapter.
     /// Preserve that fact without turning an attempt into write authority.

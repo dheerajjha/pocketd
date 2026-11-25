@@ -442,6 +442,7 @@ actor EventAccess {
         }
 
         do {
+            guard ModelWriteTurn.mayMutateStore else { return .failed }
             try store.save(reminder, commit: true)
             // After the save, because the identifier is only real once EventKit
             // has written it.
@@ -494,11 +495,13 @@ actor EventAccess {
                 guard item.refresh(), let row = Self.row(item, calendar: .current).cardTarget else { return nil }
                 return (row, item.isCompleted)
             } save: {
+                guard ModelWriteTurn.mayMutateStore else { throw CancellationError() }
                 item.isCompleted = completed
                 try store.save(item, commit: true)
                 item.reset() // verify from the store, not the flag we just assigned
             }
-        } catch {
+        } catch is CancellationError { return .failed }
+        catch {
             item.rollback() // leave no dirty tick behind for a retry to pick up
             DiagnosticLog.record(.failure(
                 area: .eventKit,
@@ -538,6 +541,7 @@ actor EventAccess {
             // event the two are equivalent, but `.thisEvent` on an event
             // carrying a recurrence rule is the spelling that means "detach
             // this one occurrence", which is not what a create means.
+            guard ModelWriteTurn.mayMutateStore else { return .failed }
             try store.save(event, span: .futureEvents, commit: true)
             remember(PersonalDataWrite(
                 kind: .event,

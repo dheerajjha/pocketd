@@ -165,6 +165,22 @@ public actor ConversationStore {
         try? fileManager.removeItem(at: url(for: id))
     }
 
+    /// A write already in EventKit when Stop was tapped can settle after a
+    /// thread switch. Amend only its existing, stopped slot; never recreate a
+    /// deleted file or replace the rest of a subsequently edited conversation.
+    public func updateStoppedReceipt(_ receipt: String, at target: GenerationTarget, sentAt: Date) throws {
+        let file = url(for: target.conversation)
+        guard fileManager.fileExists(atPath: file.path) else { return }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        var saved = try decoder.decode(Conversation.self, from: Data(contentsOf: file))
+        guard target.canWrite(to: saved.id, messages: saved.messages),
+              saved.messages[target.slot].sentAt?.timeIntervalSince1970.rounded(.down) == sentAt.timeIntervalSince1970.rounded(.down),
+              ReplyMarker.isMarkedStopped(saved.messages[target.slot].content) else { return }
+        saved.messages[target.slot].content = ReplyMarker.markingStopped(receipt)
+        try save(saved)
+    }
+
     /// A Shortcut arriving during setup can save an editable draft before Ask
     /// exists. A delayed save of that initial draft must never replace a turn
     /// already sent by the same invocation.
