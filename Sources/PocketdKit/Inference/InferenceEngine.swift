@@ -21,18 +21,43 @@ public struct GenerationRequest: Sendable, Equatable {
     /// privileged one. Fail closed.
     public var origin: RequestOrigin
 
+    private var submittedTurn: ModelWriteTurn?
+    /// Only Ask supplies the contemporaneous human input. A brief also has
+    /// `.onDeviceChat` origin, but its user-role text is assembled from data.
+    public var modelWriteTurn: ModelWriteTurn? {
+        guard origin.isThisPhone, let submittedTurn else { return nil }
+        if let question = submittedTurn.question {
+            guard origin.mayWritePersonalData, let last = messages.last,
+                  last.role == .user, last.content == question else { return nil }
+        }
+        return submittedTurn
+    }
+
+    /// A routine/brief may need to report a refused write, but does not receive
+    /// a human's authority. In particular its synthetic user turn is never parsed.
+    public func trackingPhoneWriteResults() -> Self {
+        var copy = self
+        if origin.isThisPhone, modelWriteTurn == nil { copy.submittedTurn = ModelWriteTurn(question: nil) }
+        return copy
+    }
+
     public init(
         modelID: String,
         messages: [ChatMessage],
         options: GenerationOptions = .default,
         sampling: SamplingParameters? = nil,
-        origin: RequestOrigin = .network(host: "unknown", port: 0)
+        origin: RequestOrigin = .network(host: "unknown", port: 0),
+        submittedQuestion: String? = nil
     ) {
         self.modelID = modelID
         self.messages = messages
         self.options = options
         self.sampling = sampling
         self.origin = origin
+        if origin.mayWritePersonalData, let submittedQuestion, let last = messages.last,
+           last.role == .user, last.content == submittedQuestion {
+            submittedTurn = ModelWriteTurn(question: submittedQuestion)
+        } else { submittedTurn = nil }
     }
 }
 

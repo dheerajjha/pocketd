@@ -15,33 +15,13 @@ extension AppModel {
 
     // MARK: - Ticking one off
 
-    /// Marks an open reminder done, from the circle on a reminder card.
-    ///
-    /// By title rather than by identifier, which is not a shortcut: a card's
-    /// rows carry no identifiers on purpose — `PersonalDataTools.describe` never
-    /// puts one in the payload, because an opaque handle costs prompt tokens and
-    /// tells the model nothing — so the title is genuinely all the card has.
-    /// Going through `PersonalDataWrites.completeReminder` rather than
-    /// re-implementing the search is what keeps the two halves honest: it
-    /// refuses an ambiguous title instead of guessing, it refuses a caller that
-    /// may not write, and it completes rather than deletes.
-    ///
-    /// - Returns: one sentence for the person who tapped, and whether the tick
-    ///   actually landed.
-    func completeReminder(named title: String) async -> (sentence: String, completed: Bool) {
-        let payload = await PersonalDataWrites.completeReminder(
-            title: title,
-            // The button is on this phone's screen, which is what this origin
-            // means. Nothing else can reach this method.
-            origin: .onDeviceChat,
-            existing: { await EventAccess.shared.reminders(in: DateWindow(start: nil, end: nil)) },
-            complete: { row in
-                guard let identifier = row.identifier else { return .failed }
-                return await EventAccess.shared.completeReminder(identifier: identifier)
-            }
-        )
-        let sentence = payload["text"] as? String ?? "That could not be ticked off."
-        return (sentence, payload["completed"] as? Bool == true)
+    /// A phone tap addresses the row EventKit returned, never a fresh title search.
+    func completeReminder(_ item: AnswerCard.Item, using actions: ReminderCardActions) async -> ReminderCardActions.Outcome {
+        let result = await actions.complete(item, enabled: reminderToolsEnabled, origin: .onDeviceChat) { reminder in
+            await EventAccess.shared.completeReminder(reminder)
+        }
+        if case .completed = result { dayMayHaveChanged() }
+        return result
     }
 
     // MARK: - Taking a write back

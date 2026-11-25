@@ -28,11 +28,9 @@ import PocketdKit
 @available(iOS 26.0, *)
 final class SystemToolRun: @unchecked Sendable {
     let origin: RequestOrigin
-    /// The person's latest message, `ToolContext.userText(of:)` of the request.
-    /// The calendar body believes the model's `duration_minutes` only when
-    /// these words say how long (`EventLength`) — Apple's model fills it in
-    /// for "dinner with Priya at 8pm" nine times in ten.
+    /// Prompt context, distinct from the independently submitted write turn.
     let userText: String?
+    let writeTurn: ModelWriteTurn?
     private let emit: @Sendable (GenerationEvent) -> Void
     private let lock = NSLock()
     private weak var session: LanguageModelSession?
@@ -44,10 +42,11 @@ final class SystemToolRun: @unchecked Sendable {
     private var wroteSomething = false
     private var stopped = false
 
-    init(origin: RequestOrigin, userText: String? = nil, rejectDuplicateWrites: Bool = false,
+    init(origin: RequestOrigin, userText: String? = nil, writeTurn: ModelWriteTurn? = nil, rejectDuplicateWrites: Bool = false,
          emit: @escaping @Sendable (GenerationEvent) -> Void) {
         self.origin = origin
         self.userText = userText
+        self.writeTurn = writeTurn
         self.rejectDuplicateWrites = rejectDuplicateWrites
         self.emit = emit
     }
@@ -134,6 +133,7 @@ final class SystemToolRun: @unchecked Sendable {
             return verdict
         }
         if case let .refuse(sentence) = verdict {
+            if let change { writeTurn?.noteRefused(change) }
             DiagnosticLog.record(.failure(area: .tools, code: "fm.toolRefused.\(name)"))
             return sentence
         }
@@ -156,11 +156,21 @@ final class SystemToolRun: @unchecked Sendable {
         // body through Apple's framework on the Mac probe, but the framework
         // owns the task that calls this, and the origin is the one value that
         // decides whether personal data may be read at all — so it is never
-        // left to arrive on its own. The person's words are bound beside it,
-        // and the calendar tool passes them too.
+        // left to arrive on its own. Bind the actual submission explicitly
+        // too; the framework's prompt or a returned tool result is not one.
         let origin = self.origin
         let userText = self.userText
-        let data: [String: any Sendable]
+        let writeTurn = self.writeTurn
+        let call: @Sendable () async -> ToolResult.CardOutput = {
+            await ToolResult.withCard(from: name, arguments: json) {
+                await ToolContext.$origin.withValue(origin) {
+                    await ToolContext.$userText.withValue(userText) {
+                        await ModelWriteTurn.$current.withValue(writeTurn) { await body(origin) }
+                    }
+                }
+            }
+        }
+        let output: ToolResult.CardOutput
         if isWrite {
             let mayStart = lock.withLock {
                 guard !stopped, !Task.isCancelled else { return false }
@@ -171,16 +181,10 @@ final class SystemToolRun: @unchecked Sendable {
             // A change is never abandoned part-way: EventKit may still save it
             // after a timeout said it had not happened, and an answer that
             // denies a reminder the list then shows is worse than a slow one.
-            data = await ToolContext.$origin.withValue(origin) {
-                await ToolContext.$userText.withValue(userText) { await body(origin) }
-            }
-            lock.withLock { wroteSomething = true }
-        } else if let read = await Self.withDeadline(Self.readDeadline, {
-            await ToolContext.$origin.withValue(origin) {
-                await ToolContext.$userText.withValue(userText) { await body(origin) }
-            }
-        }) {
-            data = read
+            output = await call()
+            if ModelWriteTurn.didWrite(output.data) { lock.withLock { wroteSomething = true } }
+        } else if let read = await Self.withDeadline(Self.readDeadline, call) {
+            output = read
         } else {
             DiagnosticLog.record(.toolCall(name: name, outcome: .failed, milliseconds: elapsed()))
             return "\(name) took too long to answer just now. Tell the user you couldn't check it this time."
@@ -188,19 +192,15 @@ final class SystemToolRun: @unchecked Sendable {
 
         // The card from the payload, never from the model's account of it —
         // the same rendering LlamaEngine emits for the same payload.
-        let rendered = ToolResult.render(data, from: name, arguments: json)
-        if let card = rendered.card { emit(.answerCard(card)) }
+        if let card = output.card { emit(.answerCard(card)) }
         if !isWrite { lock.withLock { readsReturned = true } }
-        DiagnosticLog.record(.toolCall(name: name, outcome: Self.outcome(of: data), milliseconds: elapsed()))
-        return SystemToolOutput.render(data)
+        DiagnosticLog.record(.toolCall(name: name, outcome: Self.outcome(of: output.data), milliseconds: elapsed()))
+        return SystemToolOutput.render(output.data)
     }
 
     /// Same classification LlamaEngine records, read off the payload.
     static func outcome(of data: [String: any Sendable]) -> DiagnosticEvent.ToolOutcome {
-        guard let text = data["text"] as? String else { return .ok }
-        if text == ToolContext.refusal { return .refusedByOrigin }
-        if PersonalDataAuthorization.isRefusalSentence(text) { return .unauthorised }
-        return .empty
+        ToolResult.outcome(of: data)
     }
 
     /// Sorted keys, so the card builder and the body read the same bytes on
@@ -222,7 +222,7 @@ final class SystemToolRun: @unchecked Sendable {
     /// that tried to ask for permission it could never get held "how did I
     /// sleep?" for 86 seconds before saying so. Twelve is long past any
     /// healthy read and short enough that nobody reaches for Stop first.
-    static let readDeadline: Duration = .seconds(12)
+    static let readDeadline = ToolReadDeadline.standard
 
     /// The operation's result, or `nil` if the deadline came first.
     ///
@@ -234,23 +234,7 @@ final class SystemToolRun: @unchecked Sendable {
         _ deadline: Duration,
         _ operation: @escaping @Sendable () async -> T
     ) async -> T? {
-        guard !Task.isCancelled else { return nil }
-        let (result, reply) = AsyncStream<T>.makeStream(bufferingPolicy: .bufferingOldest(1))
-        let work = Task {
-            guard !Task.isCancelled else { return }
-            reply.yield(await operation())
-            reply.finish()
-        }
-        let timer = Task {
-            try await Task.sleep(for: deadline)
-            reply.finish()
-        }
-        defer { reply.finish(); work.cancel(); timer.cancel() }
-        // A cancelled reader stops waiting immediately, even if an OS read is
-        // ignoring cancellation. Such a read cannot start another tool or send
-        // its result to a model after this stream has ended.
-        var iterator = result.makeAsyncIterator()
-        return await iterator.next()
+        await ToolReadDeadline.value(within: deadline, operation)
     }
 
     /// The trimmed text, or nothing, so an empty field never reaches a body
@@ -312,7 +296,6 @@ struct SystemCalendarTool: Tool {
         let title = SystemToolRun.present(arguments.title)
         let start = SystemToolRun.present(arguments.start)
         let minutes = arguments.duration_minutes
-        let userText = run.userText
 
         var json: [String: any Sendable] = ["action": action.rawValue]
         switch action {
@@ -329,7 +312,7 @@ struct SystemCalendarTool: Tool {
         return await run.execute(name, change: action == .create ? .addEvent : nil, arguments: json) { origin in
             await ToolBodies.calendar(
                 action: action, range: range, title: title, start: start,
-                durationMinutes: minutes, userText: userText, origin: origin
+                durationMinutes: minutes, origin: origin
             )
         }
     }

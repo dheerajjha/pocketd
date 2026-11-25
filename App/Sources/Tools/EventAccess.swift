@@ -309,18 +309,7 @@ actor EventAccess {
 
         let predicate = store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: nil)
         let rows = await fetchRows(matching: predicate)
-            .compactMap { row -> DayReminder? in
-                // A row with no identifier never came from the store and
-                // cannot be ticked off; the page has no use for it.
-                guard let identifier = row.identifier else { return nil }
-                return DayReminder(
-                    id: identifier,
-                    title: row.title.attackerControlledValue(),
-                    due: row.due,
-                    dueHasTime: row.dueHasTime,
-                    priority: row.priority
-                )
-            }
+            .compactMap(\.cardTarget)
         return .rows(Array(rows.prefix(limit)), truncated: rows.count > limit)
     }
 
@@ -336,23 +325,16 @@ actor EventAccess {
         let calendar = Calendar.current
         return await withCheckedContinuation { (continuation: CheckedContinuation<[ReminderRow], Never>) in
             store.fetchReminders(matching: predicate) { reminders in
-                continuation.resume(returning: (reminders ?? []).map { reminder in
-                    let components = reminder.dueDateComponents
-                    return ReminderRow(
-                        title: Self.displayTitle(reminder.title),
-                        due: components.flatMap { calendar.date(from: $0) },
-                        // A date-only reminder has no hour. Formatting it with
-                        // one would invent a deadline the user never set.
-                        dueHasTime: components?.hour != nil,
-                        priority: reminder.priority,
-                        // Read inside the callback with everything else, so no
-                        // `EKReminder` escapes onto the actor.
-                        identifier: reminder.calendarItemIdentifier,
-                        repeats: Self.pattern(of: reminder.recurrenceRules?.first)
-                    )
-                })
+                continuation.resume(returning: (reminders ?? []).map { Self.row($0, calendar: calendar) })
             }
         }
+    }
+
+    private nonisolated static func row(_ reminder: EKReminder, calendar: Calendar) -> ReminderRow {
+        let components = reminder.dueDateComponents
+        return ReminderRow(title: displayTitle(reminder.title), due: components.flatMap { calendar.date(from: $0) },
+                           dueHasTime: components?.hour != nil, priority: reminder.priority,
+                           identifier: reminder.calendarItemIdentifier, repeats: pattern(of: reminder.recurrenceRules?.first))
     }
 
     // MARK: - Recurrence
@@ -483,7 +465,13 @@ actor EventAccess {
     /// instead — rare, and the kind of wrong nobody discovers until they need
     /// the thing they thought was still outstanding.
     func completeReminder(identifier: String) async -> WriteResult {
-        await setCompleted(true, identifier: identifier)
+        setCompleted(true, identifier: identifier)
+    }
+
+    /// A tap is about the row that was drawn. Never substitute another reminder
+    /// or a later occurrence when a sync changed it under an open conversation.
+    func completeReminder(_ reminder: DayReminder) -> WriteResult {
+        setCompleted(true, identifier: reminder.id, matching: reminder)
     }
 
     /// Un-ticks one, by identifier: the Undo on the Reminders page.
@@ -492,22 +480,26 @@ actor EventAccess {
     /// created; a completed reminder is the user's own, and the only honest
     /// reversal of a tick is to un-tick it. Routing it through the write
     /// ledger would delete the reminder the person just asked to keep.
-    func uncompleteReminder(identifier: String) async -> WriteResult {
-        await setCompleted(false, identifier: identifier)
+    func uncompleteReminder(identifier: String, matching reminder: DayReminder? = nil) async -> WriteResult {
+        setCompleted(false, identifier: identifier, matching: reminder)
     }
 
-    private func setCompleted(_ completed: Bool, identifier: String) async -> WriteResult {
+    private func setCompleted(_ completed: Bool, identifier: String, matching expected: DayReminder? = nil) -> WriteResult {
         let authorization = standing(.reminders)
         guard authorization.canRead else { return .unauthorised(authorization) }
 
-        guard let item = store.calendarItem(withIdentifier: identifier) as? EKReminder else {
-            return .failed
-        }
-        item.isCompleted = completed
+        guard let item = store.calendarItem(withIdentifier: identifier) as? EKReminder else { return .failed }
         do {
-            try store.save(item, commit: true)
-            return .written
+            return try ReminderCompletion.set(completed, id: identifier, matching: expected) {
+                guard item.refresh(), let row = Self.row(item, calendar: .current).cardTarget else { return nil }
+                return (row, item.isCompleted)
+            } save: {
+                item.isCompleted = completed
+                try store.save(item, commit: true)
+                item.reset() // verify from the store, not the flag we just assigned
+            }
         } catch {
+            item.rollback() // leave no dirty tick behind for a retry to pick up
             DiagnosticLog.record(.failure(
                 area: .eventKit,
                 code: completed ? "reminder_complete_failed" : "reminder_uncomplete_failed"

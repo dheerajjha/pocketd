@@ -1,38 +1,19 @@
 import Foundation
 import PocketdKit
 
-/// The reads the built-in brain makes itself, through the same bodies its
-/// tools call.
-///
-/// Two callers: the engine's read-first path (`SystemModelReads`), which reads
-/// before Apple's model is asked anything, and the health tool wrapper. Both
-/// end in `ToolBodies` — the origin gate, the "not connected" sentences and the
-/// row caps are the tools' own — so a card drawn from a read is the card the
-/// same tool call would have drawn.
+/// Phone lookups, through the same bodies the models' tools call. Both the
+/// Apple engine and a download answering an explicit list question use these.
 enum SystemReads {
     /// One read, as the tool it stands in for: its registered name, the
     /// arguments a tool call would have carried (the card reads its heading
     /// from them — "Tomorrow", "Overdue"), and the body. `nil` for a domain
     /// that is switched off, which has nothing to run.
-    static func call(
-        for read: SystemModelReads.Read
-    ) -> (name: String, arguments: [String: any Sendable], body: @Sendable (RequestOrigin) async -> [String: any Sendable])? {
-        switch read {
-        case let .calendar(range):
-            return (PersonalDataToolNames.calendar, ["action": CalendarAction.list.rawValue, "range": range.rawValue], { origin in
-                await ToolBodies.calendar(action: .list, range: range, origin: origin)
-            })
-        case let .reminders(filter):
-            return (PersonalDataToolNames.reminders, ["action": ReminderAction.list.rawValue, "filter": filter.rawValue], { origin in
-                await ToolBodies.reminders(action: .list, filter: filter, origin: origin)
-            })
-        case let .health(focus):
-            return (PersonalDataToolNames.health, ["focus": focus.rawValue], { origin in
-                await health(focus: focus, origin: origin)
-            })
-        case .switchedOff:
-            return nil
-        }
+    static func call(for read: SystemModelReads.Read) -> SystemModelReads.Read.Call? {
+        read.call(
+            calendar: { await ToolBodies.calendar(action: .list, range: $0, origin: $1) },
+            reminders: { await ToolBodies.reminders(action: .list, filter: $0, origin: $1) },
+            health: { await health(focus: $0, origin: $1) }
+        )
     }
 
     /// The health body, or — on a Debug simulator under `-pocketd.demoHealth` —

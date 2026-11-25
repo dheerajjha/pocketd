@@ -76,7 +76,7 @@ enum TourStage {
         ask("Remind me to call the plumber at 5", tool: PersonalDataToolNames.reminders, model)
 
         guard await beat(16.2, "reminder-set") else { return }
-        let written = await AskPreviewChat.writeARealReminder("Call the plumber", when: "5pm today", clearingWith: model)
+        let written = await AskPreviewChat.writeARealReminder("Call the plumber", when: "5pm today", model: model)
         answer(content: "", cards: [written].compactMap { $0 }, model)
 
         guard await beat(19.8, "routines") else { return }

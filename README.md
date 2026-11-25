@@ -605,7 +605,15 @@ network callers, including the chat page the phone itself serves. The assistant
 can also add events and reminders, including repeating ones, using a native
 `EKRecurrenceRule`. A stricter gate in the same file, `mayWritePersonalData`,
 allows writes only from the conversation in the app. Neither a network client
-nor a routine can change your calendar or reminders. Usage events cannot carry
+nor a routine can change your calendar or reminders. In Ask, request one change
+directly: “Remind me to buy milk at 6pm”, “Add lunch to my calendar at 1pm”,
+or “Tick off buy milk”. The write check recognizes English command forms;
+the title itself can be in another language. If it cannot match the requested
+action, title and timing, nothing is saved. You can rephrase or use Calendar
+or Reminders directly. Tapping a reminder's own completion button and Undo
+doesn't depend on how you phrase a chat message.
+
+Usage events cannot carry
 those details either: `AnalyticsSchema` is an allow-list of property names beside a list of
 banned ones, and a test fails the build when an event names a prompt, a file, an
 address or a health figure. There is no crash reporting and no account.

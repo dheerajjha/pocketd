@@ -36,6 +36,9 @@ generated from `project.yml` by XcodeGen) adds llama.cpp through LocalLLMClient 
 ## Apple Private Cloud Compute
 - Only an explicit phone selection may send a request to PCC. Preserve the local defaults, a separate cloud model ID, and downloaded-only LAN serving. Recheck the signed build, Apple's actual readiness, and the per-user quota rather than guessing from the device name or a previous launch. See `docs/apple-private-cloud-compute.md` for device and signing verification.
 
+## Model-origin calendar and reminder changes
+- `ModelPersonalDataWrites` checks the explicitly submitted Ask turn before even looking for a duplicate or completion target. Keep model proposals and history out of the authority channel. A card tap or Undo is a different, native action. Show the actual write-body receipt; a parsed call, a failed save and an already-existing reminder are not new writes. Unrecognized command forms fail closed (English directive, arbitrary-script title).
+
 ## Upload-time rule
 App Intent, App Shortcut and Control strings must not name Apple products (iPhone, iPad, Apple Watch, Siri). Nothing
 fails locally; Apple rejects the build during processing (ITMS-90626). Before an upload, `grep -i` the built app's

@@ -16,7 +16,7 @@ import SwiftUI
 /// "tomorrow" in it means today.
 struct AskTranscript: View {
     let writes: [PersonalDataWrite]
-    let onCompleteReminder: (String) -> Void
+    let reminderActions: AnswerCardView.ReminderActions
     let onUndo: (PersonalDataWrite) -> Void
     let onCopy: (ChatMessage) -> Void
     let onFeedback: (Bool) -> Void
@@ -177,7 +177,7 @@ struct AskTranscript: View {
                 message: message,
                 writes: writes,
                 isStreaming: isLast && model.isGenerating,
-                onCompleteReminder: onCompleteReminder,
+                reminderActions: reminderActions,
                 onUndo: onUndo,
                 onCopy: { onCopy(message) }
             )

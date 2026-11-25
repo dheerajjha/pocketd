@@ -20,7 +20,7 @@ struct AskMessageRow: View {
     /// The reply being written right now, so an answer whose data arrived
     /// before its sentence can say the sentence is coming.
     var isStreaming: Bool = false
-    let onCompleteReminder: (String) -> Void
+    var reminderActions: AnswerCardView.ReminderActions?
     let onUndo: (PersonalDataWrite) -> Void
     let onCopy: () -> Void
 
@@ -125,7 +125,7 @@ struct AskMessageRow: View {
                         if !(omitsLede && card.sections.isEmpty && undo == nil) {
                             AnswerCardView(
                                 card: card,
-                                onCompleteReminder: onCompleteReminder,
+                                reminderActions: reminderActions,
                                 undo: undo,
                                 omitsLede: omitsLede
                             )
@@ -372,7 +372,6 @@ struct AskFeedbackRow: View {
             AskMessageRow(
                 message: .user("What's on tomorrow?"),
                 writes: [],
-                onCompleteReminder: { _ in },
                 onUndo: { _ in },
                 onCopy: {}
             )
@@ -391,7 +390,6 @@ struct AskFeedbackRow: View {
                     )]
                 ),
                 writes: [],
-                onCompleteReminder: { _ in },
                 onUndo: { _ in },
                 onCopy: {}
             )
@@ -399,7 +397,6 @@ struct AskFeedbackRow: View {
             AskMessageRow(
                 message: .assistant("Stopped."),
                 writes: [],
-                onCompleteReminder: { _ in },
                 onUndo: { _ in },
                 onCopy: {}
             )
@@ -416,7 +413,6 @@ struct AskFeedbackRow: View {
             AskMessageRow(
                 message: .user("Remind me to call the dentist at 4"),
                 writes: [],
-                onCompleteReminder: { _ in },
                 onUndo: { _ in },
                 onCopy: {}
             )
@@ -428,7 +424,6 @@ struct AskFeedbackRow: View {
                     lede: "Reminder set: “Call the dentist” for 4:00 PM."
                 )]),
                 writes: [],
-                onCompleteReminder: { _ in },
                 onUndo: { _ in },
                 onCopy: {}
             )

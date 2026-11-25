@@ -75,6 +75,14 @@ public struct ReminderRow: Sendable, Equatable {
     /// would silently drop the repetition the user asked for.
     public var repeats: ReminderRepeat?
 
+    /// The live card's exact row, including the due date of this occurrence. The
+    /// identifier stays out of `describe`, including for Apple's cloud model.
+    public var cardTarget: DayReminder? {
+        guard let identifier, !identifier.isEmpty else { return nil }
+        return DayReminder(id: identifier, title: title.attackerControlledValue(), due: due,
+                           dueHasTime: dueHasTime, priority: priority)
+    }
+
     public init(
         title: String,
         due: Date? = nil,
@@ -177,7 +185,17 @@ public enum PersonalDataTools {
             guard !rows.isEmpty else {
                 return ["text": filter.emptyText]
             }
-            var data: [String: any Sendable] = ["reminders": rows.map(describe)]
+            let capture = origin == .onDeviceChat ? NativeReminderCard.current : nil
+            var nativeItems: [AnswerCard.Item] = []
+            let fields = rows.map { row in
+                let fields = describe(row)
+                if capture != nil {
+                    // Pair each target with its own visible fields before leaving the row.
+                    nativeItems.append(AnswerCardBuilders.reminderItem(fields, target: row.cardTarget))
+                }
+                return fields
+            }
+            var data: [String: any Sendable] = ["reminders": fields]
             if rows.contains(where: { $0.priority > 0 }) {
                 // Once, at the top, not on every row. EventKit's scale is
                 // RFC 5545's — 1 highest, 9 lowest — which is backwards from
@@ -189,6 +207,7 @@ public enum PersonalDataTools {
             if truncated {
                 data["note"] = "Only the first \(rowLimit) reminders are listed; there are more."
             }
+            if let capture { await capture.record(data, items: nativeItems) }
             return data
         }
     }

@@ -460,4 +460,16 @@ public struct ReminderCompletion: Sendable, Equatable, Identifiable {
     public func canUndo(now: Date = Date()) -> Bool {
         now.timeIntervalSince(completedAt) < WriteUndo.window
     }
+
+    /// Run synchronously on the store actor. A no-op on a reminder completed
+    /// elsewhere isn't our write to undo; an advanced recurrence isn't this row.
+    public static func set(_ completed: Bool, id: String, matching expected: DayReminder?,
+                           read: () -> (row: DayReminder, completed: Bool)?, save: () throws -> Void) rethrows -> WriteResult {
+        guard let before = read(), before.row.id == id, before.completed != completed,
+              expected == nil || expected == before.row else { return .failed }
+        try save()
+        guard let after = read(), after.row.id == id, after.completed == completed,
+              expected == nil || expected == after.row else { return .failed }
+        return .written
+    }
 }

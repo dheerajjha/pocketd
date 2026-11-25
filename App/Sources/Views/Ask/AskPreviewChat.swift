@@ -79,7 +79,7 @@ enum AskPreviewChat {
 
         // Last, and after the transcript is on screen, because it touches
         // EventKit and may take a moment.
-        if let written = await writeARealReminder(clearingWith: model) {
+        if let written = await writeARealReminder(model: model) {
             model.conversation.append(.user("Remind me to call the dentist at 4"))
             model.conversation.append(ChatMessage(role: .assistant, content: "", cards: [written]))
         }
@@ -121,10 +121,7 @@ enum AskPreviewChat {
 
     /// The titles are `DemoSeed`'s own, deliberately.
     ///
-    /// The circles on a reminder card tick a *real* reminder off by title, so a
-    /// card built from invented names would draw three controls that can only
-    /// ever report "I could not find that" — a demonstration of the failure path
-    /// dressed up as the feature. With the seeded names they work.
+    /// Like a saved answer, a synthetic card has no live EventKit handles.
     ///
     /// Overdue means overdue: only the reminder that slipped yesterday, the
     /// one the Due tile counts. The card used to list today's and tomorrow's
@@ -173,18 +170,15 @@ enum AskPreviewChat {
     /// `EventAccess`'s ledger by the save itself, which is what makes the pill
     /// appear and work.
     ///
-    /// The tick-off first is what makes a second run behave like a first one.
-    /// `createReminder` refuses to file the same thing twice — correctly, it is
-    /// the model calling itself in a loop that the check exists for — and on a
-    /// relaunch that refusal would produce a card saying "already on the list"
-    /// with nothing to undo, which is not the state this seed is for.
+    /// A second run may correctly say "already on the list". Never clear a
+    /// reminder by a fixture's title: it could be somebody else's reminder.
     @MainActor
     static func writeARealReminder(
         _ title: String = "Call the dentist",
         when: String = "4pm today",
-        clearingWith model: AppModel
+        model: AppModel
     ) async -> AnswerCard? {
-        _ = await model.completeReminder(named: title)
+        guard model.reminderToolsEnabled else { return nil }
         let payload = await PersonalDataWrites.createReminder(
             title: title,
             when: when,

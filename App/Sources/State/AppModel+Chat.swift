@@ -179,8 +179,10 @@ extension AppModel {
             modelID: loadedModelID ?? "",
             messages: messages,
             options: GenerationOptions(maxTokens: configuration.maxContextTokens),
-            origin: .onDeviceChat
+            origin: .onDeviceChat,
+            submittedQuestion: text
         )
+        let writeTurn = request.modelWriteTurn
 
         // The origin identifies the phone UI, not where inference happens.
         // PhoneBrain dispatches only to the provider the person selected.
@@ -199,7 +201,8 @@ extension AppModel {
                             // invalidates every view that reads it.
                             if self.activeToolName != nil { self.activeToolName = nil }
                             guard target.canWrite(to: self.currentConversationID, messages: self.conversation) else { return }
-                            self.conversation[target.slot].content += chunk
+                            if let receipt = writeTurn?.receipt { self.conversation[target.slot].content = receipt }
+                            else { self.conversation[target.slot].content += chunk }
                             // After the words, not before: what is on disk
                             // when the app is killed is what was on screen.
                             self.checkpointConversation()
@@ -212,6 +215,7 @@ extension AppModel {
                             guard self.isWriting(serial),
                                   target.canWrite(to: self.currentConversationID, messages: self.conversation)
                             else { return }
+                            if let receipt = writeTurn?.receipt { self.conversation[target.slot].content = receipt }
                             self.conversation[target.slot].cards.append(card)
                             // Once per generation, and only for a card that
                             // reported something. A question that reads the
@@ -268,7 +272,7 @@ extension AppModel {
                 // but instructions is no reply, and says so.
                 if target.canWrite(to: self.currentConversationID, messages: self.conversation) {
                     let reply = self.conversation[target.slot]
-                    let cleaned = echo.clean(reply.content).text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let cleaned = writeTurn?.receipt ?? echo.clean(reply.content).text.trimmingCharacters(in: .whitespacesAndNewlines)
                     if cleaned != reply.content.trimmingCharacters(in: .whitespacesAndNewlines) {
                         self.conversation[target.slot].content = cleaned
                     }

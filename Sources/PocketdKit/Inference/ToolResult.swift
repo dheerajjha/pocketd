@@ -11,6 +11,14 @@ import Foundation
 /// the shape the chat templates were trained on.
 public enum ToolResult {
 
+    /// Diagnostics carry the outcome only, never the contents of a read.
+    public static func outcome(of data: [String: any Sendable]) -> DiagnosticEvent.ToolOutcome {
+        guard let text = data["text"] as? String else { return .ok }
+        if text == ToolContext.refusal { return .refusedByOrigin }
+        if PersonalDataAuthorization.isRefusalSentence(text) { return .unauthorised }
+        return .empty
+    }
+
     /// Renders a tool's structured output as the model will read it.
     public static func encode(_ data: [String: any Sendable]) -> String {
         if JSONSerialization.isValidJSONObject(data),

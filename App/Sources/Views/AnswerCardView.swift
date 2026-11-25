@@ -28,7 +28,12 @@ struct AnswerCardView: View {
     /// Ticking a reminder off from its own row. `nil` in a preview or anywhere
     /// the transcript is being read rather than used, which is what removes the
     /// circles rather than leaving dead ones on screen.
-    var onCompleteReminder: ((String) -> Void)?
+    var reminderActions: ReminderActions?
+
+    struct ReminderActions {
+        let state: ReminderCardActions
+        let complete: (AnswerCard.Item) -> Void
+    }
 
     /// The write this block reports, while it can still be taken back.
     var undo: UndoOffer?
@@ -47,15 +52,6 @@ struct AnswerCardView: View {
     }
 
     @Environment(\.dynamicTypeSize) private var typeSize
-
-    /// Titles ticked off in this view's lifetime.
-    ///
-    /// View-local on purpose. The block is a rendering of a payload that was
-    /// true when the tool ran, and re-reading EventKit to redraw it would make
-    /// the transcript disagree with itself as the day went on. What a tap
-    /// changes is the reminders list; what it changes *here* is only the mark
-    /// beside the row the finger landed on.
-    @State private var completed: Set<String> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: PDSpacing.s) {
@@ -236,6 +232,9 @@ struct AnswerCardView: View {
             EventRow.timeline(of: items)
         case PersonalDataToolNames.reminders:
             ruled(items.indices) { checkRow(items[$0]) }
+            if reminderActions != nil, items.contains(where: { $0.reminder == nil }) {
+                quietLine(ReminderCardActions.needsFreshList, symbol: "info.circle", tint: .pd.inkSecondary)
+            }
         default:
             ruled(items.indices) { plainItem(items[$0]) }
         }
@@ -243,9 +242,10 @@ struct AnswerCardView: View {
 
     /// A reminder, with the circle that ticks it off.
     private func checkRow(_ item: AnswerCard.Item) -> some View {
-        let isDone = completed.contains(item.text)
+        let phase = reminderActions?.state.phase(for: item) ?? .open
+        let isDone = phase.isDone
         return HStack(alignment: .firstTextBaseline, spacing: PDSpacing.xs) {
-            circle(for: item.text, isDone: isDone)
+            circle(for: item, phase: phase)
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.text)
                     .font(Font.pd.rowTitle)
@@ -274,26 +274,21 @@ struct AnswerCardView: View {
     /// A reminder's circle, in the text's own size so it grows with it, inside
     /// a 44pt target.
     @ViewBuilder
-    private func circle(for title: String, isDone: Bool) -> some View {
-        let glyph = Text(Image(systemName: isDone ? "checkmark.circle.fill" : "circle"))
+    private func circle(for item: AnswerCard.Item, phase: ReminderCardActions.Phase) -> some View {
+        let glyph = Text(Image(systemName: phase.isDone ? "checkmark.circle.fill" : "circle"))
             .font(Font.pd.lead)
-            .foregroundStyle(isDone ? Color.pd.positive : Color.pd.inkTertiary)
-        if let onCompleteReminder {
-            Button {
-                guard !isDone else { return }
-                Haptics.success()
-                // Optimistic, and it stays optimistic. What a failure produces
-                // is a sentence worth reading — an ambiguous title, a permission
-                // that is off — and that belongs in the toast the screen raises,
-                // not as a third line under a row.
-                completed.insert(title)
-                onCompleteReminder(title)
-            } label: {
-                glyph.pdHitTarget()
+            .foregroundStyle(phase.isDone ? Color.pd.positive : Color.pd.inkTertiary)
+        if let reminderActions, item.reminder != nil {
+            Button { reminderActions.complete(item) } label: {
+                Group {
+                    if phase.isPending { ProgressView().controlSize(.small) } else { glyph }
+                }
+                .pdHitTarget()
             }
             .buttonStyle(PDPressStyle())
-            .disabled(isDone)
-            .accessibilityLabel(isDone ? "\(title), done" : "Tick off \(title)")
+            .disabled(phase != .open)
+            .accessibilityLabel(phase.isPending ? "Saving \(item.text)" : phase.isDone ? "\(item.text), done" : "Tick off \(item.text)")
+            .accessibilityValue(item.detail ?? "")
             // The 44pt target is centred on the circle; this puts the circle
             // itself back on the card's text edge, under the header's tile,
             // and lets the target overhang into the card's padding.
@@ -806,7 +801,7 @@ private struct CardGallery: View {
         ScrollView {
             VStack(spacing: PDSpacing.cardGap) {
                 PDCard { AnswerCardView(card: sampleEvents) }
-                PDCard { AnswerCardView(card: sampleReminders, onCompleteReminder: { _ in }) }
+                PDCard { AnswerCardView(card: sampleReminders) }
                 PDCard {
                     AnswerCardView(
                         card: sampleWrite,

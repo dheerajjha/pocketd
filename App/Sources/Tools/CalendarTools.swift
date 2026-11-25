@@ -58,3 +58,19 @@ struct CalendarTool {
         ))
     }
 }
+
+extension CalendarTool.Arguments {
+    private enum Keys: String, CodingKey { case action, range, title, start, duration_minutes }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        action = try c.decode(CalendarAction.self, forKey: .action)
+        // The macro expects a nonoptional enum, but create does not use a
+        // list range. Never supply the *operation* or any write detail here.
+        range = action == .list ? try c.decode(CalendarRange.self, forKey: .range)
+            : try c.decodeIfPresent(CalendarRange.self, forKey: .range) ?? .today
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        start = try c.decodeIfPresent(String.self, forKey: .start)
+        duration_minutes = try c.decodeIfPresent(Int.self, forKey: .duration_minutes)
+    }
+}

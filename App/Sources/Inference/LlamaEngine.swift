@@ -764,7 +764,9 @@ actor LlamaEngine: InferenceEngine {
             // (`EventLength`); a network request binds none.
             await ToolContext.$origin.withValue(request.origin) {
                 await ToolContext.$userText.withValue(ToolContext.userText(of: request)) {
-                    await self.run(request, token: token, continuation: continuation)
+                    await ModelWriteTurn.$current.withValue(request.modelWriteTurn) {
+                        await self.run(request, token: token, continuation: continuation)
+                    }
                 }
             }
         }
@@ -810,6 +812,23 @@ actor LlamaEngine: InferenceEngine {
         // the network cost the phone a reload it can never use.
         guard request.modelID.isEmpty || request.modelID == model.id else {
             continuation.finish(throwing: InferenceError.modelMismatch(requested: request.modelID, loaded: model.id))
+            return
+        }
+
+        // An explicit list question doesn't need a decode or a new KV cache.
+        // Use the current admission plan, not the previous client's frozen
+        // tools. The OS body and card are the same ones a model call uses.
+        do {
+            if try await DownloadedDayRead.answer(
+                request, gate: toolGate, callFor: SystemReads.call(for:),
+                isAdmitted: { name in await self.capabilityPlan?.toolNames.contains(name) == true },
+                emit: { continuation.yield($0) }
+            ) {
+                continuation.finish()
+                return
+            }
+        } catch {
+            continuation.finish(throwing: error is CancellationError ? InferenceError.cancelled : error)
             return
         }
 
@@ -1358,35 +1377,20 @@ actor LlamaEngine: InferenceEngine {
             return ToolResult.Rendered(prompt: ToolResult.unknownTool(named: call.name))
         }
         do {
-            let data = try await tool.call(argumentsJSON: call.arguments).data
-            DiagnosticLog.record(.toolCall(name: call.name, outcome: Self.outcome(of: data), milliseconds: elapsed()))
-            return ToolResult.render(
-                data,
-                from: call.name,
-                arguments: call.arguments
-            )
+            let output = try await ToolResult.withCard(from: call.name, arguments: call.arguments) {
+                try await tool.call(argumentsJSON: call.arguments).data
+            }
+            DiagnosticLog.record(.toolCall(name: call.name, outcome: ToolResult.outcome(of: output.data), milliseconds: elapsed()))
+            return ToolResult.Rendered(prompt: ToolResult.encode(output.data), card: output.card)
         } catch {
             DiagnosticLog.record(.toolCall(name: call.name, outcome: .failed, milliseconds: elapsed()))
+            ModelWriteTurn.noteUndecodable(tool: call.name, arguments: call.arguments)
             // Deliberately not `error.localizedDescription`: the model repeats
             // what it reads, and a decoding error's description is a paragraph
             // of Swift type names aimed at us, not at whoever asked the
             // question.
             return ToolResult.Rendered(prompt: ToolResult.failed(tool: call.name))
         }
-    }
-
-    /// Which of the tool outcomes a payload represents.
-    ///
-    /// Read off the payload rather than reported by each tool, because these
-    /// tools deliberately never throw — every refusal is a `text` value the
-    /// model reads — so there is no error to classify and the sentence is the
-    /// only evidence there is. Compared against the constants the sentences are
-    /// built from, so a reworded refusal moves both at once.
-    private static func outcome(of data: [String: any Sendable]) -> DiagnosticEvent.ToolOutcome {
-        guard let text = data["text"] as? String else { return .ok }
-        if text == ToolContext.refusal { return .refusedByOrigin }
-        if PersonalDataAuthorization.isRefusalSentence(text) { return .unauthorised }
-        return .empty
     }
 }
 

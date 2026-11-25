@@ -57,3 +57,18 @@ struct RemindersTool {
         ))
     }
 }
+
+extension RemindersTool.Arguments {
+    private enum Keys: String, CodingKey { case action, filter, title, when }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        action = try c.decode(ReminderAction.self, forKey: .action)
+        // A real Qwen create with the correct title/time omitted the filter
+        // that only list uses. Keep reads and the action itself strict.
+        filter = action == .list ? try c.decode(ReminderFilter.self, forKey: .filter)
+            : try c.decodeIfPresent(ReminderFilter.self, forKey: .filter) ?? .all_open
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        when = try c.decodeIfPresent(String.self, forKey: .when)
+    }
+}

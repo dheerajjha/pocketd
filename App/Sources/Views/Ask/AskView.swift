@@ -22,6 +22,7 @@ struct AskView: View {
 
     /// Writes still inside their undo window, pulled after every generation.
     @State private var writes: [PersonalDataWrite] = []
+    @State private var reminderActions = ReminderCardActions()
 
     var body: some View {
         ConversationContent(
@@ -29,7 +30,7 @@ struct AskView: View {
             forcedThinking: stagesPendingStates,
             onExample: ask(_:),
             onConnect: connect(_:),
-            onCompleteReminder: completeReminder(_:),
+            reminderActions: .init(state: reminderActions, complete: completeReminder(_:)),
             onUndo: undo(_:),
             onCopy: copy(_:),
             onFeedback: feedback(_:)
@@ -109,20 +110,32 @@ struct AskView: View {
         }
     }
 
-    private func completeReminder(_ title: String) {
+    private func completeReminder(_ item: AnswerCard.Item) {
         Task {
-            let result = await model.completeReminder(named: title)
-            guard !result.completed else {
-                // Today's Due tile is counting it until the day is read again,
-                // and Today is under this sheet.
-                model.dayMayHaveChanged()
-                toasts?.show("Ticked off", symbol: "checkmark.circle", tint: .pd.positive)
-                return
+            switch await model.completeReminder(item, using: reminderActions) {
+            case .ignored: break
+            case .failed(let sentence):
+                toasts?.show(sentence, symbol: "exclamationmark.circle", tint: .pd.caution)
+            case .completed(let completion):
+                Haptics.success()
+                toasts?.show(completion.sentence, symbol: "checkmark.circle", tint: .pd.positive,
+                             action: ToastAction(title: "Undo") { undoTick(completion, item: item) })
             }
-            // The sentence rather than "failed": the interesting cases are an
-            // ambiguous title and a permission that is off, and both are
-            // answerable by the person reading them.
-            toasts?.show(AnswerWords.curlingQuotes(result.sentence), symbol: "exclamationmark.circle", tint: .pd.caution)
+        }
+    }
+
+    private func undoTick(_ completion: ReminderCompletion, item: AnswerCard.Item) {
+        guard let reminder = item.reminder else { return }
+        Task {
+            guard let restored = await reminderActions.undo(completion, for: item, write: {
+                await model.undoCompletion($0, matching: reminder)
+            }) else { return }
+            if restored {
+                toasts?.show(completion.undoneSentence, symbol: "arrow.uturn.backward")
+            } else {
+                toasts?.show("Pocketd couldn’t confirm Undo. Check Reminders.", symbol: "exclamationmark.circle", tint: .pd.caution,
+                             action: completion.canUndo() ? ToastAction(title: "Retry") { undoTick(completion, item: item) } : nil)
+            }
         }
     }
 
@@ -181,7 +194,7 @@ private struct ConversationContent: View {
     let forcedThinking: Bool
     let onExample: (AskSuggestion) -> Void
     let onConnect: (Ability) -> Void
-    let onCompleteReminder: (String) -> Void
+    let reminderActions: AnswerCardView.ReminderActions
     let onUndo: (PersonalDataWrite) -> Void
     let onCopy: (ChatMessage) -> Void
     let onFeedback: (Bool) -> Void
@@ -208,7 +221,7 @@ private struct ConversationContent: View {
         } else {
             AskTranscript(
                 writes: writes,
-                onCompleteReminder: onCompleteReminder,
+                reminderActions: reminderActions,
                 onUndo: onUndo,
                 onCopy: onCopy,
                 onFeedback: onFeedback,

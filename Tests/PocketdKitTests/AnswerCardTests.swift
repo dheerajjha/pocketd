@@ -545,9 +545,13 @@ struct AnswerCardMessageTests {
 /// this is the engine that puts it there.
 private struct CardFloodEngine: InferenceEngine {
     let inner = EchoEngine()
-    let card = AnswerCard(title: "Today", sections: [
-        .list(AnswerCard.Items(eyebrow: "1 event", items: [AnswerCard.Item(text: "Standup")]))
-    ])
+    let card: AnswerCard = {
+        var item = AnswerCard.Item(text: "Standup")
+        item.reminder = DayReminder(id: "native-reminder-wire-canary", title: item.text)
+        return AnswerCard(source: PersonalDataToolNames.reminders, title: "Today", sections: [
+            .list(AnswerCard.Items(eyebrow: "1 reminder", items: [item]))
+        ])
+    }()
 
     var backendName: String { inner.backendName }
 
@@ -624,7 +628,7 @@ struct AnswerCardWireTests {
 
         #expect(!plain.isEmpty)
         #expect(flooded == plain)
-        #expect(flooded.allSatisfy { !$0.contains("Standup") })
+        #expect(flooded.allSatisfy { !$0.contains("Standup") && !$0.contains("native-reminder-wire-canary") })
     }
 
     @Test("an Ollama stream is byte-identical too")
@@ -645,7 +649,7 @@ struct AnswerCardWireTests {
 
         #expect(!plain.isEmpty)
         #expect(flooded == plain)
-        #expect(flooded.allSatisfy { !$0.contains("Standup") })
+        #expect(flooded.allSatisfy { !$0.contains("Standup") && !$0.contains("native-reminder-wire-canary") })
     }
 
     @Test("a buffered completion drops cards as well as tool announcements")

@@ -28,17 +28,13 @@ enum ToolBodies {
 
     /// `calendar`: list a range of days, or add an event.
     ///
-    /// `userText` is the person's latest message, which decides whether the
-    /// model's `durationMinutes` is believed at all (`EventLength`). It defaults
-    /// to the task local `LlamaEngine` binds around a whole generation; the
-    /// built-in brain passes it.
+    /// Writes go through the submitted turn, including its event-length check.
     static func calendar(
         action: CalendarAction,
         range: CalendarRange = .today,
         title: String? = nil,
         start: String? = nil,
         durationMinutes: Int? = nil,
-        userText: String? = ToolContext.userText,
         origin: RequestOrigin = ToolContext.origin
     ) async -> [String: any Sendable] {
         switch action {
@@ -47,12 +43,8 @@ enum ToolBodies {
                 await EventAccess.shared.events(in: window)
             }
         case .create:
-            return await PersonalDataWrites.createEvent(
-                title: title,
-                start: start,
-                durationMinutes: durationMinutes,
-                userText: userText,
-                origin: origin,
+            return await ModelPersonalDataWrites.createEvent(
+                title: title, start: start, durationMinutes: durationMinutes, origin: origin,
                 write: { await EventAccess.shared.createEvent($0) }
             )
         }
@@ -77,22 +69,16 @@ enum ToolBodies {
                 await EventAccess.shared.reminders(in: window)
             }
         case .create:
-            return await PersonalDataWrites.createReminder(
-                title: title,
-                when: when,
-                origin: origin,
+            return await ModelPersonalDataWrites.createReminder(
+                title: title, when: when, origin: origin,
                 existing: { await EventAccess.shared.reminders(in: DateWindow(start: nil, end: nil)) },
                 write: { await EventAccess.shared.createReminder($0) }
             )
         case .complete:
-            return await PersonalDataWrites.completeReminder(
-                title: title,
-                origin: origin,
+            return await ModelPersonalDataWrites.completeReminder(
+                title: title, when: when, origin: origin,
                 existing: { await EventAccess.shared.reminders(in: DateWindow(start: nil, end: nil)) },
                 complete: { row in
-                    // A row with no identifier never came from the store, so
-                    // there is nothing to tick off. Reported as a failure
-                    // rather than silently succeeding on nothing.
                     guard let identifier = row.identifier else { return .failed }
                     return await EventAccess.shared.completeReminder(identifier: identifier)
                 }

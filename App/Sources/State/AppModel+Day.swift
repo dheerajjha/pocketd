@@ -70,9 +70,8 @@ extension AppModel {
 
     /// Ticks a reminder off from its circle on the Reminders page.
     ///
-    /// By identifier, so the reminder completed is the one the person tapped —
-    /// the card in the conversation has only a title and has to search, this
-    /// page does not. Gated on the on-device origin like every other write: the
+    /// By identifier, so the reminder completed is the one the person tapped.
+    /// Gated on the on-device origin like every other write: the
     /// circle is on this phone's screen, which is what that origin means.
     ///
     /// - Returns: the completion, for the toast and its Undo, or nil when the
@@ -91,9 +90,9 @@ extension AppModel {
     ///
     /// Un-ticks; never deletes. See `EventAccess.uncompleteReminder`. Refused
     /// once the five-minute window has closed, like every Undo in the app.
-    func undoCompletion(_ completion: ReminderCompletion, now: Date = Date()) async -> Bool {
-        guard RequestOrigin.onDeviceChat.mayWritePersonalData, completion.canUndo(now: now) else { return false }
-        guard await EventAccess.shared.uncompleteReminder(identifier: completion.reminderID) == .written else { return false }
+    func undoCompletion(_ completion: ReminderCompletion, matching reminder: DayReminder? = nil, now: Date = Date()) async -> Bool {
+        guard RequestOrigin.onDeviceChat.mayWritePersonalData, reminderToolsEnabled, completion.canUndo(now: now) else { return false }
+        guard await EventAccess.shared.uncompleteReminder(identifier: completion.reminderID, matching: reminder) == .written else { return false }
         dayMayHaveChanged()
         return true
     }

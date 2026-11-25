@@ -234,6 +234,9 @@ public extension SystemModelPlan {
         guard request.origin.mayReachPersonalData else { return [] }
         let switchedOn = toolOrder.filter(enabled.contains)
         let words = SystemModelPlan.words(in: request.messages.last(where: { $0.role == .user })?.content ?? "")
+        if let change = request.modelWriteTurn?.intent?.change {
+            return switchedOn.filter { $0 == (change == .addEvent ? .calendar : .reminders) }
+        }
         switch CapabilityRouter.decide(request.messages) {
         case let .named(groups), let .unsure(groups):
             let namesAWriter = groups.contains(where: writers.contains)
@@ -493,7 +496,7 @@ public enum SystemModelReads {
         else { return nil }
         let question = SystemModelPlan.withoutReasoningSwitch(last.content)
         let words = SystemModelPlan.words(in: question)
-        guard !words.isEmpty, !SystemModelPlan.asksToChangeSomething(words) else { return nil }
+        guard !words.isEmpty, request.modelWriteTurn?.intent == nil, !SystemModelPlan.asksToChangeSomething(words) else { return nil }
 
         let dayGroups: [CapabilityGroup] = SystemModelPlan.toolOrder
         let groups: [CapabilityGroup]
@@ -670,6 +673,7 @@ public enum SystemModelWrites {
     /// Whether the request's last turn asks to change something. Only the
     /// chat may change things (`RequestOrigin.mayWritePersonalData`).
     public static func isChange(_ request: GenerationRequest) -> Bool {
+        if let turn = request.modelWriteTurn { return turn.intent != nil }
         guard request.origin.mayWritePersonalData,
               let last = request.messages.last(where: { $0.role == .user })
         else { return false }

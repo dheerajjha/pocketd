@@ -148,6 +148,19 @@ public extension AnswerCard {
         public var accent: String?
         public var symbol: String?
 
+        /// Only a live native read can authorize a tap. Saved cards remain readable, but
+        /// decoding a transcript (even one containing a made-up ID) cannot mint a target.
+        struct LiveReminder: Sendable, Equatable {
+            let row: DayReminder
+            let observation = UUID()
+        }
+        private(set) var liveReminder: LiveReminder?
+        public internal(set) var reminder: DayReminder? {
+            get { liveReminder?.row }
+            set { liveReminder = newValue.map { LiveReminder(row: $0) } }
+        }
+        private enum CodingKeys: String, CodingKey { case text, detail, accent, symbol }
+
         public init(text: String, detail: String? = nil, accent: String? = nil, symbol: String? = nil) {
             self.text = text
             self.detail = detail
@@ -547,7 +560,9 @@ public enum AnswerCardBuilders {
         return AnswerCard(source: source, symbol: symbol, title: title, sections: sections)
     }
 
-    public static let reminders: AnswerCardBuilder = { arguments, data in
+    public static let reminders: AnswerCardBuilder = { reminderCard($0, $1, nativeItems: nil) }
+
+    static func reminderCard(_ arguments: String, _ data: [String: any Sendable], nativeItems: [AnswerCard.Item]?) -> AnswerCard? {
         let filter = argument(ReminderFilter.self, named: "filter", in: arguments)
         let title = filter.map(name(for:)) ?? "Reminders"
         let symbol = "checklist"
@@ -565,22 +580,7 @@ public enum AnswerCardBuilders {
 
         guard let rows = data["reminders"] as? [[String: any Sendable]], !rows.isEmpty else { return nil }
 
-        let items = rows.map { row -> AnswerCard.Item in
-            // One mark that means "this one matters", the same one the
-            // Reminders page uses (`DayReminder.priorityMark`), and nothing
-            // otherwise. The card used to print EventKit's number — "P1" — with
-            // a footnote explaining that its scale runs backwards, which is a
-            // ranking to decode where a glance was wanted. The payload still
-            // carries the number and the scale for the model, which reads them;
-            // only the drawing changed.
-            let priority = row["priority"] as? Int
-            return AnswerCard.Item(
-                text: row["title"] as? String ?? "Untitled reminder",
-                detail: row["due"] as? String,
-                accent: priority.flatMap { (1...4).contains($0) ? "!" : nil },
-                symbol: "circle"
-            )
-        }
+        let items = nativeItems ?? rows.map { reminderItem($0, target: nil) }
 
         var sections: [AnswerCard.Section] = [
             .list(AnswerCard.Items(eyebrow: count(items.count, of: "reminder"), items: items))
@@ -589,6 +589,19 @@ public enum AnswerCardBuilders {
             sections.append(.note(AnswerCard.Note(text: note, symbol: "ellipsis", tone: .info)))
         }
         return AnswerCard(source: source, symbol: symbol, title: title, sections: sections)
+    }
+
+    static func reminderItem(_ row: [String: any Sendable], target: DayReminder?) -> AnswerCard.Item {
+        // The model gets EventKit's numbered scale; a glance deserves just its urgent mark.
+        let priority = row["priority"] as? Int
+        var item = AnswerCard.Item(
+            text: row["title"] as? String ?? "Untitled reminder",
+            detail: row["due"] as? String,
+            accent: priority.flatMap { (1...4).contains($0) ? "!" : nil },
+            symbol: "circle"
+        )
+        item.reminder = target
+        return item
     }
 
     /// The health tool's result, drawn.

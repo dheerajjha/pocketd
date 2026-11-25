@@ -539,8 +539,10 @@ struct SystemModelAnswer {
             let origin = request.origin
             let readStarted = Date()
             let body = call.body
-            guard let data = await SystemToolRun.withDeadline(SystemToolRun.readDeadline, {
-                await ToolContext.$origin.withValue(origin) { await body(origin) }
+            guard let output = await SystemToolRun.withDeadline(SystemToolRun.readDeadline, {
+                await ToolResult.withCard(from: call.name, arguments: json) {
+                    await ToolContext.$origin.withValue(origin) { await body(origin) }
+                }
             }) else {
                 if Task.isCancelled { break }
                 DiagnosticLog.record(.toolCall(name: call.name, outcome: .failed, milliseconds: Int(Date().timeIntervalSince(readStarted) * 1000)))
@@ -550,14 +552,14 @@ struct SystemModelAnswer {
             if Task.isCancelled { break }
             DiagnosticLog.record(.toolCall(
                 name: call.name,
-                outcome: SystemToolRun.outcome(of: data),
+                outcome: SystemToolRun.outcome(of: output.data),
                 milliseconds: Int(Date().timeIntervalSince(readStarted) * 1000)
             ))
-            if let card = ToolResult.render(data, from: call.name, arguments: json).card {
+            if let card = output.card {
                 continuation.yield(.answerCard(card))
                 drewCard = true
             }
-            facts.append(SystemModelReads.fact(for: read, rendered: SystemToolOutput.render(data)))
+            facts.append(SystemModelReads.fact(for: read, rendered: SystemToolOutput.render(output.data)))
         }
         if Task.isCancelled {
             continuation.yield(.finished(reason: .cancelled, usage: TokenUsage()))
@@ -609,7 +611,7 @@ struct SystemModelAnswer {
                 return .done
             }
             let shown = CardsShown()
-            let run = SystemToolRun(origin: request.origin, userText: ToolContext.userText(of: request),
+            let run = SystemToolRun(origin: request.origin, userText: ToolContext.userText(of: request), writeTurn: request.modelWriteTurn,
                                     rejectDuplicateWrites: model.isCloud) { event in
                 if case let .answerCard(card) = event { shown.append(card) }
                 continuation.yield(event)

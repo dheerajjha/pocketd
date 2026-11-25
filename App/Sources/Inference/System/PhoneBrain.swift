@@ -99,7 +99,9 @@ actor PhoneBrain: InferenceEngine {
 
     func generate(_ request: GenerationRequest) async throws -> AsyncThrowingStream<GenerationEvent, any Error> {
         try BrainChoice.validateCloudRoute(request, selected: choice)
-        return try await active.generate(request)
+        let request = request.trackingPhoneWriteResults()
+        let stream = try await active.generate(request)
+        return request.modelWriteTurn?.reporting(stream) ?? stream
     }
 
     /// For a prompt that already carries every fact it may use — the daily
@@ -109,8 +111,11 @@ actor PhoneBrain: InferenceEngine {
     /// the loaded client and cannot be withheld per request.
     func generateWithoutTools(_ request: GenerationRequest) async throws -> AsyncThrowingStream<GenerationEvent, any Error> {
         try BrainChoice.validateCloudRoute(request, selected: choice)
-        if let appleEngine { return try await appleEngine.generate(request, toolsAllowed: false) }
-        return try await downloaded.generate(request)
+        let request = request.trackingPhoneWriteResults()
+        let stream: AsyncThrowingStream<GenerationEvent, any Error>
+        if let appleEngine { stream = try await appleEngine.generate(request, toolsAllowed: false) }
+        else { stream = try await downloaded.generate(request) }
+        return request.modelWriteTurn?.reporting(stream) ?? stream
     }
 
     // MARK: - What used to be LlamaEngine-only
