@@ -263,7 +263,7 @@ enum ChatPage {
       if (m.role === "assistant" && canRetry(m) && m === messages[messages.length-1] && !active) {
         const user = messages[messages.length-2];
         if (user && user.role === "user") {
-          if (contextRows(messages.slice(0, -1)).some(row => row.imagesOmitted)) {
+          if (requestRows().some(row => row.imagesOmitted)) {
             const note = document.createElement("div");
             note.className = "meta";
             note.textContent = "The original images weren’t saved. Reattach them to send this question again.";
@@ -324,6 +324,10 @@ enum ChatPage {
       return rows.filter((m, i) => m.role === "assistant" ? usable(m) :
         m.role === "user" && (rows[i+1]?.role !== "assistant" || usable(rows[i+1])));
     }
+    // The saved 20 turns include the pending reply. Take precisely the same
+    // window before the first POST as after a page reload, then omit that reply.
+    function retainedRows() { return messages.slice(-40); }
+    function requestRows() { return contextRows(retainedRows().slice(0, -1)); }
 
     // --- context budget ------------------------------------------------------
     // Mirrors ContextGuard on the server: 3 characters per token, 4 tokens per
@@ -332,7 +336,7 @@ enum ChatPage {
     function estimateTokens() {
       let chars = system.length;
       let count = system ? 1 : 0;
-      for (const m of contextRows(active ? messages.slice(0, -1) : messages)) { chars += m.content.length; count++; }
+      for (const m of active ? requestRows() : contextRows(retainedRows())) { chars += m.content.length; count++; }
       return Math.ceil(chars / 3) + count * 4;
     }
     function updateBudget() {
@@ -367,7 +371,7 @@ enum ChatPage {
 
     async function generate(reply) {
       if (active) return;
-      const run = { reply, controller: new AbortController(), chunks: 0, bytes: 0, misses: 0,
+      const run = { reply, controller: new AbortController(), started: performance.now(), chunks: 0, bytes: 0, misses: 0,
                     stopped: false, finish: null, error: null, invalid: false, raf: 0, checkpoint: 0 };
       active = run;
       reply.state = "streaming";
@@ -387,7 +391,7 @@ enum ChatPage {
         max_tokens: options.maxTokens,
       };
       if (options.system) body.messages.push({ role: "system", content: options.system });
-      for (const m of contextRows(messages.slice(0, -1))) {
+      for (const m of requestRows()) {
         if (m.images && m.images.length) {
           // The /v1 dialect's typed content parts. The /api dialect's shape
           // is a flat images[] array instead; the server accepts both, and
@@ -401,7 +405,6 @@ enum ChatPage {
         }
       }
 
-      const started = performance.now();
       try {
         const r = await fetch("/v1/chat/completions", {
           method: "POST", headers: headers(), body: JSON.stringify(body),
@@ -431,28 +434,34 @@ enum ChatPage {
           active = null;
           $("send").style.display = "";
           $("stop").style.display = "none";
-          // [DONE] also follows server errors. The engine's finish reason is
-          // authoritative, even if the connection drops after that complete frame.
-          if (run.error) reply.state = "error";
-          else if (run.stopped) reply.state = "stopped";
-          else if (run.finish === "cancelled") reply.state = "cancelled";
-          else if (!run.invalid && run.finish === "stop") reply.state = "complete";
-          else if (!run.invalid && run.finish === "length") reply.state = "length";
-          else reply.state = "interrupted";
-          const secs = Math.max(0.001, (performance.now()-started)/1000);
-          if (reply.state === "error") { reply.error = run.error; reply.meta = ""; }
-          if (reply.state === "stopped") reply.meta = "Stopped by you.";
-          if (reply.state === "cancelled") reply.meta = "Pocketd cancelled this reply.";
-          if (reply.state === "interrupted") reply.meta = interrupted;
-          if (reply.state === "complete" || reply.state === "length") {
-            if (!run.chunks) reply.content = ""; // a successful empty retry cannot certify an older prefix
-            reply.meta = reply.state === "length" ? "Response limit reached." : run.chunks
-              ? `${run.chunks} chunks · ${(run.chunks / secs).toFixed(1)}/s · ${secs.toFixed(1)}s` : "Finished without text.";
-          }
-          if (!canRetry(reply)) delete reply.options;
-          save(); draw();
+          checkpointOutcome(run, true);
+          draw();
         }
       }
+    }
+
+    // [DONE] closes the transport; it is not the receipt. Persist a finish
+    // or error before reading another byte. A later error still takes priority.
+    function checkpointOutcome(run, endOfStream = false) {
+      const reply = run.reply;
+      if (run.error) reply.state = "error";
+      else if (run.stopped) reply.state = "stopped";
+      else if (run.finish === "cancelled") reply.state = "cancelled";
+      else if (!run.invalid && run.finish === "stop") reply.state = "complete";
+      else if (!run.invalid && run.finish === "length") reply.state = "length";
+      else reply.state = "interrupted";
+      const secs = Math.max(0.001, (performance.now()-run.started)/1000);
+      if (reply.state === "error") { reply.error = run.error; reply.meta = ""; }
+      if (reply.state === "stopped") reply.meta = "Stopped by you.";
+      if (reply.state === "cancelled") reply.meta = "Pocketd cancelled this reply.";
+      if (reply.state === "interrupted") reply.meta = interrupted;
+      if (reply.state === "complete" || reply.state === "length") {
+        if (!run.chunks) reply.content = ""; // a successful empty retry cannot certify an older prefix
+        reply.meta = reply.state === "length" ? "Response limit reached." : run.chunks
+          ? `${run.chunks} chunks · ${(run.chunks / secs).toFixed(1)}/s · ${secs.toFixed(1)}s` : "Finished without text.";
+      }
+      if (endOfStream && !canRetry(reply)) delete reply.options;
+      save();
     }
 
     async function receive(body, run) {
@@ -474,7 +483,11 @@ enum ChatPage {
             if (payload === "[DONE]") return;
             let frame;
             try { frame = JSON.parse(payload); } catch (_) { run.invalid = true; continue; }
-            if (frame?.error) { run.error = typeof frame.error.message === "string" && frame.error.message || "Server error"; continue; }
+            if (frame?.error) {
+              run.error = typeof frame.error.message === "string" && frame.error.message || "Server error";
+              checkpointOutcome(run);
+              continue;
+            }
             const choice = frame?.choices?.[0];
             if (!choice || run.error) continue; // optional usage-only frame
             const text = choice.delta?.content;
@@ -486,7 +499,10 @@ enum ChatPage {
               if (run.chunks === 1) save();
               else if (!run.checkpoint) run.checkpoint = setTimeout(() => { run.checkpoint = 0; if (active === run) save(); }, 1000);
             }
-            if (choice.finish_reason != null) run.finish = choice.finish_reason;
+            if (choice.finish_reason != null) {
+              run.finish = choice.finish_reason;
+              checkpointOutcome(run);
+            }
           }
         }
       } finally { reader.releaseLock(); }
@@ -496,12 +512,13 @@ enum ChatPage {
       // Data URIs are large and localStorage is a few megabytes, so a chat
       // with images overflows far sooner than one without. Drop the images
       // from history rather than losing the conversation.
+      const rows = retainedRows();
       try {
-        localStorage.setItem("pocketd.chat", JSON.stringify(messages.slice(-40)));
+        localStorage.setItem("pocketd.chat", JSON.stringify(rows));
       } catch (e) {
         try {
           localStorage.setItem("pocketd.chat", JSON.stringify(
-            messages.slice(-40).map(({images, ...m}) => images?.length ? {...m, imagesOmitted:true} : m)
+            rows.map(({images, ...m}) => images?.length ? {...m, imagesOmitted:true} : m)
           ));
         } catch (_) {}
       }
@@ -549,9 +566,10 @@ enum ChatPage {
     $("send").onclick = send;
     $("stop").onclick = () => {
       if (!active) return;
-      active.stopped = true;
-      active.reply.state = "stopped"; active.reply.meta = "Stopped by you.";
-      save(); active.controller.abort();
+      if (active.reply.state === "streaming") {
+        active.stopped = true; checkpointOutcome(active);
+      }
+      active.controller.abort();
     };
     $("clear").onclick = () => {
       if (active) { active.controller.abort(); active = null; }

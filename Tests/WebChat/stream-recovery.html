@@ -50,7 +50,17 @@
       const bytes = new TextEncoder().encode(plan.wire || '');
       for (let i=0;i<bytes.length;i+=3) c.enqueue(bytes.slice(i,i+3));
       if (!plan.hold) c.close();
-    }}),{headers:{'Content-Type':'text/event-stream'}}));
+    }, pull() { plan.waiting?.(); }}, {highWaterMark:0}),{headers:{'Content-Type':'text/event-stream'}}));
+  }
+  // With no prefetch, pull on a held fixture means the parser consumed the
+  // queued frames and asked for the next one. Neither EOF nor [DONE] was sent.
+  async function sendThroughFrame(question, wire) {
+    let waiting;
+    const drained = new Promise((resolve,reject) => {
+      const timer = setTimeout(() => reject(Error('parser did not consume held frames')), 4500);
+      waiting = () => { clearTimeout(timer); resolve(); };
+    });
+    await send(question, {wire,hold:true,waiting}); await drained;
   }
   try {
     assert(location.hostname === '127.0.0.1' && !localStorage.length, 'Use a fresh, isolated loopback fixture origin');
@@ -103,6 +113,35 @@
     await send('Torn finish frame',{wire:delta('torn prefix')+finish('stop').trimEnd()});
     assert(saved().at(-1).state === 'interrupted' && retry(),'an incomplete SSE frame certified success');
     report('A complete finish frame counts; a torn one does not');
+
+    fresh();
+    for (let n=1; n<=20; n++) await send('Question '+n, good('Answer '+n));
+    await send('Question 21', {wire:delta('Interrupted prefix')});
+    const originalPost = JSON.stringify(posts.at(-1)), originalSize = body().length;
+    await mount();
+    assert(retry(), 'turn 21 not retryable after reload');
+    const preRetryCount = posts.length; next = good('Answer 21'); retry().click(); await idle();
+    const recoveryFailures = [];
+    if (JSON.stringify(posts.at(-1)) !== originalPost || posts.length !== preRetryCount+1 ||
+        originalSize !== 39 || body()[0].content !== 'Question 2' || body().at(-1).content !== 'Question 21') {
+      recoveryFailures.push(`turn 21 context changed: ${originalSize} rows initially, ${body().length} on retry`);
+    }
+
+    const serverError = sse({error:{message:'Fixture terminal error'}});
+    for (const [wire, expected, retryable] of [[finish('stop'),'complete',false], [finish('length'),'length',false],
+        [finish('cancelled'),'cancelled',true], [serverError,'error',true], [finish('stop')+serverError,'error',true]]) {
+      fresh(); await sendThroughFrame('Reload before DONE', delta('Received text')+wire);
+      const before = saved().at(-1).state, count = posts.length;
+      await mount(); // no pagehide, EOF or transport cleanup to rescue the checkpoint
+      const restored = saved().at(-1);
+      if (before !== expected || restored.state !== expected || restored.content !== 'Received text' ||
+          !!retry() !== retryable || posts.length !== count || (expected === 'error' && restored.error !== 'Fixture terminal error')) {
+        recoveryFailures.push(`${expected} receipt: ${before} before reload, ${restored.state} after reload`);
+      }
+    }
+    assert(!recoveryFailures.length, recoveryFailures.join('; '));
+    report('Turn 21 posts the identical 39-row context before and after reload');
+    report('Reload before [DONE] preserves stop, length, cancellation and server errors, including error after stop');
 
     fresh(); await send('Length',{wire:delta('bounded answer')+finish('length')+done});
     assert(saved().at(-1).state === 'length' && last().textContent.includes('limit reached') && !retry(), 'length treated as interruption');
