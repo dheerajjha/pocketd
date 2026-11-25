@@ -18,6 +18,9 @@ import Foundation
 /// on whether the model is big enough to work the protocol, which is a
 /// judgement and is written down as one on each entry.
 public enum ModelCatalog {
+    /// The starter evaluated on connected-day requests, preferred when it fits comfortably.
+    static let measuredStarterID = "qwen3-1.7b"
+
     /// Every entry must be publicly downloadable without a token. A gated
     /// repository answers 401 from the API itself, which surfaced here as the
     /// first two rows of the list failing the moment anyone tapped them —
@@ -50,7 +53,7 @@ public enum ModelCatalog {
             toolSupport: .yes
         ),
         ModelRecord(
-            id: "qwen3-1.7b",
+            id: measuredStarterID,
             displayName: "Qwen3 1.7B",
             // Qwen's own repo publishes only Q8_0 of this size, so the
             // Q4_K_M comes from unsloth's mirror. Verified by scripts/verify-catalogue.sh.
@@ -61,6 +64,9 @@ public enum ModelCatalog {
             sizeBytes: 1_107_409_472,
             contextLength: 32_768,
             license: "Apache-2.0",
+            // Pin the evaluated GGUF, whose Hugging Face LFS SHA-256 is
+            // b139949c5bd74937ad8ed8c8cf3d9ffb1e99c866c823204dc42c0d91fa181897.
+            sourceURL: URL(string: "https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/d7f544eead698dbd1f15126ef60b45a1e1933222/Qwen3-1.7B-Q4_K_M.gguf?download=true")!,
             // Tool-native template — a `# Tools` preamble, `<tools>` for the
             // schemas and `<tool_call>` for the answer — and the smallest model
             // in this catalogue observed to complete a calendar lookup end to

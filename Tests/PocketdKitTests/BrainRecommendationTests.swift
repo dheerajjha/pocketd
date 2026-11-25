@@ -61,29 +61,60 @@ struct BrainRecommendationTests {
         }
     }
 
-    @Test("comfortable and under the download ceiling: the largest such brain wins")
-    func largestUnderCeiling() {
-        let catalog = [
-            reader("small", bytes: 600_000_000),
-            reader("middle", bytes: 1_200_000_000),
-            reader("large", bytes: 2_400_000_000),
-        ]
-        #expect(BrainRecommendation.recommended(for: phone(16, entitled: true), in: catalog)?.id == "middle")
+    @Test("a larger comfortable day reader under 1.5 GB does not displace the measured starter")
+    func measuredStarter() throws {
+        let starter = try #require(ModelCatalog.model(withID: "qwen3-1.7b"))
+        let budget = phone(8, entitled: true)
+        let catalog = [reader("larger", bytes: 1_400_000_000), reader("smaller", bytes: 600_000_000), starter]
+        #expect(catalog.allSatisfy { budget.fit(for: $0) == .comfortable })
+        #expect(BrainRecommendation.recommended(for: budget, in: catalog) == starter)
+        #expect(StarterModels.shortlist(in: catalog, budget: budget, limit: 1) == [starter])
     }
 
-    @Test("when every comfortable brain is over the ceiling, the smallest of them")
-    func nearestToCeiling() {
-        let catalog = [reader("big", bytes: 2_000_000_000), reader("bigger", bytes: 3_000_000_000)]
-        #expect(BrainRecommendation.recommended(for: phone(16, entitled: true), in: catalog)?.id == "big")
+    @Test("if the starter is missing or tight, choose the smallest comfortable reader unless one is already installed")
+    func smallestComfortableFallback() throws {
+        let starter = try #require(ModelCatalog.model(withID: "qwen3-1.7b"))
+        let small = reader("small", bytes: 500_000_000)
+        let other = reader("other", bytes: 700_000_000)
+        let budget = phone(4)
+        #expect(budget.fit(for: starter) == .tight)
+        #expect([small, other].allSatisfy { budget.fit(for: $0) == .comfortable })
+        for catalog in [[other, small], [starter, other, small]] {
+            #expect(BrainRecommendation.recommended(for: budget, in: catalog) == small)
+            #expect(StarterModels.recommended(in: catalog, budget: budget, installed: ["smollm2-360m"]) == small)
+            #expect(StarterModels.recommended(in: catalog, budget: budget, installed: [other.id]) == nil)
+        }
     }
 
-    @Test("when nothing is comfortable, the smallest brain that loads at all")
-    func smallestTight() {
-        // On a 4 GB phone without the entitlement both of these are tight.
-        let catalog = [reader("a", bytes: 1_150_000_000), reader("b", bytes: 1_250_000_000)]
+    @Test("when nothing is comfortable, even the measured starter yields to a smaller tight reader")
+    func smallestTight() throws {
+        let starter = try #require(ModelCatalog.model(withID: "qwen3-1.7b"))
+        let small = reader("small", bytes: 1_100_000_000)
+        let catalog = [reader("large", bytes: 1_250_000_000), starter, small]
         let budget = phone(4)
         #expect(catalog.allSatisfy { budget.fit(for: $0) == .tight })
-        #expect(BrainRecommendation.recommended(for: budget, in: catalog)?.id == "a")
+        #expect(BrainRecommendation.recommended(for: budget, in: catalog) == small)
+    }
+
+    @Test("new downloads resolve the evaluated Q4_K_M, while a prior install keeps its identity")
+    func starterArtifact() throws {
+        let budget = phone(6)
+        let pick = try #require(BrainRecommendation.recommended(for: budget))
+        let filename = "Qwen3-1.7B-Q4_K_M.gguf"
+        let revision = "d7f544eead698dbd1f15126ef60b45a1e1933222"
+        #expect(pick.id == "qwen3-1.7b")
+        #expect(pick.repoID == "unsloth/Qwen3-1.7B-GGUF")
+        #expect(pick.filename == filename && pick.quantization == "Q4_K_M")
+        #expect(pick.sizeBytes == 1_107_409_472)
+        #expect(pick.downloadURL.absoluteString == "https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/\(revision)/\(filename)?download=true")
+
+        var prior = pick
+        prior.sourceURL = nil  // Existing manifests predate the revision pin.
+        #expect(prior.downloadURL != pick.downloadURL)
+        let store = ModelStore(directory: FileManager.default.temporaryDirectory, budget: budget)
+        #expect(store.fileURL(for: pick).lastPathComponent == "qwen3-1.7b.gguf")
+        #expect(store.fileURL(for: prior) == store.fileURL(for: pick))
+        #expect(BrainRecommendation.offer(for: budget, installed: [prior]) == nil)
     }
 
     @Test("chat-only, unvetted and vision brains are never recommended, however well they fit")

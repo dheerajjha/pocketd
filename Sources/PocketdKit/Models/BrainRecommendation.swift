@@ -63,21 +63,11 @@ public extension ModelRecord {
 ///
 /// The rule, in order:
 ///
-/// 1. **Only brains that can read your day.** A vetted `.yes`, no projector.
-///    An assistant that cannot open the calendar answers "what's on tomorrow?"
-///    fluently and from nothing, and a recommendation is a promise that it
-///    will not.
-/// 2. **Comfortable, and a few minutes to download.** The largest such brain
-///    whose download is at most `preferredDownloadCeilingBytes`. Larger is
-///    better — the download is paid once and the capability is used every day
-///    — but only up to the size somebody will wait for during an intro.
-/// 3. If no comfortable brain is that small, the smallest comfortable one: the
-///    closest thing to "a few minutes" this catalogue has.
-/// 4. If nothing is comfortable, the smallest that loads at all. A tight brain
-///    that reads the day beats a comfortable one that cannot, and the smallest
-///    tight one leaves the most room for the conversation.
-/// 5. `nil` when nothing that reads your day fits this phone. Never a chat-only
-///    brain as a consolation: the caller says the phone is too small instead.
+/// 1. Consider only vetted day readers without a projector that fit the device budget.
+/// 2. Among comfortable fits, prefer the curated starter tested on connected-day requests.
+/// 3. Otherwise choose the smallest comfortable download, or the smallest tight
+///    download if none is comfortable. Equal sizes are ordered by id.
+/// 4. Return `nil` if no eligible brain fits.
 ///
 /// Deliberately blind to what is installed. The recommendation is a fact about
 /// the phone; whether to offer a download is a separate question with its own
@@ -85,9 +75,8 @@ public extension ModelRecord {
 /// replayed intro came to recommend a different brain from the first run.
 public enum BrainRecommendation {
 
-    /// About 1.5 GB: four or five minutes on ordinary Wi-Fi, which is as long as
-    /// an intro can ask somebody to wait. Decimal, like the sizes the download
-    /// screens print.
+    /// The previous download-size preference, retained for source compatibility.
+    @available(*, deprecated, message: "Starter selection no longer uses a download-size ceiling.")
     public static let preferredDownloadCeilingBytes: Int64 = 1_500_000_000
 
     /// Whether `model` may appear anywhere Pocketd recommends a brain.
@@ -108,11 +97,9 @@ public enum BrainRecommendation {
             .sorted(by: smallestFirst)
         let comfortable = pool.filter { budget.fit(for: $0) == .comfortable }
 
-        if let best = comfortable.last(where: { $0.totalDownloadBytes <= preferredDownloadCeilingBytes }) {
-            return best
-        }
-        if let nearest = comfortable.first { return nearest }
-        return pool.first
+        return comfortable.first(where: { $0.id == ModelCatalog.measuredStarterID })
+            ?? comfortable.first
+            ?? pool.first
     }
 
     /// Every brain worth recommending on this phone, smallest first, the
