@@ -185,7 +185,13 @@ final class AppModel {
     // MARK: - Chat
 
     var conversation: [ChatMessage] = []
-    var draft = ""
+    var draft = "" {
+        didSet {
+            if let waitingQuestion, draft.trimmingCharacters(in: .whitespacesAndNewlines) != waitingQuestion {
+                self.waitingQuestion = nil
+            }
+        }
+    }
     /// Left by `AskLaunch` for `AskComposer` to focus (and, where supported, start listening on) once, then clear.
     var askComposerFocusRequested = false
 
@@ -238,6 +244,13 @@ final class AppModel {
     var history: [Conversation] = []
     var currentConversationID = UUID()
     var conversationStartedAt = Date()
+    var conversationTopic: ConversationTopic?
+    var hasRestoredConversations = false
+    /// Main Ask follows an explicit New/History selection, not the last page
+    /// chip. A blank newly chosen chat has an ID even before it has a file.
+    var mainConversationID = UserDefaults.standard.string(forKey: Keys.mainConversation).flatMap(UUID.init(uuidString:)) {
+        didSet { UserDefaults.standard.set(mainConversationID?.uuidString, forKey: Keys.mainConversation) }
+    }
 
     /// Writes are debounced rather than done per token: a reply arrives at
     /// dozens of tokens a second and each one would otherwise re-encode and
@@ -481,6 +494,7 @@ final class AppModel {
     var servingSince: Date?
 
     enum Keys {
+        static let mainConversation = "pocketd.mainConversation"
         static let loadedModel = "pocketd.loadedModel"
         static let systemPrompt = "pocketd.systemPrompt"
         static let reviewState = "pocketd.reviewState"
@@ -734,12 +748,10 @@ final class AppModel {
         // after a force-quit reads as data loss even when the transcript is
         // safely on disk one tap away in the history.
         await loadHistory()
-        if let latest = history.first {
-            conversation = latest.messages
-            draft = latest.draft
-            currentConversationID = latest.id
-            conversationStartedAt = latest.createdAt
-        }
+        let restored = mainConversationID.map { id in history.first { $0.id == id } ?? Conversation(id: id) } ?? history.first
+        IntentInbox.questions.didReadHistory(current: currentConversationID, latest: restored?.id)
+        if let restored { displayConversation(restored) }
+        hasRestoredConversations = true
 
         // Driving the idle timer from the observer is what also catches the
         // transitions the app did not initiate — a failed bind, or iOS

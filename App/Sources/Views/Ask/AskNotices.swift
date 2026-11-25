@@ -120,6 +120,7 @@ struct AskNoticeView: View {
     /// the useful thing is that question's answer — not a toast telling the
     /// reader to type it a second time.
     private func connect(_ ability: Ability) {
+        let thread = model.currentConversationID, usingCloud = model.isUsingPrivateCloudCompute
         let question = model.conversation.last(where: { $0.role == .user })?.content
         model.dismissAskNotice(notice)
         model.record(.abilityOfferAccepted(ability: ability.rawValue))
@@ -127,7 +128,12 @@ struct AskNoticeView: View {
             let outcome = await model.connect(ability, from: .chatOffer)
             if outcome.isConnected {
                 toasts?.show("\(ability.title) connected", symbol: "checkmark.circle", tint: .pd.positive)
-                if let question, !question.isEmpty, !model.isGenerating {
+                // Permission can return after a different conversation, draft
+                // or provider has taken over. Only retry the original turn.
+                if let question, !question.isEmpty, !model.isGenerating, model.currentConversationID == thread,
+                   navigator.isAskPresented, !navigator.isHistoryPresented, usingCloud == model.isUsingPrivateCloudCompute,
+                   model.draft.isEmpty, model.attachments.isEmpty,
+                   model.conversation.last(where: { $0.role == .user })?.content == question {
                     model.draft = question
                     model.send()
                 }

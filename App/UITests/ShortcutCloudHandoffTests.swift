@@ -3,6 +3,61 @@ import XCTest
 
 @MainActor
 final class ShortcutCloudHandoffTests: XCTestCase {
+    /// Both surfaces go through the real shell, composer and conversation
+    /// store. Only inference and Health are fixtures; no permissions needed.
+    func testTodayQuestionSeparatesFromMainAndHistoryRestoresExplicitSelection() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-pocketd.testPCC", "available", "-pocketd.brainChoice", "privateCloudCompute",
+                               "-pocketd.completedOnboarding", "YES", "-pocketd.demoHealth", "-pocketd.proOverride", "off",
+                               "-pocketd.analyticsConsent", "refused", "-pocketd.serverShouldRun", "NO",
+                               "-pocketd.calendarTools", "NO", "-pocketd.reminderTools", "NO", "-pocketd.healthTools", "NO"]
+        let first = Int.random(in: 10_000_000...99_999_998), amber = String(first), copper = String(first + 1)
+        let field = app.descendants(matching: .any).matching(identifier: "ask.composer").firstMatch
+        func tap(_ label: String) {
+            let button = app.buttons[label].firstMatch
+            XCTAssertTrue(button.waitForExistence(timeout: 10))
+            XCTAssertTrue(button.wait(for: \.isHittable, toEqual: true, timeout: 10))
+            button.tap()
+        }
+        func reply(_ nonce: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "PCC test fixture replied to probe \(nonce).")).firstMatch
+        }
+        func send(_ nonce: String) {
+            XCTAssertTrue(field.waitForExistence(timeout: 10))
+            field.tap(); field.typeText(nonce); tap("ask.send")
+            XCTAssertTrue(reply(nonce).waitForExistence(timeout: 10))
+        }
+        func openThreadID() -> String {
+            tap("ask.history")
+            let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND value BEGINSWITH %@", "ask.history.row.", "Open now")).firstMatch
+            XCTAssertTrue(row.waitForExistence(timeout: 10))
+            let id = row.identifier
+            tap("Done")
+            return id
+        }
+        app.launch()
+        tap("Ask about your day"); XCTAssertTrue(field.waitForExistence(timeout: 10))
+        if app.buttons["ask.new"].isEnabled {
+            tap("ask.new")
+            XCTAssertTrue(app.buttons["ask.new"].wait(for: \.isEnabled, toEqual: false, timeout: 10))
+        }
+        send(amber); let mainID = openThreadID(); tap("ask.close")
+        tap("How did I sleep?")
+        let question = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "You: How did I sleep?")).firstMatch
+        XCTAssertTrue(question.waitForExistence(timeout: 10)); XCTAssertFalse(reply(amber).exists)
+        send(copper); let sleepID = openThreadID(); XCTAssertNotEqual(mainID, sleepID)
+        tap("ask.close"); tap("Ask about your day")
+        XCTAssertTrue(reply(amber).waitForExistence(timeout: 10)); XCTAssertFalse(reply(copper).exists)
+        XCTAssertEqual(openThreadID(), mainID)
+        tap("ask.close"); tap("How did I sleep?"); XCTAssertTrue(reply(copper).waitForExistence(timeout: 10))
+        XCTAssertEqual(openThreadID(), sleepID)
+        tap("ask.history"); tap(amber); XCTAssertTrue(reply(amber).waitForExistence(timeout: 10))
+        app.terminate(); app.launch(); tap("Ask about your day")
+        XCTAssertTrue(reply(amber).waitForExistence(timeout: 10)); XCTAssertFalse(reply(copper).exists)
+        XCTAssertEqual(openThreadID(), mainID)
+    }
+
     func testPreOnboardingShortcutStaysEditableAndFreshAuthorizedShortcutAnswers() {
         continueAfterFailure = false
         let app = XCUIApplication()

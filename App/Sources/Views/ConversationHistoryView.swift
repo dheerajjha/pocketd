@@ -15,6 +15,7 @@ import SwiftUI
 /// offers the same two actions, for anybody who never finds a swipe.
 struct ConversationHistoryView: View {
     @Environment(AppModel.self) private var model
+    @Environment(Navigator.self) private var navigator
     @Environment(\.dismiss) private var dismiss
 
     @State private var renaming: Conversation?
@@ -34,7 +35,7 @@ struct ConversationHistoryView: View {
             ("Today", []), ("Yesterday", []), ("This week", []),
             ("This month", []), ("Older", []),
         ]
-        for conversation in model.history where !conversation.messages.isEmpty {
+        for conversation in model.history where !conversation.isEmpty {
             let index: Int
             let age = calendar.dateComponents([.day], from: conversation.updatedAt, to: now).day ?? 0
             if calendar.isDateInToday(conversation.updatedAt) {
@@ -76,6 +77,7 @@ struct ConversationHistoryView: View {
             }
         }
         .presentationDetents([.large])
+        .task { await model.flushConversation() }
         .presentationBackground(Color.pd.canvas)
         .alert("Rename", isPresented: Binding(
             get: { renaming != nil },
@@ -148,6 +150,8 @@ struct ConversationHistoryView: View {
     private func row(for conversation: Conversation) -> some View {
         let isOpen = conversation.id == model.currentConversationID
         Button {
+            navigator.pendingAsk = nil
+            navigator.askHandoff = nil
             Task {
                 await model.openConversation(conversation.id)
                 dismiss()
@@ -196,6 +200,7 @@ struct ConversationHistoryView: View {
             }
         }
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("ask.history.row.\(conversation.id.uuidString)")
         .accessibilityLabel(conversation.displayTitle)
         .accessibilityValue(subtitle(for: conversation, isOpen: isOpen))
         .accessibilityHint("Opens this conversation")
@@ -209,8 +214,8 @@ struct ConversationHistoryView: View {
     /// When, and how much of it. Never which brain wrote it.
     private func subtitle(for conversation: Conversation, isOpen: Bool) -> String {
         let questions = conversation.messages.filter { $0.role == .user }.count
-        let count = Format.counted(questions, "question")
-        if isOpen { return "Open now · \(count)" }
-        return "\(conversation.updatedAt.formatted(.relative(presentation: .named))) · \(count)"
+        let count = questions == 0 && conversation.hasDraft ? "Draft" : Format.counted(questions, "question")
+        let when = isOpen ? "Open now" : conversation.updatedAt.formatted(.relative(presentation: .named))
+        return [when, count, conversation.topic?.label].compactMap { $0 }.joined(separator: " · ")
     }
 }

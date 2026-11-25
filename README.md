@@ -54,7 +54,10 @@ event it adds comes with an Undo that lasts five minutes. Stop stops, at once,
 and the reply says "Stopped." If a question needs a source that's switched
 off, the conversation offers to connect it right there rather than answering
 as though it doesn't exist. History keeps every conversation, to reopen,
-rename or delete.
+rename or delete. The field on Today resumes the conversation you chose. A question
+from a tile or a routine stays in that subject's conversation; its recent follow-ups
+stay together. A question supplied by a Shortcut starts a conversation of its own.
+Unsent text and photos stay with their original conversation in History.
 
 ![The conversation: "What's on tomorrow?" answered in one sentence, with a timeline of tomorrow's events inside the same card](docs/screenshot-ask.png)
 

@@ -51,6 +51,7 @@ struct RemindersDetailView: View {
             summary: agenda?.summary,
             composer: PageQuestion.composer(
                 agenda?.suggestion ?? "Remind me to…",
+                topic: .reminders,
                 navigator: navigator,
                 model: model
             )

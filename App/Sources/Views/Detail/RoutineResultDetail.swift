@@ -15,7 +15,7 @@ struct RoutineResultDetail: View {
     var body: some View {
         RoutineResultView(
             taskID: taskID,
-            composer: PageQuestion.composer(question, navigator: navigator, model: model)
+            composer: PageQuestion.composer(question, topic: .routine(taskID), navigator: navigator, model: model)
         )
     }
 

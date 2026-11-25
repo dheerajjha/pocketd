@@ -36,7 +36,7 @@ struct DayDetailView: View {
         DetailPage(
             title: "Your day",
             summary: agenda?.summary,
-            composer: PageQuestion.composer(agenda?.suggestion, navigator: navigator, model: model)
+            composer: PageQuestion.composer(agenda?.suggestion, topic: .day, navigator: navigator, model: model)
         ) {
             if let agenda {
                 content(agenda)

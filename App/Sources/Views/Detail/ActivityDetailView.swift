@@ -27,7 +27,7 @@ struct ActivityDetailView: View {
         DetailPage(
             title: "Activity",
             summary: detail?.summary,
-            composer: PageQuestion.composer(detail?.suggestion, navigator: navigator, model: model)
+            composer: PageQuestion.composer(detail?.suggestion, topic: .activity, navigator: navigator, model: model)
         ) {
             if let detail {
                 content(detail)

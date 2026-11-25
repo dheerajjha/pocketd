@@ -139,6 +139,14 @@ enum TodayQuestion {
     static let remind = "Remind me to…"
     static let sleep = "How did I sleep?"
 
+    static func topic(for question: String) -> ConversationTopic {
+        switch question {
+        case overdue, remind: .reminders
+        case sleep: .sleep
+        default: .day
+        }
+    }
+
     static func pick(_ snapshot: TodaySnapshot, now: Date, calendar: Calendar = .current) -> String? {
         let time = TimeOfDayKind.from(now: now, calendar: calendar)
         if time == .evening, snapshot.calendar.isReadable {

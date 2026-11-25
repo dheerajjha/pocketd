@@ -462,6 +462,7 @@ struct TodayView: View {
     private var composer: ContextComposer {
         PageQuestion.composer(
             TodayQuestion.pick(briefing.snapshot, now: DemoClock.now),
+            topic: nil,
             placeholder: "Ask about your day…",
             navigator: navigator,
             model: model

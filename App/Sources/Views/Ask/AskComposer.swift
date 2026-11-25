@@ -39,12 +39,9 @@ struct AskComposer<Accessory: View>: View {
     @State private var voiceStart: Task<Void, Never>?
     @State private var authorizedTurn: UUID?
     @State private var picked: [PhotosPickerItem] = []
+    @State private var pickingForConversation: UUID?
     @State private var isPickingPhoto = false
     @State private var levels: [Float] = []
-    /// A question handed over while a reply was still being written. It waits
-    /// in the box and goes when that reply ends; sending over it would cut the
-    /// reply off, and dropping it would lose the question.
-    @State private var queued: AskHandoff?
     /// One line above the bar just before iOS asks for Speech Recognition for
     /// the first time. The system's prompt says speech "will be sent to
     /// Apple"; this says first what Pocketd actually does with it.
@@ -78,7 +75,10 @@ struct AskComposer<Accessory: View>: View {
                     if dictation.id == id && dictation.isHeld { cancelDictation() }
                 },
                 onSend: send,
-                onAttach: model.loadedModelSeesImages ? { isPickingPhoto = true } : nil,
+                onAttach: model.loadedModelSeesImages ? {
+                    pickingForConversation = model.currentConversationID
+                    isPickingPhoto = true
+                } : nil,
                 focus: $isFocused
             )
         }
@@ -114,7 +114,7 @@ struct AskComposer<Accessory: View>: View {
         .onChange(of: navigator.askHandoff?.id) { _, _ in takeHandoff(arriving: false) }
         .onChange(of: model.askComposerFocusRequested) { _, _ in takeFocusRequest(arriving: false) }
         .onChange(of: model.isGenerating) { _, generating in
-            if generating { cancelDictation() } else { sendQueued() }
+            if generating { cancelDictation() }
         }
     }
 
@@ -196,11 +196,20 @@ struct AskComposer<Accessory: View>: View {
     /// paired laptop cannot open a path on this phone.
     private func loadPicked() async {
         guard !picked.isEmpty else { return }
+        guard let conversation = pickingForConversation, conversation == model.currentConversationID else {
+            picked = []
+            return
+        }
         for item in picked {
             guard let raw = try? await item.loadTransferable(type: Data.self),
                   let image = UIImage(data: raw),
                   let shrunk = image.downscaled(to: 896)?.jpegData(compressionQuality: 0.8)
             else { continue }
+            guard !Task.isCancelled else { return }
+            guard model.currentConversationID == conversation else {
+                if pickingForConversation == conversation { picked = [] }
+                return
+            }
             model.attach(shrunk)
         }
         picked = []
@@ -344,48 +353,12 @@ struct AskComposer<Accessory: View>: View {
         }
     }
 
-    /// A question handed over from Today, a detail page, Siri or a Shortcut.
-    ///
-    /// `send: true` asks it — in a new conversation unless this one was used
-    /// in the last half hour, so a question about sleep never lands at the
-    /// bottom of yesterday's chat (`askFresh`). `send: false` starts the
-    /// sentence and leaves the cursor after it.
+    /// The shell selected the source's thread before presenting Ask. A stem
+    /// stays editable; a submitted question leaves room to read the answer.
     private func takeHandoff(arriving: Bool) {
-        guard let handoff = navigator.takeAskHandoff() else { return }
+        guard let handoff = navigator.takeAskHandoff(), handoff.conversation == model.currentConversationID else { return }
         cancelDictation()
-        if handoff.send {
-            guard !model.isGenerating else {
-                queued = handoff
-                model.draft = handoff.draft
-                return
-            }
-            Task { await model.askFresh(handoff) }
-        } else {
-            Task {
-                await startFreshIfStale()
-                model.draft = handoff.draft
-                focus(after: arriving)
-            }
-        }
-    }
-
-    /// The handed-over question, once the reply it arrived during has ended —
-    /// if the box still holds it. Somebody who has since typed something else
-    /// has changed their mind.
-    private func sendQueued() {
-        guard let handoff = queued else { return }
-        queued = nil
-        guard navigator.isAskPresented, model.draft.trimmingCharacters(in: .whitespacesAndNewlines) == handoff.draft
-            .trimmingCharacters(in: .whitespacesAndNewlines) else { return }
-        Task { await model.askFresh(handoff) }
-    }
-
-    /// `askFresh`'s rule for a sentence that is started rather than sent.
-    private func startFreshIfStale() async {
-        guard !model.conversation.isEmpty, !model.isGenerating,
-              Date().timeIntervalSince(model.lastConversationActivity) > AppModel.freshConversationAfter
-        else { return }
-        await model.newConversation()
+        if handoff.focus { focus(after: arriving) } else { isFocused = false }
     }
 
     /// The "Ask Pocketd" control, or a page's mic: the cursor in the box, and

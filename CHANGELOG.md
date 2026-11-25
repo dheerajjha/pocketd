@@ -15,6 +15,14 @@ adheres to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   the default. The mic still turns speech into text on the phone, and paired
   laptops use downloaded models only.
 
+### Fixed
+
+- A question from a Today tile or routine opens its own discussion instead of
+  being appended to an unrelated recent chat. Main Ask resumes the selected
+  conversation; History keeps unsent drafts and photos with their own thread.
+- The Sleep page asks explicitly about sleep, so its suggestion no longer
+  reads the calendar when it means Health.
+
 ## [1.1.2] - Unreleased
 
 ### Added

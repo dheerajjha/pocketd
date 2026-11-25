@@ -609,15 +609,15 @@ extension AppModel {
         .init(question, chosen: brainChoice, residentID: isUsingPrivateCloudCompute ? nil : loadedModelID)
     }
 
-    func openShortcutQuestion(_ question: ShortcutQuestionInbox.Question) async {
+    func preserveSetupShortcut(_ question: ShortcutQuestionInbox.Question) async {
+        // There is no Ask UI during setup. Save editable words in the
+        // invocation's own draft, never over an ordinary restored draft.
+        try? await conversations.preserveUnopenedDraft(Conversation(id: question.id, draft: question.text, topic: .shortcut))
+    }
+
+    func openShortcutQuestion(_ question: ShortcutQuestionInbox.Question) {
         let inbox = IntentInbox.questions
-        guard inbox.isOpening(question.id) else { return }
-        if !isGenerating, !conversation.isEmpty, Date().timeIntervalSince(lastConversationActivity) > Self.freshConversationAfter {
-            let previous = currentConversationID
-            await flushConversation()
-            guard inbox.isOpening(question.id) else { return }
-            if currentConversationID == previous, !isGenerating { beginEmptyConversation() }
-        }
+        guard currentConversationID == question.id else { return }
         guard let text = inbox.stage(question.id, in: currentConversationID) else { return }
         draft = text
         sendShortcutIfReady()
@@ -642,7 +642,7 @@ extension AppModel {
     func sendWaitingQuestionIfReady() {
         guard let waiting = waitingQuestion, brainStatus.canAnswer, !isGenerating else { return }
         let inBox = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard inBox == waiting || inBox.isEmpty else {
+        guard inBox == waiting else {
             waitingQuestion = nil
             return
         }
@@ -650,38 +650,51 @@ extension AppModel {
         send()
     }
 
-    /// Asks from somewhere other than the conversation — Today, a detail
-    /// page, a tile.
-    ///
-    /// Starts a new conversation unless the open one was used in the last
-    /// half hour, so a question about sleep never lands at the bottom of an
-    /// unrelated chat from yesterday.
-    func askFresh(_ handoff: AskHandoff, now: Date = Date()) async {
-        if !conversation.isEmpty, now.timeIntervalSince(lastConversationActivity) > Self.freshConversationAfter {
-            if isGenerating { stopGenerating() }
-            await newConversation()
-        }
-        draft = handoff.draft
-        guard handoff.send, handoff.usingCloud == isUsingPrivateCloudCompute else {
+    /// The shell selected the thread. Claim its empty editor and dispatch on
+    /// this actor, not on a later appearance of the sheet.
+    func deliver(_ text: String, in id: UUID, sendNow: Bool = false, usingCloud: Bool = false) -> Bool {
+        guard currentConversationID == id, !isGenerating,
+              draft.isEmpty, attachments.isEmpty else { return false }
+        draft = text
+        guard sendNow, usingCloud == isUsingPrivateCloudCompute else {
             scheduleConversationSave()
-            return
+            return true
         }
         send()
+        return true
     }
 
-    /// How long a conversation stays the one a new question joins.
-    static let freshConversationAfter: TimeInterval = 30 * 60
+    func canOpenDuringReply(_ request: AskEntryRequest) -> Bool {
+        request.entry.canOpenDuringReply(keyboardOnly: request.action.keyboardOnly, current: currentConversationID,
+                                         topic: conversationTopic, main: mainConversationID)
+    }
 
-    /// When the open conversation was last added to.
-    var lastConversationActivity: Date {
-        history.first(where: { $0.id == currentConversationID })?.updatedAt ?? conversationStartedAt
+    /// Wait for the outgoing draft to be safely saved before swapping. The
+    /// requester rechecks navigation after the await — a Back, close, a new
+    /// tap or another selected thread must not receive a delayed submission.
+    func prepareAsk(_ request: AskEntryRequest, while valid: () -> Bool) async -> UUID? {
+        guard valid(), hasRestoredConversations else { return nil }
+        if isGenerating { return canOpenDuringReply(request) ? currentConversationID : nil }
+        let current = snapshotConversation()
+        let target = request.entry.destination(current: current, history: history, main: mainConversationID,
+                                               needsEmptyDraft: request.action.needsEmptyDraft)
+        if target.id != current.id {
+            saveTask?.cancel()
+            do { try await conversations.save(current) } catch { return nil }
+            let saved = await conversations.all()
+            guard valid(), !isGenerating, currentConversationID == current.id,
+                  current.draft == draft, (current.draftImages ?? []) == attachments else { return nil }
+            history = saved
+            displayConversation(saved.first { $0.id == target.id } ?? target)
+        }
+        if request.entry == .main { mainConversationID = currentConversationID }
+        return currentConversationID
     }
 
     // MARK: - History
 
     func loadHistory() async {
         history = await conversations.all()
-        IntentInbox.questions.didReadHistory(current: currentConversationID, latest: history.first?.id)
     }
 
     /// What goes to disk.
@@ -705,11 +718,13 @@ extension AppModel {
             // When it was last added to, not when it happened to be saved.
             // Every save stamped "now", and leaving a chat saves it — so a
             // conversation untouched for two hours read "4 minutes ago" in
-            // History, and counted as fresh for `askFresh`.
+            // History, and counted as fresh for a page entry.
             updatedAt: conversation.compactMap(\.sentAt).max() ?? stored?.updatedAt ?? Date(),
             modelID: loadedModelID,
             messages: messages,
-            draft: draft
+            draft: draft,
+            topic: conversationTopic,
+            draftImages: attachments.isEmpty ? nil : attachments
         )
     }
 
@@ -750,30 +765,38 @@ extension AppModel {
     }
 
     func newConversation() async {
+        let outgoing = currentConversationID
         if isGenerating { stopGenerating() }
         await flushConversation()
-        beginEmptyConversation()
+        guard currentConversationID == outgoing, !isGenerating else { return }
+        displayConversation(Conversation())
+        mainConversationID = currentConversationID
     }
 
-    private func beginEmptyConversation() {
-        conversation.removeAll()
-        draft = ""
+    func displayConversation(_ selected: Conversation) {
+        askComposerFocusRequested = false
+        waitingQuestion = nil
+        conversation = selected.messages
+        draft = selected.draft
+        attachments = selected.draftImages ?? []
         dayRefusal = nil
         // An offer belongs to the turn that prompted it; following the
         // user into another conversation would make it look like the app
         // had read something it has not.
         pendingToolOffer = nil
         generationError = nil
+        replyFailureRemedy = nil
         modelSwitchNotice = nil
-        waitingQuestion = nil
-        currentConversationID = UUID()
-        conversationStartedAt = Date()
+        currentConversationID = selected.id
+        conversationTopic = selected.topic
+        conversationStartedAt = selected.createdAt
     }
 
     func openConversation(_ id: UUID) async {
-        guard id != currentConversationID else { return }
+        if id == currentConversationID { mainConversationID = id; return }
+        let outgoing = currentConversationID
         await flushConversation()
-        guard let found = history.first(where: { $0.id == id }) else { return }
+        guard currentConversationID == outgoing, let found = history.first(where: { $0.id == id }) else { return }
         // Stopped for the same reason `loadModel` and `offloadModel` stop: the
         // transcript the reply is being written into is about to be replaced,
         // and a generation that outlived the swap has nowhere honest to put the
@@ -782,15 +805,8 @@ extension AppModel {
         // the save it schedules still describes the transcript being left.
         let interrupted = isGenerating
         if interrupted { stopGenerating() }
-        conversation = found.messages
-        draft = found.draft
-        currentConversationID = found.id
-        conversationStartedAt = found.createdAt
-        // Nothing to say here: the reply that was cut off says "Stopped." in
-        // the conversation it belongs to, which is where anybody would look.
-        generationError = nil
-        modelSwitchNotice = nil
-        waitingQuestion = nil
+        displayConversation(found)
+        mainConversationID = id
     }
 
     func deleteConversation(_ id: UUID) async {
@@ -804,17 +820,11 @@ extension AppModel {
         }
         await conversations.delete(id)
         history = await conversations.all()
+        if mainConversationID == id { mainConversationID = nil }
         // Deleting what you are looking at has to leave you somewhere, and an
         // emptied-but-still-current transcript would be saved straight back.
         if id == currentConversationID {
-            conversation.removeAll()
-            draft = ""
-            // An offer belongs to the turn that prompted it; following the
-            // user into another conversation would make it look like the app
-            // had read something it has not.
-            pendingToolOffer = nil
-            currentConversationID = UUID()
-            conversationStartedAt = Date()
+            displayConversation(Conversation())
         }
     }
 

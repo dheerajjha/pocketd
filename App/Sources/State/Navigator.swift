@@ -1,4 +1,5 @@
 import Observation
+import PocketdKit
 import SwiftUI
 
 /// The four places a person can ask for by name.
@@ -82,22 +83,33 @@ extension YouRoute: Identifiable {
     var id: Self { self }
 }
 
-/// A question handed to the conversation from somewhere else.
-///
-/// A value rather than a `String?` on the model, and it carries `send` for the
-/// reason the two cases are genuinely different: a suggestion chip means "ask
-/// this now", and a "Remind me to…" chip means "start this sentence and let me
-/// finish it". A single draft string cannot say which.
-///
-/// `Identifiable` so a second identical question still arrives: tapping the
-/// same chip twice is two requests, and an `onChange` keyed on the text alone
-/// would swallow the second.
+/// Presentation only. Once the destination owns the words, the editor needs
+/// focus for a draft, or room to read an answer. Appearing cannot send again.
 struct AskHandoff: Identifiable, Equatable {
     let id = UUID()
-    var draft: String
-    var send: Bool
-    /// Captured at the tap, not when the sheet eventually becomes ready.
-    var usingCloud: Bool
+    let conversation: UUID
+    let focus: Bool
+}
+
+/// Kept outside the composer until the destination owns its draft. A page
+/// tapped during a reply must not use the outgoing editor as a scratch buffer.
+struct AskEntryRequest: Identifiable {
+    enum Action {
+        case keyboard, voice, draft(String), send(String, usingCloud: Bool), shortcut(ShortcutQuestionInbox.Question)
+
+        var needsEmptyDraft: Bool {
+            switch self {
+            case .keyboard, .shortcut: false
+            case .voice, .draft, .send: true
+            }
+        }
+
+        var keyboardOnly: Bool { if case .keyboard = self { true } else { false } }
+    }
+
+    let id = UUID()
+    let entry: ConversationEntry
+    let action: Action
 }
 
 /// Where the app is, and the only thing allowed to move it.
@@ -119,7 +131,9 @@ struct AskHandoff: Identifiable, Equatable {
 final class Navigator {
     /// The one stack. Empty is Today, which is the whole thesis of v2 in one
     /// line: the first thing anyone sees is their own day.
-    var path: [Route] = []
+    var path: [Route] = [] {
+        didSet { if oldValue != path { pendingAsk = nil } }
+    }
 
     /// Whether the conversation sheet is up.
     ///
@@ -127,13 +141,21 @@ final class Navigator {
     /// presented over wherever you are — Sleep, a routine's result — and closing
     /// it returns you there. A pushed conversation would spend that place's
     /// Back button on itself.
-    var isAskPresented = false
+    var isAskPresented = false {
+        didSet { if !isAskPresented { pendingAsk = nil; askHandoff = nil; isHistoryPresented = false } }
+    }
 
-    /// A question waiting for the conversation sheet to pick it up.
-    ///
-    /// Not written straight into `AppModel.draft`, because handing over a
-    /// question is a navigation event with a destination, and because `send`
-    /// has nowhere to live on a string.
+    var isHistoryPresented = false
+
+    var pendingAsk: AskEntryRequest?
+
+    func requestAsk(_ entry: ConversationEntry, _ action: AskEntryRequest.Action) {
+        // A generic re-entry while Ask is on screen means the visible thread.
+        askHandoff = nil
+        pendingAsk = AskEntryRequest(entry: entry == .main && isAskPresented ? .current : entry, action: action)
+    }
+
+    /// One focus request for the sheet, after routing and dispatch have settled.
     var askHandoff: AskHandoff?
 
     init() {}
@@ -158,7 +180,7 @@ final class Navigator {
             isAskPresented = false
             path.removeAll()
         case .ask:
-            isAskPresented = true
+            requestAsk(.main, .keyboard)
         case .routines:
             show(.routines)
         case .you:
@@ -166,13 +188,8 @@ final class Navigator {
         }
     }
 
-    /// Put a question in the conversation, and open it.
-    ///
-    /// `send: false` leaves it in the box with the cursor after it, which is
-    /// what a half-sentence like "Remind me to…" needs. The sheet goes over the
-    /// page that asked, so closing it lands back there.
-    func ask(_ draft: String, send: Bool = false, usingCloud: Bool = false) {
-        askHandoff = AskHandoff(draft: draft, send: send, usingCloud: usingCloud)
+    func presentAsk(in conversation: UUID, focus: Bool) {
+        askHandoff = AskHandoff(conversation: conversation, focus: focus)
         isAskPresented = true
     }
 

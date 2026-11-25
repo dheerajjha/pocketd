@@ -136,7 +136,7 @@ public struct SleepDetail: Sendable, Equatable {
     public var verdict: TileVerdict
     /// The grey line under the title.
     public var summary: String
-    public var suggestion: String { "Was this week better than last?" }
+    public var suggestion: String { "How did I sleep compared with my usual?" }
 
     /// `6h 36m — 29 min under your usual.`
     public var deltaSentence: String { verdict.sentence }

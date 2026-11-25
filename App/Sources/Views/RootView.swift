@@ -23,8 +23,7 @@ struct RootView: View {
                 // persist the permission to submit the Shortcut on relaunch.
                 guard model.needsOnboarding || model.deskMode,
                       let question = IntentInbox.questions.awaitingPresentation(in: model.currentConversationID) else { return }
-                model.draft = question.text
-                model.scheduleConversationSave()
+                Task { await model.preserveSetupShortcut(question) }
             }
         #if DEBUG
         .onAppear { IntentInbox.stageLaunchQuestionOnce() }
@@ -196,8 +195,23 @@ private struct Shell: View {
         // memory. Each source clears itself as it is read, which is what stops
         // a scene that becomes active twice from acting twice.
         .onAppear { collectArrivals() }
+        .onChange(of: navigator.isAskPresented) { _, shown in
+            if !shown { model.askComposerFocusRequested = false }
+        }
+        .task(id: readyAskID) {
+            if let request = navigator.pendingAsk, readyAskID == request.id { await openAsk(request) }
+        }
+        .onChange(of: navigator.pendingAsk?.id) { _, _ in
+            if model.isGenerating { explainWaitingAsk() }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { collectArrivals() }
+            if phase == .background, let request = navigator.pendingAsk {
+                switch request.action {
+                case .shortcut: break
+                default: navigator.pendingAsk = nil
+                }
+            }
         }
         // An intent can also arrive with the scene already active, or before
         // its saved conversation is restored. All paths claim the same ID.
@@ -205,7 +219,7 @@ private struct Shell: View {
             if id != nil, scenePhase == .active { collectIntentQuestion() }
         }
         .onChange(of: model.isGenerating) { _, busy in
-            if !busy, scenePhase == .active { model.sendShortcutIfReady() }
+            if busy { explainWaitingAsk() } else if scenePhase == .active { model.sendShortcutIfReady() }
         }
         .onChange(of: IntentInbox.questions.isWaiting ? model.brainStatus : nil) { _, _ in
             if scenePhase == .active { model.sendShortcutIfReady() }
@@ -272,6 +286,60 @@ private struct Shell: View {
 
     // MARK: Arrivals
 
+    /// Opening the current transcript to read or stop it is always available.
+    /// A different thread or an incoming question waits for the live answer.
+    private var readyAskID: UUID? {
+        guard scenePhase == .active, model.hasRestoredConversations, !navigator.isHistoryPresented,
+              let request = navigator.pendingAsk else { return nil }
+        if model.isGenerating, !model.canOpenDuringReply(request) { return nil }
+        return request.id
+    }
+
+    private func explainWaitingAsk() {
+        guard let request = navigator.pendingAsk, readyAskID == nil else { return }
+        if case .voice = request.action {
+            // Don't turn on a microphone minutes after the tap.
+            navigator.pendingAsk = nil
+            toasts.show("Pocketd is answering. Try the microphone when it's finished.")
+        } else {
+            toasts.show("Pocketd will open that conversation when this answer is finished.")
+        }
+    }
+
+    private func openAsk(_ request: AskEntryRequest) async {
+        func valid() -> Bool {
+            guard !Task.isCancelled, navigator.pendingAsk?.id == request.id, scenePhase == .active,
+                  !navigator.isHistoryPresented else { return false }
+            if case let .shortcut(question) = request.action { return IntentInbox.questions.isOpening(question.id) }
+            return true
+        }
+        guard let thread = await model.prepareAsk(request, while: valid), valid(), model.currentConversationID == thread else {
+            if valid(), !model.isGenerating {
+                navigator.pendingAsk = nil
+                toasts.show("Couldn't open that conversation. Try again.")
+            }
+            return
+        }
+        navigator.pendingAsk = nil
+        switch request.action {
+        case .keyboard:
+            navigator.presentAsk(in: thread, focus: true)
+        case .voice:
+            // A control can also arrive over an explicitly open draft.
+            if model.draft.isEmpty && model.attachments.isEmpty { model.askComposerFocusRequested = true }
+            navigator.isAskPresented = true
+        case let .draft(text):
+            _ = model.deliver(text, in: thread)
+            navigator.presentAsk(in: thread, focus: true)
+        case let .send(text, cloud):
+            _ = model.deliver(text, in: thread, sendNow: true, usingCloud: cloud)
+            navigator.presentAsk(in: thread, focus: !model.draft.isEmpty)
+        case let .shortcut(question):
+            model.openShortcutQuestion(question)
+            navigator.presentAsk(in: thread, focus: !model.draft.isEmpty)
+        }
+    }
+
     private func collectArrivals() {
         collectIntentQuestion()
         collectRoutineTap()
@@ -288,14 +356,12 @@ private struct Shell: View {
         // phone can listen on-device.
         if AskLaunch.take() != nil {
             model.record(.featureUsed(feature: .controlAsk, surface: .control))
-            navigator.go(.ask)
-            model.askComposerFocusRequested = true
+            navigator.requestAsk(.main, .voice)
         }
         guard scenePhase == .active else { return }
         if let question = IntentInbox.questions.takeForPresentation(in: model.currentConversationID) {
             model.record(.featureUsed(feature: .intentAsk, surface: .intent))
-            navigator.go(.ask)
-            Task { await model.openShortcutQuestion(question) }
+            navigator.requestAsk(.shortcut(question.id), .shortcut(question))
         } else {
             model.sendShortcutIfReady()
         }

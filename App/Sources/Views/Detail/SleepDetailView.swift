@@ -33,7 +33,7 @@ struct SleepDetailView: View {
         DetailPage(
             title: "Sleep",
             summary: detail?.summary,
-            composer: PageQuestion.composer(detail?.suggestion, navigator: navigator, model: model)
+            composer: PageQuestion.composer(detail?.suggestion, topic: .sleep, navigator: navigator, model: model)
         ) {
             if let detail {
                 content(detail)

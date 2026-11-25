@@ -88,7 +88,9 @@ struct AskView: View {
             // The same hand-off a "Remind me to…" chip on Today makes: in the
             // box, cursor after it. Not `askComposerFocusRequested`, which
             // opens the microphone where the phone can listen.
-            navigator.ask(stem, send: false)
+            let thread = model.currentConversationID
+            if !model.deliver(stem, in: thread) { toasts?.show("Your draft was kept. Send or clear it first.") }
+            navigator.presentAsk(in: thread, focus: true)
         } else {
             model.draft = example.text
             model.send()

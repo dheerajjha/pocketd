@@ -22,15 +22,26 @@ import SwiftUI
 /// the conversation, where nobody can reach it.
 struct ConversationSheet: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
+    @Environment(Navigator.self) private var navigator
 
     @State private var toasts = ToastCenter()
-    @State private var isShowingHistory = false
 
     var body: some View {
+        @Bindable var navigation = navigator
         NavigationStack {
             AskView()
-                .safeAreaInset(edge: .top, spacing: 0) { providerDisclosure }
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    VStack(spacing: 0) {
+                        if let topic = model.conversationTopic {
+                            Text("\(topic.label) conversation")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Color.pd.inkSecondary)
+                                .padding(.vertical, PDSpacing.xxs)
+                                .accessibilityIdentifier("ask.topic")
+                        }
+                        providerDisclosure
+                    }
+                }
                 .navigationTitle("Conversation")
                 .navigationBarTitleDisplayMode(.inline)
                 .hiddenConversationTitle()
@@ -40,7 +51,7 @@ struct ConversationSheet: View {
         // Clear of the composer and the one chip or notice above it, so a
         // toast never sits on the thing it is about.
         .toast(toasts, bottomInset: PDMetric.askBarHeight + PDMetric.minHitTarget + PDSpacing.xl)
-        .sheet(isPresented: $isShowingHistory) {
+        .sheet(isPresented: $navigation.isHistoryPresented) {
             ConversationHistoryView()
         }
         .presentationDetents([.large])
@@ -69,15 +80,18 @@ struct ConversationSheet: View {
     private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
             Button {
-                dismiss()
+                navigator.isAskPresented = false
             } label: {
                 Image(systemName: "xmark")
             }
             .accessibilityLabel("Close")
+            .accessibilityIdentifier("ask.close")
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
             Button {
-                isShowingHistory = true
+                navigator.pendingAsk = nil
+                navigator.askHandoff = nil
+                navigator.isHistoryPresented = true
             } label: {
                 // Not ⏰. That glyph is Routines, in Today's header, and one
                 // clock meaning two places is how the old History button got
@@ -85,18 +99,29 @@ struct ConversationSheet: View {
                 Image(systemName: "clock.arrow.circlepath")
             }
             .accessibilityLabel("Past conversations")
+            .accessibilityIdentifier("ask.history")
 
-            Button {
-                Haptics.tap()
-                Task { await model.newConversation() }
-            } label: {
-                Image(systemName: "square.and.pencil")
-            }
-            .accessibilityLabel("New conversation")
-            // Nothing to leave yet. A blank page that offers a blank page is
-            // a button that does nothing, which reads as broken.
-            .disabled(model.conversation.isEmpty)
+            NewConversationButton()
         }
+    }
+}
+
+/// Reading the draft here, rather than in the sheet, keeps each keystroke
+/// from invalidating the transcript. A draft is something worth leaving.
+private struct NewConversationButton: View {
+    @Environment(AppModel.self) private var model
+    @Environment(Navigator.self) private var navigator
+
+    var body: some View {
+        Button {
+            navigator.pendingAsk = nil
+            navigator.askHandoff = nil
+            Haptics.tap()
+            Task { await model.newConversation() }
+        } label: { Image(systemName: "square.and.pencil") }
+        .accessibilityLabel("New conversation")
+        .accessibilityIdentifier("ask.new")
+        .disabled(model.conversation.isEmpty && model.draft.isEmpty && model.attachments.isEmpty)
     }
 }
 

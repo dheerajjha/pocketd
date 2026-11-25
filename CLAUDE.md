@@ -30,6 +30,9 @@ generated from `project.yml` by XcodeGen) adds llama.cpp through LocalLLMClient 
 - An interrupted scheduled prompt stays due. A cancelled stream can end without throwing, even after emitting words; neither that prefix nor an empty result is a completed run.
 - Tap the Ask mic to start and again to finish, or hold and release. Only confirmed final words may send, once, to the same ready brain and selection intent. PCC must be explicitly chosen, effective and resident. A changed or unavailable destination, interruption or missing final leaves the draft editable.
 
+## Conversation entry
+- Main Ask resumes the explicitly chosen chat. Pages reuse their own discussions (routines by ID); a Shortcut question gets its invocation's thread. A supplied question must not take an existing draft or its photos, or cut off a previous reply. `ConversationEntryTests` cover the policy and old transcript format.
+
 ## Apple Private Cloud Compute
 - Only an explicit phone selection may send a request to PCC. Preserve the local defaults, a separate cloud model ID, and downloaded-only LAN serving. Recheck the signed build, Apple's actual readiness, and the per-user quota rather than guessing from the device name or a previous launch. See `docs/apple-private-cloud-compute.md` for device and signing verification.
 

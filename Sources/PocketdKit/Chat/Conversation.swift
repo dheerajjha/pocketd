@@ -21,6 +21,10 @@ public struct Conversation: Sendable, Codable, Equatable, Identifiable {
     /// Unsent text, kept per conversation so switching away and back does not
     /// silently discard a half-written message.
     public var draft: String
+    /// Absent in older files and ordinary manually started conversations.
+    public var topic: ConversationTopic?
+    /// Unsent photos belong to the draft, not to whichever thread opens next.
+    public var draftImages: [Data]?
 
     public init(
         id: UUID = UUID(),
@@ -29,7 +33,9 @@ public struct Conversation: Sendable, Codable, Equatable, Identifiable {
         updatedAt: Date = Date(),
         modelID: String? = nil,
         messages: [ChatMessage] = [],
-        draft: String = ""
+        draft: String = "",
+        topic: ConversationTopic? = nil,
+        draftImages: [Data]? = nil
     ) {
         self.id = id
         self.title = title
@@ -38,21 +44,22 @@ public struct Conversation: Sendable, Codable, Equatable, Identifiable {
         self.modelID = modelID
         self.messages = messages
         self.draft = draft
+        self.topic = topic
+        self.draftImages = draftImages
     }
 
-    public var isEmpty: Bool { messages.isEmpty && draft.isEmpty }
+    public var hasDraft: Bool { !draft.isEmpty || !(draftImages ?? []).isEmpty }
+    public var isEmpty: Bool { messages.isEmpty && !hasDraft }
 
     /// What to show in a list. Falls back to the first thing said, because an
     /// untitled row is indistinguishable from every other untitled row.
     public var displayTitle: String {
         if !title.isEmpty { return title }
-        guard let first = messages.first(where: { $0.role == .user || $0.role == .assistant }) else {
-            return "New conversation"
-        }
-        let flattened = first.content
+        let first = messages.first(where: { $0.role == .user || $0.role == .assistant })
+        let flattened = (first?.content ?? draft)
             .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if flattened.isEmpty { return "New conversation" }
+        if flattened.isEmpty { return hasDraft && !(draftImages ?? []).isEmpty ? "Photo draft" : "New conversation" }
         return flattened.count <= 48 ? flattened : String(flattened.prefix(48)) + "…"
     }
 }
@@ -133,7 +140,19 @@ public actor ConversationStore {
         // An empty conversation is what you are looking at before you have said
         // anything. Writing one would put a "New conversation" row in the
         // history every time the Chat tab is opened.
-        guard !conversation.isEmpty else { return }
+        guard !conversation.isEmpty else {
+            // A previously saved draft was erased. Never erase a transcript
+            // (or an unreadable file) because an empty placeholder was flushed.
+            let file = url(for: conversation.id)
+            if let data = try? Data(contentsOf: file) {
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
+                if let previous = try? decoder.decode(Conversation.self, from: data), previous.messages.isEmpty {
+                    try fileManager.removeItem(at: file)
+                }
+            }
+            return
+        }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(conversation)
@@ -144,6 +163,15 @@ public actor ConversationStore {
 
     public func delete(_ id: UUID) {
         try? fileManager.removeItem(at: url(for: id))
+    }
+
+    /// A Shortcut arriving during setup can save an editable draft before Ask
+    /// exists. A delayed save of that initial draft must never replace a turn
+    /// already sent by the same invocation.
+    public func preserveUnopenedDraft(_ conversation: Conversation) throws {
+        guard conversation.messages.isEmpty, conversation.hasDraft,
+              !fileManager.fileExists(atPath: url(for: conversation.id).path) else { return }
+        try save(conversation)
     }
 
     public func deleteAll() {

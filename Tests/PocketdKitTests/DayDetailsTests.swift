@@ -265,7 +265,8 @@ struct DayDetailsTests {
         #expect(detail.nights.first?.morning == Self.calendar.startOfDay(for: Self.date(9)))
         #expect(detail.nights.first?.valueText == "6h 36m")
         #expect(detail.summary.hasPrefix("You averaged "))
-        #expect(detail.suggestion == "Was this week better than last?")
+        let request = GenerationRequest(modelID: "", messages: [.user(detail.suggestion)], origin: .onDeviceChat)
+        #expect(SystemModelReads.plan(for: request, enabled: [.calendar, .health]) == [.health(.sleep)])
     }
 
     @Test("nights are labelled by the evening they began, last night first")
