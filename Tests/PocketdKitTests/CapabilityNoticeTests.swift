@@ -21,7 +21,7 @@ struct CapabilityNoticeTests {
     private static let roomy = CapabilityBudget(contextTokens: 4096, templateIsToolNative: true)
     private static let pair = [CapabilityFixture.calendar, CapabilityFixture.reminders]
 
-    @Test("a window that refused a capability outranks a gate that says it is live")
+    @Test("a window that refused a capability explains the shortfall even on a capable model")
     func budgetOverridesTheGateWhenItRefused() throws {
         let plan = Self.squeezed.admit(Self.pair)
         // The arithmetic the sentence rests on, restated so this test fails if
@@ -36,10 +36,7 @@ struct CapabilityNoticeTests {
             modelName: "Qwen3 1.7B"
         ))
 
-        // The gate's own sentence, which the screen used to print here.
-        #expect(ToolGate.Decision.declaredCapable.explanation(modelName: "Qwen3 1.7B")
-            == "Qwen3 1.7B can use these tools, and both are registered.")
-        #expect(notice.summary.contains("both are registered") == false)
+        #expect(!notice.summary.contains(DayAccess.readsYourDay.label), "changing brains is not the fix for a budget shortfall")
         #expect(notice.summary.contains("Reminders could not be registered"))
         #expect(notice.summary.contains("1024-token context"))
         #expect(notice.isWarning)
@@ -104,20 +101,17 @@ struct CapabilityNoticeTests {
         #expect(notice.shortfalls.isEmpty)
     }
 
-    @Test("a window that carried everything leaves the gate to speak")
+    @Test("a capable model reports support whether zero, one or both abilities were enabled")
     func gateSpeaksWhenNothingWasRefused() throws {
-        let plan = Self.roomy.admit(Self.pair)
-        #expect(plan.dropped.isEmpty)
-
-        let notice = try #require(CapabilityNotice.decide(
-            gate: .declaredCapable, plan: plan, modelName: "Qwen3 1.7B"
-        ))
-        // "On" and "working" were the same word on this screen until they were
-        // not, so the working case still says which model is honouring the
-        // switch rather than saying nothing.
-        #expect(notice.summary == "Qwen3 1.7B can use these tools, and both are registered.")
-        #expect(notice.isWarning == false)
-        #expect(notice.shortfalls.isEmpty)
+        let plans: [CapabilityBudget.Plan?] = [nil, Self.roomy.admit([CapabilityFixture.calendar]), Self.roomy.admit(Self.pair)]
+        for plan in plans {
+            let notice = try #require(CapabilityNotice.decide(
+                gate: .declaredCapable, plan: plan, modelName: "Qwen3 1.7B"
+            ))
+            #expect(notice.summary == "Qwen3 1.7B can work with apps you choose to connect.")
+            #expect(notice.isWarning == false)
+            #expect(notice.shortfalls.isEmpty)
+        }
     }
 
     @Test("a routing exclusion is not reported as a fault")

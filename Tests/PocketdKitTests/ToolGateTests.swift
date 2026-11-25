@@ -154,29 +154,32 @@ struct ToolGateTests {
         #expect(decision == .inferredCapable)
     }
 
-    @Test("every case names the model, the working one included")
-    func explanations() {
-        // The working case says so out loud. "On" and "working" looked
-        // identical before, and that is the whole complaint.
-        #expect(ToolGate.Decision.declaredCapable.explanation(modelName: "Qwen3 1.7B")?
-            .contains("Qwen3 1.7B") == true)
-        #expect(ToolGate.Decision.declaredCapable.isRefusal == false)
+    @Test("an inferred capability is unverified and a refusal points to the picker label, not a size")
+    func explanations() throws {
+        let inferred = try #require(ToolGate.Decision.inferredCapable.explanation(modelName: "Custom"))
+        #expect(inferred.contains("Custom"))
+        #expect(inferred.contains("chat template"))
+        #expect(inferred.contains("hasn't verified"))
+        #expect(!inferred.contains("registered"))
+        #expect(!ToolGate.Decision.inferredCapable.isRefusal)
         for decision: ToolGate.Decision in [
             .declaredIncapable, .templateHasNoTools, .tooSmall(billions: 1.0), .unreadable
         ] {
-            let sentence = decision.explanation(modelName: "Llama 3.2 1B")
-            #expect(sentence?.contains("Llama 3.2 1B") == true)
+            let sentence = try #require(decision.explanation(modelName: "Custom"))
+            #expect(sentence.contains("Custom"))
+            #expect(sentence.contains("“\(DayAccess.readsYourDay.label)”"))
+            #expect(sentence.range(of: #"\d+(\.\d+)?\s*[BM]\b"#, options: .regularExpression) == nil)
             #expect(decision.isRefusal)
         }
-        #expect(ToolGate.Decision.inferredCapable.explanation(modelName: "Custom")?.contains("Custom") == true)
-        #expect(ToolGate.Decision.inferredCapable.isRefusal == false)
 
         // Llama 3.2 1B is `.no` and its template is full of tool machinery, so
         // the two refusals must not share a sentence: blaming the template
         // there would be a lie anyone could check by reading the file.
         let declared = ToolGate.Decision.declaredIncapable.explanation(modelName: "Llama 3.2 1B")
         #expect(declared?.contains("chat template") == false)
-        #expect(ToolGate.Decision.templateHasNoTools.explanation(modelName: "x")?.contains("chat template") == true)
+        #expect(ToolGate.Decision.templateHasNoTools.explanation(modelName: "M")?.contains("doesn't support tools") == true)
+        #expect(ToolGate.Decision.tooSmall(billions: 0.5).explanation(modelName: "M")?.contains("hasn't been verified") == true)
+        #expect(ToolGate.Decision.unreadable.explanation(modelName: "M")?.contains("couldn't tell") == true)
     }
 }
 

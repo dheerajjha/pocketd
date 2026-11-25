@@ -252,11 +252,13 @@ struct BrainView: View {
     }
 
     private func inUseCard(_ record: ModelRecord) -> some View {
-        BrainCard(
+        let access = dayAccess(of: record)
+        return BrainCard(
             identifier: "brain.currentDownload",
             symbol: "bubble.left",
             title: record.displayName,
-            detail: readsYourDay(record) ? DayAccess.readsYourDay.label : "Chat only — can't read your day",
+            detail: access.label,
+            note: access == .chatOnly ? DayAccess.connectedAppsHint : nil,
             accessory: accessory(for: record)
         ) {
             BrainTransferStatus(record: record)
@@ -535,7 +537,7 @@ struct MoreBrainsView: View {
     var body: some View {
         YouDetailScreen(
             title: "More brains",
-            subtitle: "Every download runs on this iPhone. Only some can read your day."
+            subtitle: "Every download runs on this iPhone. \(DayAccess.connectedAppsHint)"
         ) {
             if !installed.isEmpty {
                 YouSection("On this iPhone") {

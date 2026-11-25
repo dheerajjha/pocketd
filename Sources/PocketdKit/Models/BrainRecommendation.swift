@@ -10,7 +10,7 @@ import Foundation
 /// a brain nobody has vetted is described by what it will reliably do, which is
 /// chat.
 public enum DayAccess: String, Sendable, Equatable, Codable {
-    /// Calendar, reminders and health are handed to it, and it can use them.
+    /// The brain can be offered tools for apps the user connects.
     case readsYourDay
     /// It can talk, and anything it says about your day is a guess.
     case chatOnly
@@ -22,6 +22,8 @@ public enum DayAccess: String, Sendable, Equatable, Codable {
         case .chatOnly: "Chat only"
         }
     }
+
+    public static let connectedAppsHint = "To use apps you connect, choose a brain marked “\(DayAccess.readsYourDay.label)”."
 
     public var readsYourDay: Bool { self == .readsYourDay }
 }

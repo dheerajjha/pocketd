@@ -178,10 +178,8 @@ extension AppModel {
         }
     }
 
-    /// The one thing Settings prints under the two switches.
-    ///
-    /// One sentence and not two, because two deciders can answer this question
-    /// and only the last one to run is the reason. See `CapabilityNotice`.
+    /// Model support or a budget shortfall. The source switches in You show
+    /// their own connection state rather than this model-level summary.
     var capabilityNotice: CapabilityNotice? {
         CapabilityNotice.decide(
             gate: personalDataToolGate,

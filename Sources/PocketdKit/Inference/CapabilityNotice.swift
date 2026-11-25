@@ -1,26 +1,11 @@
 import Foundation
 
-/// What Settings says under the capability switches, decided in one place.
+/// An explanation of the model's tool support or of a capability that did not fit.
 ///
-/// Three separate things can leave one of those switches on and inert, and each
-/// of them holds its own sentence. `ToolGate` decides whether the resident model
-/// is handed any tool at all. `CapabilityBudget` decides which of the tools it
-/// was handed the context window can actually carry. `HealthAvailability`
-/// decides whether there is a Health store on this device to read from.
-///
-/// Rendered side by side they contradicted each other: the gate says "both are
-/// registered" the moment a model can work the tool protocol, and the budget is
-/// free to refuse one of those two a line later for want of context — so a
-/// 1,024-token window printed an assertion and its denial on the same screen,
-/// the one screen someone opens to find out why their reminders are never read.
-///
-/// So the deciders are ranked here rather than in the view, and the rank is the
-/// order they run in. A gate refusal means nothing was ever priced, so the
-/// budget has nothing to add and the gate's sentence is the whole answer. Past
-/// the gate, the budget is the thing that decided which capabilities exist, and
-/// its sentence replaces the gate's blanket claim rather than sitting beneath
-/// it — because only one of the two can be true and the later one is the one
-/// that happened.
+/// The gate answers whether the model may be offered tools, not which apps are
+/// connected. If it refuses, nothing is priced. If it allows tools but the
+/// budget drops one, the budget explains the shortfall. Neither verdict reports
+/// what permission iOS granted.
 public struct CapabilityNotice: Sendable, Equatable {
     /// The sentence at the top of the section.
     public var summary: String

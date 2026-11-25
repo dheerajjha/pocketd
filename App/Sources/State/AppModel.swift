@@ -331,10 +331,8 @@ final class AppModel {
     /// The second half of the same answer, and it was the half nobody could
     /// see. The gate decides whether this model gets tools at all; the context
     /// window then decides how many of them fit, and at a 1,024-token limit it
-    /// quietly keeps the calendar and refuses reminders — while the only
-    /// sentence on the screen was the gate's, which says both are registered.
-    /// The plan holds the honest version, priced, and `CapabilityNotice` is
-    /// where the two are stopped from contradicting each other.
+    /// can keep the calendar and refuse reminders. `CapabilityNotice` uses
+    /// this plan to explain which requested capabilities did not fit.
     var capabilityPlan: CapabilityBudget.Plan?
 
     /// What iOS said when the switch was flipped — never a claim about whether

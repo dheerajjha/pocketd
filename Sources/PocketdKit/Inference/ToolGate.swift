@@ -167,34 +167,23 @@ public enum ToolGate {
 }
 
 public extension ToolGate.Decision {
-    /// What Settings shows under the switch, naming the model.
-    ///
-    /// Every case names the model, the working one included. The switch is
-    /// global and the answer is not — the same switch is live for Qwen3 1.7B
-    /// and inert for Llama 3.2 1B — and the shipped bug was precisely that
-    /// nothing distinguished the two. Saying nothing when it works would leave
-    /// "on" and "working" looking identical again, which is the state this row
-    /// exists to end.
+    /// Describes the model's support, independently of what the user connected or the budget admitted.
     func explanation(modelName: String) -> String? {
         switch self {
         case .declaredCapable:
-            return "\(modelName) can use these tools, and both are registered."
+            return "\(modelName) can work with apps you choose to connect."
         case .inferredCapable:
-            return "\(modelName) has not been checked for tool calling, but its own chat template describes tool calls, so both tools are registered."
+            return "The chat template for \(modelName) describes tool calls, but Pocketd hasn't verified that this brain can use them."
         case .declaredIncapable:
-            // Deliberately not the template sentence below. Llama 3.2 1B is
-            // marked incapable and its template is full of tool machinery — it
-            // simply cannot work the protocol — so blaming the template here
-            // would be a plausible, checkable lie.
-            return "\(modelName) is not able to use these tools, so nothing is registered and no context is spent on them. A 3B model or larger can."
+            return "\(modelName) is for chat only in Pocketd. \(DayAccess.connectedAppsHint)"
         case .templateHasNoTools:
-            return "\(modelName) cannot use these tools — its chat template has no notion of them — so nothing is registered and no context is spent on them."
+            return "The chat template for \(modelName) doesn't support tools. \(DayAccess.connectedAppsHint)"
         case .tooSmall:
-            return "\(modelName) is too small to use these tools reliably, so nothing is registered and no context is spent on them. A 3B model or larger can."
+            return "Pocketd uses \(modelName) for chat only because this small brain hasn't been verified for tools. \(DayAccess.connectedAppsHint)"
         case .unreadable:
-            return "\(modelName) could not be read closely enough to tell whether it can use these tools, so nothing is registered."
+            return "Pocketd couldn't tell from the file whether \(modelName) supports tools. \(DayAccess.connectedAppsHint)"
         case .noModelLoaded:
-            return "No model is loaded, so nothing is registered yet. Whether the tools are used depends on which model you load."
+            return "No model is loaded."
         }
     }
 
