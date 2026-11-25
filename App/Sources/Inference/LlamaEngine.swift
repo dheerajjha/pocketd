@@ -800,8 +800,9 @@ actor LlamaEngine: InferenceEngine {
         defer { release(token) }
 
         // Read residency AFTER acquiring: a load may have swapped the model
-        // while this request was queued.
-        guard var client = self.client, let model else {
+        // while this request was queued. Check without retaining the client:
+        // a sampler change may need to free its native context before loading another.
+        guard self.client != nil, let model else {
             continuation.finish(throwing: InferenceError.noModelLoaded)
             return
         }
@@ -897,11 +898,6 @@ actor LlamaEngine: InferenceEngine {
         if mustRebuild {
             do {
                 try await loadHoldingGate(model, sampling: sampling)
-                guard let rebuilt = self.client else {
-                    continuation.finish(throwing: InferenceError.noModelLoaded)
-                    return
-                }
-                client = rebuilt
             } catch {
                 continuation.finish(throwing: error)
                 return
@@ -911,6 +907,10 @@ actor LlamaEngine: InferenceEngine {
         // interrupt. Better to notice now than to start a prompt nobody reads.
         if Task.isCancelled {
             continuation.finish(throwing: InferenceError.cancelled)
+            return
+        }
+        guard let client = self.client else {
+            continuation.finish(throwing: InferenceError.noModelLoaded)
             return
         }
 
