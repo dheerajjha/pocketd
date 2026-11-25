@@ -21,9 +21,9 @@ those sources rather than from a guess.
 Roughly by how long it takes:
 
 1. **A model in the catalogue** (~5 minutes) — add a `ModelRecord` to
-   `ModelCatalog.swift`. `sizeBytes` must be the real file size, because the
-   memory-fit badge is computed from it and an entry that is wrong by a gigabyte
-   is worse than no entry at all.
+   `ModelCatalog.swift`. Record exact bytes in `sizeBytes` and, if there is a
+   projector, in `projectorSizeBytes`. Run `make catalogue` to verify the public
+   files used for the download and memory-fit figures.
 
 2. **A client compatibility fix** (~30 minutes) — if some client refuses to talk
    to `pocketd`, the fix belongs in `Routes+OpenAI.swift` or `Routes+Ollama.swift`.

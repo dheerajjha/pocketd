@@ -334,9 +334,9 @@ budget — "Fits well", "Tight fit" or "Too big for this iPhone" — and will no
 download one that is too big, rather than letting you find out after 2 GB of
 bandwidth.
 
-Every size below is the catalogue's own, and `scripts/verify-catalogue.sh`
-checks each weights file against its real `Content-Length` (to within 10%),
-rather than trusting a number inferred from the parameter count.
+The table rounds sizes for display. The source catalogue records exact bytes for
+each weights file and, for vision, its projector. `make catalogue` checks both
+against the public downloads with a four-byte GGUF range request.
 
 The badge is that arithmetic — RAM times the fraction, raised only once a
 model has actually loaded on this phone — so it does not move while you use

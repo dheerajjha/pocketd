@@ -11,8 +11,8 @@ generated from `project.yml` by XcodeGen) adds llama.cpp through LocalLLMClient 
   nothing about whether the app compiles.
 - The app needs Xcode 27, because it calls iOS 27 SDK API. Command-line builds pass `-skipMacroValidation`, since
   LocalLLMClient's macro plugin otherwise waits for a "Trust & Enable" click that no headless build can give.
-- `make catalogue` checks that every catalogue model URL resolves at its recorded size; the memory-fit badge is
-  computed from `sizeBytes`. `make smoke BASE=http://<phone-ip>:11434 KEY=pk-...` exercises a running server on a device.
+- `make catalogue` checks every curated weights file and projector at its exact byte count using a four-byte GGUF
+  probe; both parts count toward fit. `make smoke BASE=http://<phone-ip>:11434 KEY=pk-...` exercises a running server on a device.
 - CI runs on every push to `main` and every pull request: package tests on macOS 26 and 15, and a simulator build of
   the app on Xcode 27.
 

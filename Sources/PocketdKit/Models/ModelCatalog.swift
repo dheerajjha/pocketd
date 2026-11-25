@@ -40,7 +40,7 @@ public enum ModelCatalog {
             quantization: "Q4_K_M",
             sizeBytes: 3_106_738_272,
             contextLength: 131_072,
-            license: "Gemma Terms of Use",
+            license: "Apache-2.0",
             // An 18.8 KB template built around tool calls: `format_parameters`
             // and `format_function_declaration` macros that render a schema,
             // and a `<|tool_call>` … `<tool_call|>` pair for the model to
@@ -75,7 +75,7 @@ public enum ModelCatalog {
             filename: "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
             parameters: "1B",
             quantization: "Q4_K_M",
-            sizeBytes: 808_000_000,
+            sizeBytes: 807_694_464,
             contextLength: 131_072,
             license: "Llama 3.2 Community",
             // `.no` from observation, not from the template — which is
@@ -94,7 +94,7 @@ public enum ModelCatalog {
             filename: "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
             parameters: "3B",
             quantization: "Q4_K_M",
-            sizeBytes: 2_020_000_000,
+            sizeBytes: 2_019_377_696,
             contextLength: 131_072,
             license: "Llama 3.2 Community",
             // Same template as the 1B, and it does not leak it. Left
@@ -114,7 +114,7 @@ public enum ModelCatalog {
             filename: "Qwen3-4B-Q4_K_M.gguf",
             parameters: "4B",
             quantization: "Q4_K_M",
-            sizeBytes: 2_500_000_000,
+            sizeBytes: 2_497_280_256,
             contextLength: 32_768,
             license: "Apache-2.0",
             // The same Qwen3 template as the 1.7B, on more than twice the
@@ -166,7 +166,7 @@ public enum ModelCatalog {
             filename: "smollm2-360m-instruct-q8_0.gguf",
             parameters: "360M",
             quantization: "Q8_0",
-            sizeBytes: 386_000_000,
+            sizeBytes: 386_404_992,
             contextLength: 8_192,
             license: "Apache-2.0",
             // Plain ChatML, 369 characters, no mention of tools anywhere.
