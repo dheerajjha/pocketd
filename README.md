@@ -567,6 +567,22 @@ listener on a kernel-assigned port; calling handlers directly would pass while
 the SSE framing and the status codes were wrong, which is exactly the layer
 third-party clients depend on.
 
+### Three useful next jobs
+
+Proposed improvements to Ask, in priority order:
+
+- [ ] **Choose between reminders with the same title.** Show each match’s list and
+  due date so the person can pick the right one. With full Reminders access,
+  recheck that it’s still open and writable; show it as done only after it saves.
+- [ ] **Find 45 free minutes and move one event.** With full Calendar access,
+  find a gap across all the events in the selected calendars. Preview the old and
+  new times. After confirmation, recheck the gap and move only the chosen writable
+  occurrence, even if it’s part of a series.
+- [ ] **Save a dictated note and find it later.** Let the person edit, save and
+  search notes locally in Pocketd. Typing needs no permission; dictation needs
+  Microphone and Speech access. Offer Share or a user-chosen Shortcut if they
+  want to send a note to Apple Notes.
+
 ## Privacy
 
 [**dheerajjha.github.io/pocketd**](https://dheerajjha.github.io/pocketd/) — the
